@@ -69,5 +69,5 @@ The integration is structured around three execution loops managed by `coordinat
 
 ### Target environment
 - Home Assistant 2024.11+
-- Python 3.11+
+- Python 3.12+
 - Distributed via HACS
