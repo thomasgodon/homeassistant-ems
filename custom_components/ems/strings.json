@@ -1,0 +1,76 @@
+{
+  "config": {
+    "step": {
+      "required_inputs": {
+        "title": "Required Sensors",
+        "description": "Map your power sensors to EMS inputs.",
+        "data": {
+          "grid_import_power": "Grid import power (W)",
+          "grid_import_15m_avg": "Grid import 15-min average (W)",
+          "pv_power": "PV production power (W)",
+          "house_load": "House load power (W)",
+          "house_load_non_ev": "House load excluding EV (W)",
+          "battery_soc": "Battery SoC (%)",
+          "battery_power": "Battery charge/discharge power (W, signed)"
+        }
+      },
+      "inverter": {
+        "title": "Inverter Control",
+        "description": "Map inverter verbs to your inverter's select options. Leave blank if unsupported.",
+        "data": {
+          "inverter_select": "Inverter mode select entity",
+          "inverter_verb_self_use": "SELF_USE option string",
+          "inverter_verb_force_charge": "FORCE_CHARGE option string",
+          "inverter_verb_force_discharge": "FORCE_DISCHARGE option string",
+          "inverter_verb_limit_export": "LIMIT_EXPORT option string",
+          "inverter_verb_idle": "IDLE option string",
+          "inverter_power_target": "Inverter power target entity (W)"
+        }
+      },
+      "ev_charger": {
+        "title": "EV Charger",
+        "description": "Map EV charger verbs. Skip this step if you have no EV charger.",
+        "data": {
+          "ev_select": "EV charger mode select entity",
+          "ev_verb_charge_now": "CHARGE_NOW option string",
+          "ev_verb_solar_only": "SOLAR_ONLY option string",
+          "ev_verb_solar_plus_battery": "SOLAR_PLUS_BATTERY option string",
+          "ev_verb_idle": "IDLE option string",
+          "ev_power": "EV charger power (W)",
+          "ev_plug": "EV plug status",
+          "ev_soc": "EV battery SoC (%)",
+          "ev_capacity_kwh": "EV battery capacity (kWh)",
+          "ev_max_charge_kw": "EV max charge power (kW)",
+          "ev_max_power_entity": "EV max-current consumer entity"
+        }
+      },
+      "price_sources": {
+        "title": "Price Sources",
+        "data": {
+          "import_price": "Current import price entity",
+          "export_price": "Current export price entity",
+          "forecast_path_import": "Import forecast attribute path",
+          "forecast_path_export": "Export forecast attribute path"
+        }
+      },
+      "forecast_sources": {
+        "title": "Forecast Sources",
+        "data": {
+          "pv_forecast_kwh": "PV forecast remaining today (kWh)",
+          "load_forecast_kwh": "House load forecast today (kWh)"
+        }
+      },
+      "behaviour": {
+        "title": "Behaviour",
+        "data": {
+          "enable_peak_shaving": "Enable peak shaving",
+          "enable_proactive_charge": "Enable proactive grid charging",
+          "enable_ev_scheduling": "Enable EV scheduling",
+          "enable_forecast_planning": "Enable forecast-driven planning",
+          "enable_export_curtail": "Enable export curtailment",
+          "ev_absorbs_curtail": "EV absorbs curtailed surplus"
+        }
+      }
+    }
+  }
+}

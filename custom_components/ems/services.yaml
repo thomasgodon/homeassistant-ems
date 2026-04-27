@@ -1,0 +1,24 @@
+set_mode:
+  name: Set EMS Mode
+  description: Set the EMS master switch to Auto or Off.
+  fields:
+    mode:
+      name: Mode
+      description: "Auto or Off"
+      required: true
+      selector:
+        select:
+          options:
+            - "Auto"
+            - "Off"
+
+recompute_ev_window:
+  name: Recompute EV Window
+  description: Force the EV scheduler to recompute the charging window immediately.
+
+simulate:
+  name: Simulate EMS Decision
+  description: >
+    Dry-run the priority ladder against current inputs and return the would-be
+    decision as a JSON response. Does not write to any entities.
+  response_type: dict
