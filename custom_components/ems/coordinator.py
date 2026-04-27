@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from homeassistant.components.sun import STATE_ABOVE_HORIZON
@@ -12,18 +12,25 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from . import strategy as strategy_module
 from .const import (
     CONF_BATTERY_POWER,
     CONF_BATTERY_SOC,
+    CONF_ENABLE_EXPORT_CURTAIL,
+    CONF_ENABLE_EV_SCHEDULING,
+    CONF_ENABLE_FORECAST_PLANNING,
+    CONF_ENABLE_PEAK_SHAVING,
+    CONF_ENABLE_PROACTIVE_CHARGE,
+    CONF_EV_ABSORBS_CURTAIL,
     CONF_EV_CAPACITY_KWH,
     CONF_EV_MAX_CHARGE_KW,
+    CONF_EV_MAX_POWER_ENTITY,
     CONF_EV_OPTIONS,
     CONF_EV_PLUG,
     CONF_EV_POWER,
     CONF_EV_SELECT,
     CONF_EV_SOC,
     CONF_EXPORT_PRICE,
-    CONF_FORECAST_PATH_EXPORT,
     CONF_FORECAST_PATH_IMPORT,
     CONF_GRID_IMPORT_15M_AVG,
     CONF_GRID_IMPORT_POWER,
@@ -42,13 +49,6 @@ from .const import (
     DOMAIN,
     STORAGE_KEY,
     STORAGE_VERSION,
-    CONF_EV_MAX_POWER_ENTITY,
-    CONF_ENABLE_EXPORT_CURTAIL,
-    CONF_ENABLE_EV_SCHEDULING,
-    CONF_ENABLE_FORECAST_PLANNING,
-    CONF_ENABLE_PEAK_SHAVING,
-    CONF_ENABLE_PROACTIVE_CHARGE,
-    CONF_EV_ABSORBS_CURTAIL,
 )
 from .controller import Controller
 from .ev_scheduler import compute_window, parse_forecast
@@ -62,7 +62,6 @@ from .models import (
     Thresholds,
     VerbMapping,
 )
-from . import strategy as strategy_module
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -92,7 +91,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
     def __init__(
         self,
         hass: HomeAssistant,
-        entry: "ConfigEntry",
+        entry: ConfigEntry,
         state: EmsState,
         controller: Controller,
     ) -> None:
@@ -127,7 +126,9 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
 
     async def _async_update_data(self) -> LadderResult:
         # Live-tune interval
-        interval_s = _read_number_state(self.hass, "number.ems_strategy_interval_s", DEFAULT_STRATEGY_INTERVAL_S)
+        interval_s = _read_number_state(
+            self.hass, "number.ems_strategy_interval_s", DEFAULT_STRATEGY_INTERVAL_S
+        )
         new_interval = timedelta(seconds=interval_s)
         if new_interval != self.update_interval:
             self.update_interval = new_interval
@@ -158,7 +159,6 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
     async def _build_inputs(self) -> Inputs:
         hass = self.hass
         data = self._entry.data
-        options = self._entry.options
 
         now = dt_util.utcnow()
 
@@ -212,16 +212,26 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         thresholds = Thresholds(
             max_grid_import_w=_read_number(hass, "number.ems_max_grid_import_w", 4500.0),
             battery_reserve_soc=_read_number(hass, "number.ems_battery_reserve_soc", 10.0),
-            battery_target_soc_sunset=_read_number(hass, "number.ems_battery_target_soc_sunset", 80.0),
+            battery_target_soc_sunset=_read_number(
+                hass, "number.ems_battery_target_soc_sunset", 80.0
+            ),
             battery_capacity_kwh=_read_number(hass, "number.ems_battery_capacity_kwh", 10.0),
-            battery_max_discharge_w=_read_number(hass, "number.ems_battery_max_discharge_w", 3000.0),
+            battery_max_discharge_w=_read_number(
+                hass, "number.ems_battery_max_discharge_w", 3000.0
+            ),
             battery_full_soc=_read_number(hass, "number.ems_battery_full_soc", 95.0),
-            proactive_grid_charge_price=_read_number(hass, "number.ems_proactive_grid_charge_price", 0.05),
-            expensive_price_multiplier=_read_number(hass, "number.ems_expensive_price_multiplier", 1.3),
+            proactive_grid_charge_price=_read_number(
+                hass, "number.ems_proactive_grid_charge_price", 0.05
+            ),
+            expensive_price_multiplier=_read_number(
+                hass, "number.ems_expensive_price_multiplier", 1.3
+            ),
             export_curtail_price=_read_number(hass, "number.ems_export_curtail_price", 0.00),
             ev_target_soc=_read_number(hass, "number.ems_ev_target_soc", 80.0),
             peak_shave_headroom_w=_read_number(hass, "number.ems_peak_shave_headroom_w", 300.0),
-            solar_surplus_threshold_w=_read_number(hass, "number.ems_solar_surplus_threshold_w", 100.0),
+            solar_surplus_threshold_w=_read_number(
+                hass, "number.ems_solar_surplus_threshold_w", 100.0
+            ),
         )
 
         inverter_options_raw: dict = data.get(CONF_INVERTER_OPTIONS, {})
@@ -301,7 +311,7 @@ class EmsPeakShaveCoordinator(DataUpdateCoordinator[None]):
     def __init__(
         self,
         hass: HomeAssistant,
-        entry: "ConfigEntry",
+        entry: ConfigEntry,
         state: EmsState,
         controller: Controller,
     ) -> None:
@@ -317,7 +327,9 @@ class EmsPeakShaveCoordinator(DataUpdateCoordinator[None]):
 
     async def _async_update_data(self) -> None:
         # Live-tune interval
-        interval_s = _read_number_state(self.hass, "number.ems_peak_shave_interval_s", DEFAULT_PEAK_SHAVE_INTERVAL_S)
+        interval_s = _read_number_state(
+            self.hass, "number.ems_peak_shave_interval_s", DEFAULT_PEAK_SHAVE_INTERVAL_S
+        )
         new_interval = timedelta(seconds=interval_s)
         if new_interval != self.update_interval:
             self.update_interval = new_interval
@@ -371,7 +383,7 @@ class EvSchedulerOrchestrator:
     def __init__(
         self,
         hass: HomeAssistant,
-        entry: "ConfigEntry",
+        entry: ConfigEntry,
         state: EmsState,
     ) -> None:
         self._hass = hass
@@ -445,7 +457,11 @@ class EvSchedulerOrchestrator:
                 if raw is not None:
                     forecast = parse_forecast(raw)
                     if forecast is None and not self._state.forecast_parse_warned:
-                        _LOGGER.warning("EMS: could not parse price forecast from %s.%s", price_entity, path)
+                        _LOGGER.warning(
+                            "EMS: could not parse price forecast from %s.%s",
+                            price_entity,
+                            path,
+                        )
                         self._state.forecast_parse_warned = True
 
         pv_w = _read_float(hass, data.get(CONF_PV_POWER), 0.0)
@@ -559,10 +575,10 @@ def _parse_stored_dt(value: str | None) -> datetime | None:
         return None
     try:
         dt = datetime.fromisoformat(value)
-        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
     except (ValueError, TypeError):
         return None
 
 
-def entry_option(entry: "ConfigEntry", key: str, default):
+def entry_option(entry: ConfigEntry, key: str, default):
     return entry.options.get(key, entry.data.get(key, default))

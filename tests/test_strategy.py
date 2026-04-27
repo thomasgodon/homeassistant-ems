@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 import dataclasses
-import pytest
 
+from custom_components.ems import strategy as strategy_module
 from custom_components.ems.models import (
     EvVerb,
     Features,
     InverterVerb,
     VerbMapping,
-    Thresholds,
 )
-from custom_components.ems import strategy as strategy_module
 
-from .conftest import InputsBuilder, _DEFAULT_THRESHOLDS, _DEFAULT_FEATURES, _DEFAULT_MAPPING
+from .conftest import InputsBuilder, _DEFAULT_FEATURES, _DEFAULT_MAPPING
 
 
 def _features(**overrides) -> Features:
@@ -83,7 +81,9 @@ def test_solar_to_ev_wins(builder: InputsBuilder) -> None:
 
 
 def test_expensive_self_use_wins(builder: InputsBuilder) -> None:
-    inp = builder.build(import_price=0.30, avg_24h_price=0.20, is_daytime=True, pv_w=0, house_load_w=1500)
+    inp = builder.build(
+        import_price=0.30, avg_24h_price=0.20, is_daytime=True, pv_w=0, house_load_w=1500
+    )
     decision = strategy_module.decide(inp)
     assert decision.strategy == "expensive_self_use"
     assert decision.inverter_verb == InverterVerb.SELF_USE

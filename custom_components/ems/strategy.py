@@ -121,7 +121,11 @@ def _rule_peak_shave(inp: Inputs) -> Decision | None:
     surge = max(0.0, inp.grid_import_w - cap)
     power_target = min(batt_max, surge) if surge > 0 else batt_max
 
-    house_non_ev = inp.house_load_non_ev_w if inp.house_load_non_ev_w is not None else (inp.house_load_w - inp.ev_power_w)
+    house_non_ev = (
+        inp.house_load_non_ev_w
+        if inp.house_load_non_ev_w is not None
+        else (inp.house_load_w - inp.ev_power_w)
+    )
     ev_cap = max(0.0, cap + batt_max - house_non_ev)
 
     return Decision(
@@ -322,7 +326,10 @@ def _ev_overlay(inp: Inputs, base: Decision) -> Decision:
         ev_verb = EvVerb.CHARGE_NOW
     else:
         solar_surplus = inp.pv_w - inp.house_load_w
-        if solar_surplus >= inp.thresholds.solar_surplus_threshold_w and inp.battery_soc >= inp.thresholds.battery_full_soc:
+        if (
+            solar_surplus >= inp.thresholds.solar_surplus_threshold_w
+            and inp.battery_soc >= inp.thresholds.battery_full_soc
+        ):
             ev_verb = EvVerb.SOLAR_ONLY
         else:
             ev_verb = EvVerb.IDLE

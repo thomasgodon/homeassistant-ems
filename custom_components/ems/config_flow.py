@@ -7,8 +7,6 @@ from homeassistant.components.input_boolean import DOMAIN as INPUT_BOOLEAN_DOMAI
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
-from homeassistant.components.time import DOMAIN as TIME_DOMAIN
-from homeassistant.helpers import selector
 from homeassistant.helpers.selector import (
     BooleanSelector,
     EntitySelector,
@@ -16,14 +14,17 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
-    SelectSelector,
-    SelectSelectorConfig,
     TextSelector,
 )
 
 from .const import (
     CONF_BATTERY_POWER,
     CONF_BATTERY_SOC,
+    CONF_ENABLE_EXPORT_CURTAIL,
+    CONF_ENABLE_EV_SCHEDULING,
+    CONF_ENABLE_FORECAST_PLANNING,
+    CONF_ENABLE_PEAK_SHAVING,
+    CONF_ENABLE_PROACTIVE_CHARGE,
     CONF_EV_ABSORBS_CURTAIL,
     CONF_EV_CAPACITY_KWH,
     CONF_EV_MAX_CHARGE_KW,
@@ -33,11 +34,6 @@ from .const import (
     CONF_EV_POWER,
     CONF_EV_SELECT,
     CONF_EV_SOC,
-    CONF_ENABLE_EXPORT_CURTAIL,
-    CONF_ENABLE_EV_SCHEDULING,
-    CONF_ENABLE_FORECAST_PLANNING,
-    CONF_ENABLE_PEAK_SHAVING,
-    CONF_ENABLE_PROACTIVE_CHARGE,
     CONF_EXPORT_PRICE,
     CONF_FORECAST_PATH_EXPORT,
     CONF_FORECAST_PATH_IMPORT,
@@ -148,8 +144,12 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_EV_POWER): EntitySelector(_POWER_SENSOR),
             vol.Optional(CONF_EV_PLUG): EntitySelector(_BOOL_ENTITY),
             vol.Optional(CONF_EV_SOC): EntitySelector(_SOC_SENSOR),
-            vol.Optional(CONF_EV_CAPACITY_KWH): NumberSelector(NumberSelectorConfig(min=1, max=200, step=0.5, mode=NumberSelectorMode.BOX)),
-            vol.Optional(CONF_EV_MAX_CHARGE_KW): NumberSelector(NumberSelectorConfig(min=1, max=50, step=0.1, mode=NumberSelectorMode.BOX)),
+            vol.Optional(CONF_EV_CAPACITY_KWH): NumberSelector(
+                NumberSelectorConfig(min=1, max=200, step=0.5, mode=NumberSelectorMode.BOX)
+            ),
+            vol.Optional(CONF_EV_MAX_CHARGE_KW): NumberSelector(
+                NumberSelectorConfig(min=1, max=50, step=0.1, mode=NumberSelectorMode.BOX)
+            ),
             vol.Optional(CONF_EV_MAX_POWER_ENTITY): EntitySelector(_NUMBER_ENTITY),
         })
         return self.async_show_form(step_id="ev_charger", data_schema=schema)
@@ -222,7 +222,9 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
             return await self.async_step_ev_charger()
 
         schema = vol.Schema({
-            vol.Optional(CONF_INVERTER_SELECT, default=self._data.get(CONF_INVERTER_SELECT, "")): EntitySelector(_SELECT_ENTITY),
+            vol.Optional(
+                CONF_INVERTER_SELECT, default=self._data.get(CONF_INVERTER_SELECT, "")
+            ): EntitySelector(_SELECT_ENTITY),
             vol.Optional("inverter_verb_self_use"): TextSelector(),
             vol.Optional("inverter_verb_force_charge"): TextSelector(),
             vol.Optional("inverter_verb_force_discharge"): TextSelector(),
@@ -245,7 +247,9 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=self._data)
 
         schema = vol.Schema({
-            vol.Optional(CONF_EV_SELECT, default=self._data.get(CONF_EV_SELECT, "")): EntitySelector(_SELECT_ENTITY),
+            vol.Optional(
+                CONF_EV_SELECT, default=self._data.get(CONF_EV_SELECT, "")
+            ): EntitySelector(_SELECT_ENTITY),
             vol.Optional("ev_verb_charge_now"): TextSelector(),
             vol.Optional("ev_verb_solar_only"): TextSelector(),
             vol.Optional("ev_verb_solar_plus_battery"): TextSelector(),

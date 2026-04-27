@@ -3,15 +3,10 @@ from __future__ import annotations
 import datetime
 import math
 
-import pytest
-from freezegun import freeze_time
-
 from custom_components.ems.ev_scheduler import compute_window, parse_forecast
 from custom_components.ems.models import EvWindow, PriceSlot
 
-from .conftest import forecast_factory
-
-_UTC = datetime.timezone.utc
+_UTC = datetime.UTC
 _NOW = datetime.datetime(2026, 4, 27, 10, 0, 0, tzinfo=_UTC)
 _DEADLINE = datetime.time(7, 0)
 
@@ -19,7 +14,11 @@ _DEADLINE = datetime.time(7, 0)
 def _make_slots(prices: list[float], start: datetime.datetime | None = None) -> list[PriceSlot]:
     t = start or _NOW
     return [
-        PriceSlot(start=t + datetime.timedelta(hours=i), end=t + datetime.timedelta(hours=i + 1), price=p)
+        PriceSlot(
+            start=t + datetime.timedelta(hours=i),
+            end=t + datetime.timedelta(hours=i + 1),
+            price=p,
+        )
         for i, p in enumerate(prices)
     ]
 
@@ -38,7 +37,6 @@ def test_kwh_needed_zero_returns_empty_window() -> None:
 def test_forecast_shorter_than_hours_needed_preserves_previous() -> None:
     kwh_needed = 20
     max_kw = 7.0
-    hours_needed = math.ceil(kwh_needed / (max_kw * 0.9))  # = 4
 
     previous = EvWindow(
         start=_NOW, end=_NOW + datetime.timedelta(hours=4), in_window_now=True, reason="price"
@@ -126,9 +124,10 @@ def test_empty_forecast_list_degrades() -> None:
 
 def test_overlapping_forecast_entries_rejected() -> None:
     t = _NOW
+    t_end = t + datetime.timedelta(hours=1)
     slots = [
-        {"start": t.isoformat(), "end": (t + datetime.timedelta(hours=1)).isoformat(), "price": 0.1},
-        {"start": t.isoformat(), "end": (t + datetime.timedelta(hours=1)).isoformat(), "price": 0.2},
+        {"start": t.isoformat(), "end": t_end.isoformat(), "price": 0.1},
+        {"start": t.isoformat(), "end": t_end.isoformat(), "price": 0.2},
     ]
     result = parse_forecast(slots)
     assert result is None
@@ -162,8 +161,9 @@ def test_off_strategy_returns_off() -> None:
 
 def test_parse_forecast_valid() -> None:
     t = _NOW
+    t_end = t + datetime.timedelta(hours=1)
     raw = [
-        {"start": t.isoformat(), "end": (t + datetime.timedelta(hours=1)).isoformat(), "price": 0.15},
+        {"start": t.isoformat(), "end": t_end.isoformat(), "price": 0.15},
     ]
     result = parse_forecast(raw)
     assert result is not None

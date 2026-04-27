@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import datetime
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from custom_components.ems.controller import Controller
 from custom_components.ems.models import Decision, EvVerb, InverterVerb, VerbMapping
 
-_UTC = datetime.timezone.utc
+_UTC = datetime.UTC
 _NOW = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=_UTC)
 
 _MAPPING = VerbMapping(

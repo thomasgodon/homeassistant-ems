@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, time, timedelta, timezone
-from typing import Literal, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime, time, timedelta
+from typing import Literal
 
 from .models import EvWindow, PriceSlot
 
@@ -135,11 +136,11 @@ def _deadline_dt(now: datetime, deadline: time) -> datetime:
 
 def _parse_dt(value: object) -> datetime | None:
     if isinstance(value, datetime):
-        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
     if isinstance(value, str):
         try:
             dt = datetime.fromisoformat(value)
-            return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+            return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
         except ValueError:
             return None
     return None

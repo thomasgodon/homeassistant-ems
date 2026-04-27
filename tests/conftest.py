@@ -7,7 +7,6 @@ import pytest
 
 from custom_components.ems.models import (
     EvVerb,
-    EvWindow,
     Features,
     Inputs,
     InverterVerb,
@@ -64,7 +63,7 @@ _DEFAULT_THRESHOLDS = Thresholds(
     solar_surplus_threshold_w=100.0,
 )
 
-_BASE_NOW = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.timezone.utc)
+_BASE_NOW = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
 _BASE_EV_READY_BY = datetime.time(7, 0)
 
 

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, time
-from enum import Enum
-from typing import Literal, Mapping, Sequence
+from enum import StrEnum
+from typing import Literal
 
 
-class InverterVerb(str, Enum):
+class InverterVerb(StrEnum):
     SELF_USE = "SELF_USE"
     FORCE_CHARGE = "FORCE_CHARGE"
     FORCE_DISCHARGE = "FORCE_DISCHARGE"
@@ -14,7 +15,7 @@ class InverterVerb(str, Enum):
     IDLE = "IDLE"
 
 
-class EvVerb(str, Enum):
+class EvVerb(StrEnum):
     CHARGE_NOW = "CHARGE_NOW"
     SOLAR_ONLY = "SOLAR_ONLY"
     SOLAR_PLUS_BATTERY = "SOLAR_PLUS_BATTERY"

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfPower, PERCENTAGE, UnitOfEnergy, UnitOfTime
+from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
