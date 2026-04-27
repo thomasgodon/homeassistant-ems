@@ -19,7 +19,7 @@ pytest tests/test_strategy.py tests/test_ev_scheduler.py `
 ruff check                     # Lint
 ```
 
-CI runs `hassfest` and `hacs validation` via GitHub Actions (`.github/workflows/validate.yml`).
+CI runs `hassfest` via GitHub Actions (`.github/workflows/validate.yml`).
 
 ## Architecture
 
@@ -70,4 +70,4 @@ The integration is structured around three execution loops managed by `coordinat
 ### Target environment
 - Home Assistant 2024.11+
 - Python 3.12+
-- Distributed via HACS
+- Deployed via scp (see `deploy-ems` skill)
