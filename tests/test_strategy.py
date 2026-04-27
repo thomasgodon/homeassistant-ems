@@ -9,7 +9,6 @@ from custom_components.ems.models import (
     InverterVerb,
     VerbMapping,
 )
-
 from .conftest import InputsBuilder, _DEFAULT_FEATURES, _DEFAULT_MAPPING
 
 

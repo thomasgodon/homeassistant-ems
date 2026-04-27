@@ -12,12 +12,11 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from . import strategy as strategy_module
 from .const import (
     CONF_BATTERY_POWER,
     CONF_BATTERY_SOC,
-    CONF_ENABLE_EXPORT_CURTAIL,
     CONF_ENABLE_EV_SCHEDULING,
+    CONF_ENABLE_EXPORT_CURTAIL,
     CONF_ENABLE_FORECAST_PLANNING,
     CONF_ENABLE_PEAK_SHAVING,
     CONF_ENABLE_PROACTIVE_CHARGE,
@@ -62,6 +61,7 @@ from .models import (
     Thresholds,
     VerbMapping,
 )
+from . import strategy as strategy_module
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
