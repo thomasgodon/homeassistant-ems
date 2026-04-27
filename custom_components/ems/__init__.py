@@ -5,8 +5,6 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.helpers.typing import ConfigType
-
 from .const import DOMAIN
 from .controller import Controller
 from .coordinator import EmsState, EmsStrategyCoordinator, EmsPeakShaveCoordinator, EvSchedulerOrchestrator
@@ -21,11 +19,6 @@ PLATFORMS = [
     Platform.BINARY_SENSOR,
     Platform.TIME,
 ]
-
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    hass.data.setdefault(DOMAIN, {})
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

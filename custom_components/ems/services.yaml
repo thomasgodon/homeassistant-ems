@@ -21,4 +21,4 @@ simulate:
   description: >
     Dry-run the priority ladder against current inputs and return the would-be
     decision as a JSON response. Does not write to any entities.
-  response_type: dict
+  target: {}
