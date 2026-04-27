@@ -6,6 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `homeassistant-ems` is a spec-first repository for a Home Assistant custom integration called **EMS** (Energy Management System). The full implementation specification lives in `implemenation.md`. The integration provides brand-agnostic energy management for solar + battery + EV setups via a **priority ladder algorithm**.
 
+## Documentation
+
+Any change to integration code or behavior MUST update `README.md` in the same task. Stale docs are a bug.
+
+`README.md` must always cover:
+- **Core working**: the three-loop architecture and priority ladder order.
+- **Inputs**: every config-flow field (all 6 steps, required vs optional), every runtime entity read by `coordinator.py::_build_inputs`, every `number.ems_*` threshold, every feature toggle.
+- **Outputs**: every HA service `controller.py` calls (full write vs power-only write), every entity the integration registers (sensor, binary_sensor, number, select, time).
+
+When updating: edit the matching README section in the same commit. If a new input or output is added, add a row to the relevant table.
+
 ## Commands
 
 Once implemented, the development commands will be (per spec):

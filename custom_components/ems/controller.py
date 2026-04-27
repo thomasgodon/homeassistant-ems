@@ -61,7 +61,7 @@ class Controller:
             if entity:
                 _LOGGER.info("Inverter → %s (%s) via %s", verb.value, option, entity)
                 await self._hass.services.async_call(
-                    "select",
+                    entity.split(".", 1)[0],
                     "select_option",
                     {"entity_id": entity, "option": option},
                     blocking=True,
@@ -99,7 +99,7 @@ class Controller:
             if entity:
                 _LOGGER.info("EV charger → %s (%s) via %s", verb.value, option, entity)
                 await self._hass.services.async_call(
-                    "select",
+                    entity.split(".", 1)[0],
                     "select_option",
                     {"entity_id": entity, "option": option},
                     blocking=True,

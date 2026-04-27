@@ -4,6 +4,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.input_boolean import DOMAIN as INPUT_BOOLEAN_DOMAIN
+from homeassistant.components.input_select import DOMAIN as INPUT_SELECT_DOMAIN
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
@@ -55,7 +56,7 @@ from .models import EvVerb, InverterVerb
 _POWER_SENSOR = EntitySelectorConfig(domain=[SENSOR_DOMAIN])
 _SOC_SENSOR = EntitySelectorConfig(domain=[SENSOR_DOMAIN])
 _BOOL_ENTITY = EntitySelectorConfig(domain=[BINARY_SENSOR_DOMAIN, INPUT_BOOLEAN_DOMAIN])
-_SELECT_ENTITY = EntitySelectorConfig(domain=[SELECT_DOMAIN])
+_SELECT_ENTITY = EntitySelectorConfig(domain=[SELECT_DOMAIN, INPUT_SELECT_DOMAIN])
 _NUMBER_ENTITY = EntitySelectorConfig(domain=[NUMBER_DOMAIN])
 
 
