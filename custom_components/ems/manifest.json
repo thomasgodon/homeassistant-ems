@@ -4,10 +4,10 @@
   "codeowners": ["@thomasgodon"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/thomasgodon/hass-ems",
+  "documentation": "https://github.com/thomasgodon/homeassistant-ems",
   "integration_type": "service",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/thomasgodon/hass-ems/issues",
+  "issue_tracker": "https://github.com/thomasgodon/homeassistant-ems/issues",
   "requirements": [],
   "version": "0.1.0"
 }
