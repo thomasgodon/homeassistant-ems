@@ -1,6 +1,6 @@
 ---
 name: deploy-ems
-description: Deploy the EMS Home Assistant custom integration to the remote HA instance via scp. Triggers on "deploy ems", "deploy the integration", "push to home assistant", "install ems on ha", "test ems on ha", "ship ems to ha", and post-edit flows where the user wants to test changes live. Wipes /config/custom_components/ems/ on the remote first (matching HACS update behavior — no stale .py or __pycache__), copies the source tree, runs ha core check, restarts HA, waits, then tails logs for ems-related errors. Silent deploy: no confirmation prompt; only stops if ha core check fails (to protect the running instance).
+description: Deploy the EMS Home Assistant custom integration to the remote HA instance via scp. Triggers on "deploy ems", "deploy the integration", "push to home assistant", "install ems on ha", "test ems on ha", "ship ems to ha", and post-edit flows where the user wants to test changes live. Runs the full pytest suite locally first and aborts the deploy if any test fails — no remote changes made on test failure. Wipes /config/custom_components/ems/ on the remote first (matching HACS update behavior — no stale .py or __pycache__), copies the source tree, runs ha core check, restarts HA, waits, then tails logs for ems-related errors. Silent deploy: no confirmation prompt; only stops if pytest fails or ha core check fails (to protect the running instance).
 allowed-tools: PowerShell
 ---
 
@@ -18,7 +18,26 @@ Use the **Glob tool** to check that `custom_components/ems/manifest.json` exists
 
 > EMS source not found — expected `custom_components/ems/` in the repo root.
 
-### 2. Resolve connection details
+### 2. Run local pytest gate
+
+```powershell
+pytest
+```
+
+This inherits all settings from `pyproject.toml` (`testpaths = ["tests"]`, `--cov=custom_components.ems --cov-branch`, 80% coverage gate via `[tool.coverage.report] fail_under = 80`).
+
+- Exit code 0 → proceed to Step 3.
+- Any non-zero exit code → **abort immediately. Do not make any remote calls.** Surface the full pytest output (failing test names + tracebacks) and report:
+
+  > STATUS: failed — pytest gate failed. Deploy aborted before any remote changes; HA was not touched. Fix the failing tests and re-run.
+
+- If `pytest` is not installed (command not found / ModuleNotFoundError) → abort with:
+
+  > STATUS: failed — pytest not installed. Run `pip install -e ".[dev]"` in the repo root, then re-run the deploy.
+
+This step runs before the remote wipe, so a test failure leaves the previously-deployed version on HA untouched.
+
+### 3. Resolve connection details
 
 Defaults (from the `home-assistant-manager` skill):
 
@@ -29,7 +48,7 @@ Defaults (from the `home-assistant-manager` skill):
 
 Override only if the user specified a different host or path in their request.
 
-### 3. Wipe remote integration directory
+### 4. Wipe remote integration directory
 
 ```powershell
 ssh root@192.168.0.12 "rm -rf /config/custom_components/ems"
@@ -37,7 +56,7 @@ ssh root@192.168.0.12 "rm -rf /config/custom_components/ems"
 
 This matches HACS update behavior — clean replace ensures no stale `.py`, `.pyc`, or `__pycache__/` entries survive from a previous deploy.
 
-### 4. Copy source tree
+### 5. Copy source tree
 
 ```powershell
 scp -r custom_components/ems root@192.168.0.12:/config/custom_components/
@@ -47,7 +66,7 @@ Check exit code. If non-zero, abort and report:
 
 > STATUS: failed — scp exited with code <N>. Check SSH connectivity and that /config/custom_components/ exists on the remote.
 
-### 5. Validate configuration
+### 6. Validate configuration
 
 ```powershell
 ssh root@192.168.0.12 "ha core check"
@@ -57,7 +76,7 @@ If exit code is non-zero, **abort before restarting**. Surface the full stderr. 
 
 > STATUS: failed — ha core check failed (see output above). HA was NOT restarted; previous version is still active.
 
-### 6. Restart Home Assistant
+### 7. Restart Home Assistant
 
 ```powershell
 ssh root@192.168.0.12 "ha core restart"
@@ -65,13 +84,13 @@ ssh root@192.168.0.12 "ha core restart"
 
 Custom integrations require a full restart — they cannot be reloaded.
 
-### 7. Wait for HA to come back up
+### 8. Wait for HA to come back up
 
 ```powershell
 Start-Sleep -Seconds 30
 ```
 
-### 8. Tail logs and check for errors
+### 9. Tail logs and check for errors
 
 Run both in sequence:
 
@@ -85,7 +104,7 @@ ssh root@192.168.0.12 "ha core logs | grep -iE 'error|traceback' | tail -20"
 
 Scan output for lines mentioning `custom_components.ems` or `homeassistant.components.ems`. Surface any ERROR or traceback lines.
 
-### 9. Report
+### 10. Report
 
 | Outcome | Report |
 |---|---|
