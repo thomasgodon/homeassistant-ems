@@ -4,22 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`homeassistant-ems` is a Home Assistant custom integration called **EMS** (Energy Management System). It provides brand-agnostic energy management for solar + battery + EV setups via a **priority ladder algorithm**.
+`homeassistant-ems` is a Home Assistant custom integration called **EMS** (Energy Management System). It provides brand-agnostic **EV charging management** for solar + optional battery + EV setups. It decides how many watts to charge at based on solar surplus or cheap grid windows, while enforcing a maximum grid import cap and preventing the home battery from being drained into the car.
 
 ## Documentation
 
 Any change to integration code or behavior MUST update `README.md` in the same task. Stale docs are a bug.
 
 `README.md` must always cover:
-- **Core working**: the three-loop architecture and priority ladder order.
-- **Inputs**: every config-flow field (all 5 steps, required vs optional), every runtime entity read by `coordinator.py::_build_inputs`, every `number.ems_*` threshold, every `switch.ems_*` feature toggle.
-- **Outputs**: every HA service `controller.py` calls (full write vs power-only write), every entity the integration registers (sensor, binary_sensor, number, select, switch, time).
+- **Core working**: the three-loop architecture and decision algorithm.
+- **Inputs**: every config-flow field (all 4 steps, required vs optional), every runtime entity read by `coordinator.py::_build_inputs`, every `number.ems_*` threshold, every `switch.ems_*` feature toggle.
+- **Outputs**: every HA service `controller.py` calls (when EV charging vs idle), every entity the integration registers (sensor, binary_sensor, number, select, switch, time).
 
 When updating: edit the matching README section in the same commit. If a new input or output is added, add a row to the relevant table.
 
 ## Commands
-
-Once implemented, the development commands will be (per spec):
 
 ```powershell
 pytest tests/                  # Run all tests (80% coverage gate)
@@ -27,7 +25,7 @@ pytest tests/test_strategy.py tests/test_ev_scheduler.py `
   --cov=custom_components.ems.strategy `
   --cov=custom_components.ems.ev_scheduler `
   --cov-branch --cov-fail-under=100  # 100% coverage for pure modules
-ruff check                     # Lint
+python -m ruff check custom_components/ems tests  # Lint
 ```
 
 CI runs `hassfest` via GitHub Actions (`.github/workflows/validate.yml`).
@@ -38,48 +36,47 @@ The integration is structured around three execution loops managed by `coordinat
 
 **10-second strategy loop** (`EmsStrategyCoordinator`):
 1. `_build_inputs()` freezes all mapped HA entity states into a frozen `Inputs` dataclass
-2. `strategy.decide(inputs)` — pure function, returns a `Decision` (which ladder rule fired, verb assignments, power targets)
-3. Updates hysteresis latch: `state.peak_risk_latched`
-4. Skips writes during startup grace (first 45 s) to avoid flapping on `unavailable` sensors
-5. `controller.write_full()` — idempotent calls to `select.select_option()` + `number.set_value()`
+2. `strategy.decide(inputs)` — pure function, returns a `Decision` (EV target watts, inverter verb, discharge cap)
+3. Skips writes during startup grace (first 45 s) to avoid flapping on `unavailable` sensors
+4. `controller.write_full()` — idempotent: writes inverter mode + discharge cap only when `ev_charge_power_w > 0`; on idle resets write-cache
 
-**1-second peak-shave loop** (`EmsPeakShaveCoordinator`):
-- Only active when `peak_risk_latched` is true
-- Re-reads fast inputs (grid, house load, EV power), calls `strategy.recompute_peak_shave_power()`
-- Calls `controller.write_power_only()` — never flips modes, only adjusts wattage
+**1-second fast loop** (`EmsFastLoopCoordinator`):
+- Always runs once the integration is active (no latch gate)
+- Re-reads `pv_w`, `house_load_w`, `ev_power_w` and calls `strategy.recompute()`
+- Calls `controller.write_full()` — keeps EV target and inverter cap enforced within 1 s of load changes
 
 **5-minute EV scheduler** (`EvSchedulerOrchestrator`):
 - Calls pure `ev_scheduler.compute_window()` to pick cheapest charging hours
-- Updates `state.cached_window`; the 10 s loop reads `state.cached_window.in_window_now`
+- Updates `state.cached_window`; both loops read `state.cached_window.in_window_now`
 
 ### Module boundaries
 
 | Module | Rule |
 |--------|------|
 | `models.py` | Zero HA imports — frozen dataclasses only (`Inputs`, `Decision`, `EvWindow`, `VerbMapping`) |
-| `strategy.py` | Pure function `decide(inputs) → Decision`; no I/O, no HA |
+| `strategy.py` | Pure functions `decide(inputs) → Decision` and `recompute(...) → Decision`; no I/O, no HA |
 | `ev_scheduler.py` | Pure function `compute_window(...) → EvWindow`; no I/O, no HA |
 | `controller.py` | The **only** module that calls HA services |
 | `coordinator.py` | Wires the loops; reads HA state; calls strategy, ev_scheduler, controller |
 
 ### Key abstractions
 
-- **Abstract verbs** (`FORCE_CHARGE`, `FORCE_DISCHARGE`, `IDLE`, `SELF_USE`, `LIMIT_EXPORT`): inverter-agnostic. Users map each verb to their hardware's actual option string in the config flow. Never hardcode inverter mode strings.
-- **EV charge target**: strategy emits `ev_charge_power_w` (float, W). No EV verbs. No writes to charger. EMS exposes `sensor.ems_ev_charge_target_power`; user creates their own automation.
-- **Priority ladder order**: peak shave → battery floor → EV coupling → export curtail → proactive charge → solar-use → expensive-grid → fallback
-- **Peak shave and export curtail are always active** — no feature toggles for these.
+- **Single inverter verb** (`SELF_USE`): maps to the inverter's normal operating option string configured in Step 2. EMS writes it with a discharge cap to prevent the battery from draining into the EV.
+- **Discharge cap**: `max(0, house_non_ev_w − pv_w)` — allows the battery to cover house deficit but nothing more.
+- **EV charge target**: strategy emits `ev_charge_power_w` (float, W). No writes to charger. EMS exposes `sensor.ems_ev_charge_target_power`; user creates their own automation.
+- **house_non_ev**: derived inline as `max(0.0, house_load_w − ev_power_w)` — never a stored field.
 
-### Config flow (5 steps, no YAML editing)
-1. Required sensors (grid power, PV, house load, battery SoC/power)
-2. Inverter select entity + verb→option mapping
-3. EV charger (optional) — power/plug/SoC/capacity sensors (no charger mode select; EMS doesn't write to it)
-4. Price sources (import/export, forecast paths)
-5. PV + load forecast sources
+### Config flow (4 steps, no YAML editing)
+1. Required sensors (grid power, PV, house load, EV power); optional: `grid_import_15m_avg`
+2. Inverter (optional) — select entity + single SELF_USE option string + power target entity
+3. EV charger (optional) — plug/SoC/capacity sensors (no charger mode select; EMS doesn't write to it)
+4. Price sources (import price, forecast attribute path)
 
-Feature toggles are runtime `switch.ems_*` entities — no config-flow step. See README "Runtime switches". Only 3 remain: `ems_battery_grid_charging`, `ems_ev_charging`, `ems_forecast_planning`.
+### Feature toggles
+Single feature toggle: `switch.ems_ev_charging` — when off, `ev_charge_power_w` is forced to 0 and EMS makes no inverter writes.
 
 ### Persistence
-`homeassistant.helpers.storage.Store` persists `peak_risk_latched` and `cached_window` to `ems_state.json` so state survives restarts.
+`homeassistant.helpers.storage.Store` persists `cached_window` to `ems_state.json` so state survives restarts.
 
 ### Target environment
 - Home Assistant 2024.11+

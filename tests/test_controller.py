@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import datetime
-import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,34 +7,37 @@ import pytest
 from custom_components.ems.controller import Controller
 from custom_components.ems.models import Decision, InverterVerb, VerbMapping
 
-_UTC = datetime.UTC
-_NOW = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=_UTC)
-
 _MAPPING = VerbMapping(
     inverter_select_entity="select.inverter",
-    inverter_options={
-        InverterVerb.SELF_USE: "Self Use",
-        InverterVerb.FORCE_CHARGE: "Force Charge",
-        InverterVerb.FORCE_DISCHARGE: "Force Discharge",
-        InverterVerb.LIMIT_EXPORT: "Limit Export",
-        InverterVerb.IDLE: "Idle",
-    },
+    self_use_option="Self Use",
     inverter_power_target_entity="number.inverter_power",
+)
+
+_MAPPING_NO_INVERTER = VerbMapping(
+    inverter_select_entity=None,
+    self_use_option=None,
+    inverter_power_target_entity=None,
 )
 
 
 def _make_decision(**overrides) -> Decision:
     defaults = dict(
-        strategy="fallback",
+        strategy="ev_charging_solar",
         inverter_verb=InverterVerb.SELF_USE,
         inverter_power_target_w=None,
-        ev_charge_power_w=0.0,
-        new_peak_risk=False,
-        rule_chain=(),
-        unsupported_verbs=(),
+        ev_charge_power_w=3500.0,
     )
     defaults.update(overrides)
     return Decision(**defaults)
+
+
+def _make_idle() -> Decision:
+    return Decision(
+        strategy="ev_idle",
+        inverter_verb=None,
+        inverter_power_target_w=None,
+        ev_charge_power_w=0.0,
+    )
 
 
 def _make_hass():
@@ -53,89 +54,77 @@ def controller():
 
 
 @pytest.mark.asyncio
+async def test_idle_decision_skips_all_writes(controller) -> None:
+    """write_full with ev_charge_power_w=0 must not write anything."""
+    ctrl, hass = controller
+    await ctrl.write_full(_make_idle())
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_idle_decision_resets_cache(controller) -> None:
+    """After an idle decision the cache is cleared so the next active tick fires."""
+    ctrl, hass = controller
+    # First active write sets cache
+    await ctrl.write_full(_make_decision(inverter_verb=InverterVerb.SELF_USE))
+    hass.services.async_call.reset_mock()
+
+    # Idle clears cache
+    await ctrl.write_full(_make_idle())
+    # Next active tick must re-fire the select call
+    await ctrl.write_full(_make_decision(inverter_verb=InverterVerb.SELF_USE))
+    select_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][0] == "select"
+    ]
+    assert len(select_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_idempotent_select_write(controller) -> None:
+    """Two consecutive identical active ticks write the select once."""
     ctrl, hass = controller
     decision = _make_decision(inverter_verb=InverterVerb.SELF_USE)
 
     await ctrl.write_full(decision)
     await ctrl.write_full(decision)
 
-    calls = [
+    select_calls = [
         c for c in hass.services.async_call.call_args_list
         if c[0][0] == "select"
     ]
-    assert len(calls) == 1
+    assert len(select_calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_power_target_only_when_required(controller) -> None:
+async def test_power_target_written_when_provided(controller) -> None:
+    """A decision with power_target writes the number entity."""
     ctrl, hass = controller
+    decision = _make_decision(inverter_power_target_w=1500.0)
 
-    # SELF_USE: no power target call
-    await ctrl.write_full(_make_decision(inverter_verb=InverterVerb.SELF_USE))
-    number_calls = [
-        c for c in hass.services.async_call.call_args_list
-        if c[0][0] == "number"
-    ]
-    assert len(number_calls) == 0
-
-    hass.services.async_call.reset_mock()
-    ctrl.reset_write_cache()
-
-    # FORCE_DISCHARGE with power target
-    await ctrl.write_full(_make_decision(
-        inverter_verb=InverterVerb.FORCE_DISCHARGE,
-        inverter_power_target_w=2000.0,
-    ))
-    number_calls = [
-        c for c in hass.services.async_call.call_args_list
-        if c[0][0] == "number"
-    ]
-    assert len(number_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_peak_shave_fast_loop_writes_only_power_target(controller) -> None:
-    ctrl, hass = controller
-
-    # 10 s loop sets FORCE_DISCHARGE
-    await ctrl.write_full(_make_decision(
-        strategy="peak_shave",
-        inverter_verb=InverterVerb.FORCE_DISCHARGE,
-        inverter_power_target_w=2000.0,
-    ))
-    hass.services.async_call.reset_mock()
-
-    # 1 s fast loop with updated power target
-    fast_decision = _make_decision(
-        strategy="peak_shave",
-        inverter_verb=InverterVerb.FORCE_DISCHARGE,
-        inverter_power_target_w=2500.0,
-    )
-    await ctrl.write_power_only(fast_decision)
-
-    calls = hass.services.async_call.call_args_list
-    select_calls = [c for c in calls if c[0][0] == "select"]
-    number_calls = [c for c in calls if c[0][0] == "number"]
-
-    assert len(select_calls) == 0
-    assert len(number_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_off_mode_no_op(controller) -> None:
-    ctrl, hass = controller
-    decision = _make_decision(strategy="off", inverter_verb=None)
     await ctrl.write_full(decision)
+    number_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][0] == "number"
+    ]
+    assert len(number_calls) == 1
+    # args: (domain, service, service_data); service_data is positional arg 2
+    assert number_calls[0][0][2]["value"] == 1500.0
+
+
+@pytest.mark.asyncio
+async def test_power_only_skips_when_idle() -> None:
+    """write_power_only with ev_charge_power_w=0 resets cache and does not write."""
+    hass = _make_hass()
+    ctrl = Controller(hass, _MAPPING)
+    await ctrl.write_power_only(_make_idle())
     hass.services.async_call.assert_not_called()
 
 
-def test_mode_unsupported_logs_once(controller, caplog) -> None:
-    ctrl, _ = controller
-    with caplog.at_level(logging.WARNING, logger="custom_components.ems.controller"):
-        ctrl.log_unsupported("mode_unsupported_FORCE_DISCHARGE", _NOW)
-        ctrl.log_unsupported("mode_unsupported_FORCE_DISCHARGE", _NOW)
-        ctrl.log_unsupported("mode_unsupported_FORCE_DISCHARGE", _NOW)
-
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
+@pytest.mark.asyncio
+async def test_no_inverter_configured_no_writes() -> None:
+    """When mapping has no inverter entities, no service calls are made."""
+    hass = _make_hass()
+    ctrl = Controller(hass, _MAPPING_NO_INVERTER)
+    await ctrl.write_full(_make_decision())
+    hass.services.async_call.assert_not_called()

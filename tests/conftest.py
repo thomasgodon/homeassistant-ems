@@ -8,45 +8,24 @@ import pytest
 from custom_components.ems.models import (
     Features,
     Inputs,
-    InverterVerb,
     PriceSlot,
     Thresholds,
     VerbMapping,
 )
 
-_ALL_INVERTER_OPTIONS: dict[InverterVerb, str] = {
-    InverterVerb.SELF_USE: "Self Use",
-    InverterVerb.FORCE_CHARGE: "Force Charge",
-    InverterVerb.FORCE_DISCHARGE: "Force Discharge",
-    InverterVerb.LIMIT_EXPORT: "Limit Export",
-    InverterVerb.IDLE: "Idle",
-}
-
 _DEFAULT_MAPPING = VerbMapping(
     inverter_select_entity="select.inverter_mode",
-    inverter_options=_ALL_INVERTER_OPTIONS,
+    self_use_option="Self Use",
     inverter_power_target_entity="number.inverter_power",
 )
 
 _DEFAULT_FEATURES = Features(
-    proactive_grid_charge=True,
     ev_charging=True,
-    forecast_planning=False,
 )
 
 _DEFAULT_THRESHOLDS = Thresholds(
     max_grid_import_w=4500.0,
-    battery_reserve_soc=10.0,
-    battery_target_soc_sunset=80.0,
-    battery_capacity_kwh=10.0,
-    battery_max_discharge_w=3000.0,
-    battery_full_soc=95.0,
-    proactive_grid_charge_price=0.05,
-    expensive_price_multiplier=1.3,
-    export_curtail_price=0.00,
     ev_target_soc=80.0,
-    peak_shave_headroom_w=300.0,
-    solar_surplus_threshold_w=100.0,
     ev_min_charge_w=1400.0,
 )
 
@@ -55,7 +34,7 @@ _BASE_EV_READY_BY = datetime.time(7, 0)
 
 
 class InputsBuilder:
-    """Builder with calm mid-day defaults that produce 'fallback'."""
+    """Builder with calm mid-day defaults that produce 'ev_idle'."""
 
     def __init__(self) -> None:
         self._overrides: dict[str, Any] = {}
@@ -72,9 +51,6 @@ class InputsBuilder:
             grid_import_15m_avg_w=get("grid_import_15m_avg_w", 1000.0),
             pv_w=get("pv_w", 500.0),
             house_load_w=get("house_load_w", 1500.0),
-            house_load_non_ev_w=get("house_load_non_ev_w", 1500.0),
-            battery_soc=get("battery_soc", 60.0),
-            battery_power_w=get("battery_power_w", 0.0),
             ev_plugged=get("ev_plugged", False),
             ev_power_w=get("ev_power_w", 0.0),
             ev_soc=get("ev_soc", None),
@@ -83,16 +59,10 @@ class InputsBuilder:
             ev_ready_by=get("ev_ready_by", _BASE_EV_READY_BY),
             ev_strategy=get("ev_strategy", "Off"),
             import_price=get("import_price", 0.20),
-            export_price=get("export_price", 0.05),
-            avg_24h_price=get("avg_24h_price", 0.20),
             in_cheap_window=get("in_cheap_window", False),
-            pv_forecast_remaining_kwh=get("pv_forecast_remaining_kwh", None),
-            house_load_forecast_kwh=get("house_load_forecast_kwh", None),
             features=get("features", _DEFAULT_FEATURES),
             thresholds=get("thresholds", _DEFAULT_THRESHOLDS),
             mapping=get("mapping", _DEFAULT_MAPPING),
-            peak_risk_latched=get("peak_risk_latched", False),
-            is_daytime=get("is_daytime", True),
         )
 
 

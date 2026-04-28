@@ -9,12 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import (
-    CONF_ENABLE_EV_SCHEDULING,
-    CONF_ENABLE_FORECAST_PLANNING,
-    CONF_ENABLE_PROACTIVE_CHARGE,
-    DOMAIN,
-)
+from .const import DOMAIN
 
 
 @dataclass(frozen=True)
@@ -22,31 +17,15 @@ class EmsSwitchDescription:
     unique_id: str
     name: str
     icon: str
-    legacy_conf_key: str
     default_on: bool
 
 
 _SWITCHES: tuple[EmsSwitchDescription, ...] = (
     EmsSwitchDescription(
-        unique_id="ems_battery_grid_charging",
-        name="EMS Battery Grid Charging",
-        icon="mdi:battery-charging",
-        legacy_conf_key=CONF_ENABLE_PROACTIVE_CHARGE,
-        default_on=True,
-    ),
-    EmsSwitchDescription(
         unique_id="ems_ev_charging",
         name="EMS EV Charging",
         icon="mdi:car-electric",
-        legacy_conf_key=CONF_ENABLE_EV_SCHEDULING,
         default_on=True,
-    ),
-    EmsSwitchDescription(
-        unique_id="ems_forecast_planning",
-        name="EMS Forecast Planning",
-        icon="mdi:chart-timeline-variant",
-        legacy_conf_key=CONF_ENABLE_FORECAST_PLANNING,
-        default_on=False,
     ),
 )
 
@@ -56,13 +35,12 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    async_add_entities([EmsFeatureSwitch(entry, desc) for desc in _SWITCHES])
+    async_add_entities([EmsFeatureSwitch(desc) for desc in _SWITCHES])
 
 
 class EmsFeatureSwitch(SwitchEntity, RestoreEntity):
 
-    def __init__(self, entry: ConfigEntry, desc: EmsSwitchDescription) -> None:
-        self._entry = entry
+    def __init__(self, desc: EmsSwitchDescription) -> None:
         self._desc = desc
         self._attr_unique_id = desc.unique_id
         self._attr_name = desc.name
@@ -77,11 +55,6 @@ class EmsFeatureSwitch(SwitchEntity, RestoreEntity):
         last = await self.async_get_last_state()
         if last is not None:
             self._attr_is_on = last.state == STATE_ON
-        else:
-            # Bootstrap from legacy config-flow value on first load after migration
-            self._attr_is_on = bool(
-                self._entry.data.get(self._desc.legacy_conf_key, self._desc.default_on)
-            )
 
     async def async_turn_on(self, **kwargs) -> None:
         self._attr_is_on = True

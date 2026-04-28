@@ -1,39 +1,33 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from homeassistant.components.sun import STATE_ABOVE_HORIZON
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import event as ha_event
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from . import strategy as strategy_module
 from .const import (
-    CONF_BATTERY_POWER,
-    CONF_BATTERY_SOC,
     CONF_EV_CAPACITY_KWH,
     CONF_EV_MAX_CHARGE_KW,
     CONF_EV_PLUG,
     CONF_EV_POWER,
     CONF_EV_SOC,
-    CONF_EXPORT_PRICE,
     CONF_FORECAST_PATH_IMPORT,
     CONF_GRID_IMPORT_15M_AVG,
     CONF_GRID_IMPORT_POWER,
     CONF_HOUSE_LOAD,
-    CONF_HOUSE_LOAD_NON_EV,
     CONF_IMPORT_PRICE,
     CONF_INVERTER_OPTIONS,
     CONF_INVERTER_POWER_TARGET,
     CONF_INVERTER_SELECT,
-    CONF_LOAD_FORECAST_KWH,
-    CONF_PV_FORECAST_KWH,
     CONF_PV_POWER,
-    DEFAULT_PEAK_SHAVE_INTERVAL_S,
+    DEFAULT_FAST_LOOP_INTERVAL_S,
     DEFAULT_STARTUP_GRACE_S,
     DEFAULT_STRATEGY_INTERVAL_S,
     DOMAIN,
@@ -46,31 +40,23 @@ from .models import (
     EvWindow,
     Features,
     Inputs,
-    InverterVerb,
     LadderResult,
     Thresholds,
     VerbMapping,
 )
-from . import strategy as strategy_module
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
-_DISPATCHER_EV_WINDOW = f"{DOMAIN}_ev_window_updated"
-
 
 @dataclass
 class EmsState:
     last_result: LadderResult | None = None
-    peak_risk_latched: bool = False
-    last_inverter_verb_written: InverterVerb | None = None
-    last_power_target_written_w: float | None = None
     cached_window: EvWindow | None = None
     startup_grace_until: datetime | None = None
     forecast_parse_warned: bool = False
-    last_unsupported_warned: dict[tuple[str, str], dict] = field(default_factory=dict)
 
 
 class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
@@ -87,19 +73,17 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         self._state = state
         self._controller = controller
         self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-        interval_s = DEFAULT_STRATEGY_INTERVAL_S
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN}_strategy",
-            update_interval=timedelta(seconds=interval_s),
+            update_interval=timedelta(seconds=DEFAULT_STRATEGY_INTERVAL_S),
         )
 
     async def async_setup(self) -> None:
         """Load persisted state and set startup grace window."""
         stored = await self._store.async_load()
         if stored:
-            self._state.peak_risk_latched = stored.get("peak_risk_latched", False)
             window_data = stored.get("cached_window")
             if window_data:
                 self._state.cached_window = EvWindow(
@@ -127,10 +111,6 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             raise UpdateFailed(f"EMS input build failed: {exc}") from exc
 
         decision = strategy_module.decide(inputs)
-        self._state.peak_risk_latched = decision.new_peak_risk
-
-        for verb_label in decision.unsupported_verbs:
-            self._controller.log_unsupported(verb_label, inputs.now)
 
         in_grace = (
             self._state.startup_grace_until is not None
@@ -156,9 +136,6 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         grid_import_15m = _read_float_optional(hass, data.get(CONF_GRID_IMPORT_15M_AVG))
         pv_w = _read_float(hass, data.get(CONF_PV_POWER), 0.0)
         house_load_w = _read_float(hass, data.get(CONF_HOUSE_LOAD), 0.0)
-        house_load_non_ev = _read_float_optional(hass, data.get(CONF_HOUSE_LOAD_NON_EV))
-        battery_soc = _read_float(hass, data.get(CONF_BATTERY_SOC), 50.0)
-        battery_power_w = _read_float(hass, data.get(CONF_BATTERY_POWER), 0.0)
 
         ev_plugged = _read_bool(hass, data.get(CONF_EV_PLUG), False)
         ev_power_w = _read_float(hass, data.get(CONF_EV_POWER), 0.0)
@@ -171,10 +148,6 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         ev_ready_by = ev_ready_by_state or _dt.time(7, 0)
 
         import_price = _read_float_optional(hass, data.get(CONF_IMPORT_PRICE))
-        export_price = _read_float_optional(hass, data.get(CONF_EXPORT_PRICE))
-
-        # Rolling 24h avg price from sensor
-        avg_24h_price = _read_float_optional(hass, "sensor.ems_24h_avg_price")
 
         in_cheap_window = (
             self._state.cached_window.in_window_now
@@ -182,55 +155,22 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             else False
         )
 
-        pv_forecast_kwh = _read_float_optional(hass, data.get(CONF_PV_FORECAST_KWH))
-        house_forecast_kwh = _read_float_optional(hass, data.get(CONF_LOAD_FORECAST_KWH))
-
-        is_daytime = _read_select_state(hass, "sun.sun", "below_horizon") == STATE_ABOVE_HORIZON
-
         features = Features(
-            proactive_grid_charge=_read_bool(hass, "switch.ems_battery_grid_charging", True),
             ev_charging=_read_bool(hass, "switch.ems_ev_charging", True),
-            forecast_planning=_read_bool(hass, "switch.ems_forecast_planning", False),
         )
 
         thresholds = Thresholds(
             max_grid_import_w=_read_number(hass, "number.ems_max_grid_import_w", 4500.0),
-            battery_reserve_soc=_read_number(hass, "number.ems_battery_reserve_soc", 10.0),
-            battery_target_soc_sunset=_read_number(
-                hass, "number.ems_battery_target_soc_sunset", 80.0
-            ),
-            battery_capacity_kwh=_read_number(hass, "number.ems_battery_capacity_kwh", 10.0),
-            battery_max_discharge_w=_read_number(
-                hass, "number.ems_battery_max_discharge_w", 3000.0
-            ),
-            battery_full_soc=_read_number(hass, "number.ems_battery_full_soc", 95.0),
-            proactive_grid_charge_price=_read_number(
-                hass, "number.ems_proactive_grid_charge_price", 0.05
-            ),
-            expensive_price_multiplier=_read_number(
-                hass, "number.ems_expensive_price_multiplier", 1.3
-            ),
-            export_curtail_price=_read_number(hass, "number.ems_export_curtail_price", 0.00),
             ev_target_soc=_read_number(hass, "number.ems_ev_target_soc", 80.0),
-            peak_shave_headroom_w=_read_number(hass, "number.ems_peak_shave_headroom_w", 300.0),
-            solar_surplus_threshold_w=_read_number(
-                hass, "number.ems_solar_surplus_threshold_w", 100.0
-            ),
             ev_min_charge_w=_read_number(hass, "number.ems_ev_min_charge_w", 1400.0),
         )
 
         inverter_options_raw: dict = data.get(CONF_INVERTER_OPTIONS, {})
-        inverter_options = {
-            InverterVerb[k]: (v if v else None)
-            for k, v in inverter_options_raw.items()
-            if k in InverterVerb.__members__
-        }
-        for verb in InverterVerb:
-            inverter_options.setdefault(verb, None)
+        self_use_option = inverter_options_raw.get("SELF_USE") or None
 
         mapping = VerbMapping(
             inverter_select_entity=data.get(CONF_INVERTER_SELECT),
-            inverter_options=inverter_options,
+            self_use_option=self_use_option,
             inverter_power_target_entity=data.get(CONF_INVERTER_POWER_TARGET),
         )
 
@@ -240,9 +180,6 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             grid_import_15m_avg_w=grid_import_15m,
             pv_w=pv_w,
             house_load_w=house_load_w,
-            house_load_non_ev_w=house_load_non_ev,
-            battery_soc=battery_soc,
-            battery_power_w=battery_power_w,
             ev_plugged=ev_plugged,
             ev_power_w=ev_power_w,
             ev_soc=ev_soc,
@@ -251,22 +188,15 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             ev_ready_by=ev_ready_by,
             ev_strategy=ev_strategy,  # type: ignore[arg-type]
             import_price=import_price,
-            export_price=export_price,
-            avg_24h_price=avg_24h_price,
             in_cheap_window=in_cheap_window,
-            pv_forecast_remaining_kwh=pv_forecast_kwh,
-            house_load_forecast_kwh=house_forecast_kwh,
             features=features,
             thresholds=thresholds,
             mapping=mapping,
-            peak_risk_latched=self._state.peak_risk_latched,
-            is_daytime=is_daytime,
         )
 
     async def _persist(self) -> None:
         window = self._state.cached_window
         await self._store.async_save({
-            "peak_risk_latched": self._state.peak_risk_latched,
             "cached_window": {
                 "start": window.start.isoformat() if window and window.start else None,
                 "end": window.end.isoformat() if window and window.end else None,
@@ -276,8 +206,8 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         })
 
 
-class EmsPeakShaveCoordinator(DataUpdateCoordinator[None]):
-    """1 s default. Active only when peak_risk_latched."""
+class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
+    """1 s default. Updates EV target and inverter discharge cap at high cadence."""
 
     def __init__(
         self,
@@ -292,21 +222,19 @@ class EmsPeakShaveCoordinator(DataUpdateCoordinator[None]):
         super().__init__(
             hass,
             _LOGGER,
-            name=f"{DOMAIN}_peak_shave",
-            update_interval=timedelta(seconds=DEFAULT_PEAK_SHAVE_INTERVAL_S),
+            name=f"{DOMAIN}_fast_loop",
+            update_interval=timedelta(seconds=DEFAULT_FAST_LOOP_INTERVAL_S),
         )
 
     async def _async_update_data(self) -> None:
         # Live-tune interval
         interval_s = _read_number_state(
-            self.hass, "number.ems_peak_shave_interval_s", DEFAULT_PEAK_SHAVE_INTERVAL_S
+            self.hass, "number.ems_fast_loop_interval_s", DEFAULT_FAST_LOOP_INTERVAL_S
         )
         new_interval = timedelta(seconds=interval_s)
         if new_interval != self.update_interval:
             self.update_interval = new_interval
 
-        if not self._state.peak_risk_latched:
-            return
         if self._state.last_result is None:
             return
         grace_until = self._state.startup_grace_until
@@ -314,18 +242,11 @@ class EmsPeakShaveCoordinator(DataUpdateCoordinator[None]):
             return
 
         data = self._entry.data
-        grid_import_w = _read_float(self.hass, data.get(CONF_GRID_IMPORT_POWER), 0.0)
-        grid_import_15m = _read_float_optional(self.hass, data.get(CONF_GRID_IMPORT_15M_AVG))
+        pv_w = _read_float(self.hass, data.get(CONF_PV_POWER), 0.0)
         house_load_w = _read_float(self.hass, data.get(CONF_HOUSE_LOAD), 0.0)
         ev_power_w = _read_float(self.hass, data.get(CONF_EV_POWER), 0.0)
-        house_non_ev_entity = data.get(CONF_HOUSE_LOAD_NON_EV)
-        house_non_ev = _read_float_optional(self.hass, house_non_ev_entity)
-        if house_non_ev is None:
-            house_non_ev = house_load_w - ev_power_w
 
         prior_inputs = self._state.last_result.inputs
-        thresholds = prior_inputs.thresholds
-        prior = self._state.last_result.decision
 
         in_cheap_window = (
             self._state.cached_window.in_window_now
@@ -333,29 +254,19 @@ class EmsPeakShaveCoordinator(DataUpdateCoordinator[None]):
             else False
         )
 
-        power_target_w, ev_charge_power_w = strategy_module.recompute_peak_shave_power(
-            prior=prior,
-            grid_import_w=grid_import_w,
-            grid_import_15m_avg_w=grid_import_15m,
-            house_load_non_ev_w=house_non_ev,
-            thresholds=thresholds,
+        fast_decision = strategy_module.recompute(
+            pv_w=pv_w,
+            house_load_w=house_load_w,
+            ev_power_w=ev_power_w,
             ev_plugged=prior_inputs.ev_plugged,
             ev_soc=prior_inputs.ev_soc,
+            ev_strategy=prior_inputs.ev_strategy,
+            ev_charging_enabled=prior_inputs.features.ev_charging,
             in_cheap_window=in_cheap_window,
             ev_max_charge_kw=prior_inputs.ev_max_charge_kw,
+            thresholds=prior_inputs.thresholds,
         )
-
-        from .models import Decision as _Decision
-        fast_decision = _Decision(
-            strategy=prior.strategy,
-            inverter_verb=prior.inverter_verb,
-            inverter_power_target_w=power_target_w,
-            ev_charge_power_w=ev_charge_power_w,
-            new_peak_risk=prior.new_peak_risk,
-            rule_chain=prior.rule_chain,
-            unsupported_verbs=prior.unsupported_verbs,
-        )
-        await self._controller.write_power_only(fast_decision)
+        await self._controller.write_full(fast_decision)
 
 
 class EvSchedulerOrchestrator:
@@ -448,14 +359,9 @@ class EvSchedulerOrchestrator:
         pv_w = _read_float(hass, data.get(CONF_PV_POWER), 0.0)
         house_load_w = _read_float(hass, data.get(CONF_HOUSE_LOAD), 0.0)
         ev_power_w = _read_float(hass, data.get(CONF_EV_POWER), 0.0)
-        house_non_ev_entity = data.get(CONF_HOUSE_LOAD_NON_EV)
-        house_non_ev = _read_float_optional(hass, house_non_ev_entity)
-        if house_non_ev is None:
-            house_non_ev = house_load_w - ev_power_w
-        battery_power_w = _read_float(hass, data.get(CONF_BATTERY_POWER), 0.0)
-        battery_charge_w = max(0.0, battery_power_w)
+        house_non_ev = max(0.0, house_load_w - ev_power_w)
         ev_min_charge_w = _read_number(hass, "number.ems_ev_min_charge_w", 1400.0)
-        solar_surplus_w = max(0.0, pv_w - house_non_ev - battery_charge_w)
+        solar_surplus_w = max(0.0, pv_w - house_non_ev)
 
         self._state.cached_window = compute_window(
             now=dt_util.utcnow(),

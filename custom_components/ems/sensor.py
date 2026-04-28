@@ -23,8 +23,6 @@ async def async_setup_entry(
         EmsEvKwhNeededSensor(coordinator),
         EmsCheapestWindowStartSensor(coordinator),
         EmsCheapestWindowEndSensor(coordinator),
-        EmsExpectedBatteryDeficitSensor(coordinator),
-        Ems24hAvgPriceSensor(coordinator),
         EmsInverterTargetVerbSensor(coordinator),
         EmsInverterPowerTargetSensor(coordinator),
         EmsEvChargeTargetPowerSensor(coordinator),
@@ -68,7 +66,8 @@ class EmsSolarSurplusSensor(_EmsBaseSensor):
         if self._result is None:
             return None
         inp = self._result.inputs
-        return max(0.0, inp.pv_w - inp.house_load_w)
+        house_non_ev = max(0.0, inp.house_load_w - inp.ev_power_w)
+        return max(0.0, inp.pv_w - house_non_ev)
 
 
 class EmsEvKwhNeededSensor(_EmsBaseSensor):
@@ -112,39 +111,6 @@ class EmsCheapestWindowEndSensor(_EmsBaseSensor):
         if self.coordinator._state.cached_window is None:
             return None
         return self.coordinator._state.cached_window.end
-
-
-class EmsExpectedBatteryDeficitSensor(_EmsBaseSensor):
-    _attr_unique_id = "ems_expected_battery_deficit_evening_kwh"
-    _attr_name = "EMS Expected Battery Deficit Evening"
-    _attr_native_unit_of_measurement = "kWh"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:battery-alert"
-
-    @property
-    def native_value(self) -> float | None:
-        if self._result is None:
-            return None
-        inp = self._result.inputs
-        if inp.pv_forecast_remaining_kwh is None or inp.house_load_forecast_kwh is None:
-            return None
-        battery_kwh = inp.battery_soc / 100.0 * inp.thresholds.battery_capacity_kwh
-        net = battery_kwh + inp.pv_forecast_remaining_kwh - inp.house_load_forecast_kwh
-        return max(0.0, -net)
-
-
-class Ems24hAvgPriceSensor(_EmsBaseSensor):
-    _attr_unique_id = "ems_24h_avg_price"
-    _attr_name = "EMS 24h Average Price"
-    _attr_native_unit_of_measurement = "EUR/kWh"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:currency-eur"
-
-    @property
-    def native_value(self) -> float | None:
-        if self._result is None:
-            return None
-        return self._result.inputs.avg_24h_price
 
 
 class EmsInverterTargetVerbSensor(_EmsBaseSensor):

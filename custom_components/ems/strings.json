@@ -6,32 +6,25 @@
         "description": "Map your power sensors to EMS inputs.",
         "data": {
           "grid_import_power": "Grid import power (W)",
-          "grid_import_15m_avg": "Grid import 15-min average (W)",
+          "grid_import_15m_avg": "Grid import 15-min average (W) — optional",
           "pv_power": "PV production power (W)",
-          "house_load": "House load power (W)",
-          "house_load_non_ev": "House load excluding EV (W)",
-          "battery_soc": "Battery SoC (%)",
-          "battery_power": "Battery charge/discharge power (W, signed)"
+          "house_load": "Total house load power (W)",
+          "ev_power": "EV charger power (W)"
         }
       },
       "inverter": {
-        "title": "Inverter Control",
-        "description": "Map inverter verbs to your inverter's select options. Leave blank if unsupported.",
+        "title": "Inverter Control (optional)",
+        "description": "Map your inverter's normal operating mode. Skip if you have no home battery. When the EV is charging, EMS writes this mode with a discharge-power cap to prevent the battery from draining into the car.",
         "data": {
           "inverter_select": "Inverter mode select entity",
-          "inverter_verb_self_use": "SELF_USE option string",
-          "inverter_verb_force_charge": "FORCE_CHARGE option string",
-          "inverter_verb_force_discharge": "FORCE_DISCHARGE option string",
-          "inverter_verb_limit_export": "LIMIT_EXPORT option string",
-          "inverter_verb_idle": "IDLE option string",
-          "inverter_power_target": "Inverter power target entity (W)"
+          "inverter_verb_self_use": "SELF_USE option string (your inverter's normal/self-use mode)",
+          "inverter_power_target": "Inverter power target entity (W) — for setting discharge cap"
         }
       },
       "ev_charger": {
         "title": "EV Charger",
-        "description": "Configure EV sensors. EMS publishes a sensor.ems_ev_charge_target_power (W) — wire your own automation to act on it. Skip if you have no EV.",
+        "description": "Configure EV sensors. EMS publishes sensor.ems_ev_charge_target_power (W) — wire your own automation to act on it.",
         "data": {
-          "ev_power": "EV charger power (W)",
           "ev_plug": "EV plug status",
           "ev_soc": "EV battery SoC (%)",
           "ev_capacity_kwh": "EV battery capacity (kWh)",
@@ -40,18 +33,10 @@
       },
       "price_sources": {
         "title": "Price Sources",
+        "description": "Required for Deadline and Price-optimised charging modes. Skip if you only use Solar-only or Off.",
         "data": {
           "import_price": "Current import price entity",
-          "export_price": "Current export price entity",
-          "forecast_path_import": "Import forecast attribute path",
-          "forecast_path_export": "Export forecast attribute path"
-        }
-      },
-      "forecast_sources": {
-        "title": "Forecast Sources",
-        "data": {
-          "pv_forecast_kwh": "PV forecast remaining today (kWh)",
-          "load_forecast_kwh": "House load forecast today (kWh)"
+          "forecast_path_import": "Import price forecast attribute path (dot-separated)"
         }
       }
     }
