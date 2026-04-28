@@ -29,10 +29,7 @@ class Controller:
         self._mapping = mapping
 
     async def write_full(self, decision: Decision, *, suppress_writes: bool = False) -> None:
-        """Called by 10 s coord. Idempotent. Off-mode → no-op."""
-        if decision.strategy == "off":
-            return
-
+        """Called by 10 s coord. Idempotent."""
         if suppress_writes:
             _LOGGER.debug("Startup grace: would write strategy=%s", decision.strategy)
             return

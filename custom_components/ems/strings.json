@@ -59,17 +59,6 @@
           "pv_forecast_kwh": "PV forecast remaining today (kWh)",
           "load_forecast_kwh": "House load forecast today (kWh)"
         }
-      },
-      "behaviour": {
-        "title": "Behaviour",
-        "data": {
-          "enable_peak_shaving": "Enable peak shaving",
-          "enable_proactive_charge": "Enable proactive grid charging",
-          "enable_ev_scheduling": "Enable EV scheduling",
-          "enable_forecast_planning": "Enable forecast-driven planning",
-          "enable_export_curtail": "Enable export curtailment",
-          "ev_absorbs_curtail": "EV absorbs curtailed surplus"
-        }
       }
     }
   }

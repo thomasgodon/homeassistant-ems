@@ -95,14 +95,6 @@ def test_fallback_wins(builder: InputsBuilder) -> None:
     assert decision.inverter_verb == InverterVerb.SELF_USE
 
 
-def test_off_when_mode_off(builder: InputsBuilder) -> None:
-    inp = builder.build(ems_mode="Off", grid_import_15m_avg_w=4400, battery_soc=50)
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "off"
-    assert decision.inverter_verb is None
-    assert decision.ev_verb is None
-
-
 # ── edge cases ────────────────────────────────────────────────────────────────
 
 def test_hysteresis_no_flap(builder: InputsBuilder) -> None:
@@ -218,6 +210,18 @@ def test_export_curtail_battery_not_full(builder: InputsBuilder) -> None:
     )
     decision = strategy_module.decide(inp)
     assert decision.strategy != "export_curtail"
+
+
+def test_disabled_ev_charging(builder: InputsBuilder) -> None:
+    """switch.ems_ev_charging=off must skip both ev_coupling rule and ev_overlay."""
+    inp = builder.build(
+        ev_power_w=150,
+        battery_soc=30,
+        features=_features(ev_charging=False),
+    )
+    decision = strategy_module.decide(inp)
+    assert decision.strategy != "ev_charging_coupling"
+    assert decision.ev_verb == EvVerb.IDLE
 
 
 def test_disabled_peak_shave(builder: InputsBuilder) -> None:

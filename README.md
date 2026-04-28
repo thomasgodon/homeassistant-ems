@@ -50,7 +50,7 @@ After restart, add the integration via **Settings → Devices & Services → Add
 
 ## Configuration (config flow)
 
-The integration is configured in 6 steps — no YAML editing required.
+The integration is configured in 5 steps — no YAML editing required.
 
 ### Step 1 — Required sensors
 
@@ -112,17 +112,6 @@ All optional. Skip entirely if you have no managed EV charger.
 | `pv_forecast_kwh` | sensor entity | Remaining PV energy forecast for today (kWh) |
 | `load_forecast_kwh` | sensor entity | Remaining house load forecast for today (kWh) |
 
-### Step 6 — Feature flags
-
-| Config key | Default | Description |
-|------------|---------|-------------|
-| `enable_peak_shaving` | `true` | Activate the 1 s peak-shave loop and hard grid import cap |
-| `enable_proactive_charge` | `true` | Charge battery from grid when import price is cheap |
-| `enable_ev_scheduling` | `true` | Use the 5-min EV scheduler to find the cheapest charging window |
-| `enable_forecast_planning` | `false` | Use PV + load forecasts for battery deficit calculations |
-| `enable_export_curtail` | `false` | Limit inverter export when export price is at or below threshold |
-| `ev_absorbs_curtail` | `true` | Redirect excess solar to EV instead of curtailing at the inverter |
-
 ---
 
 ## Runtime inputs
@@ -132,7 +121,6 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | Field | Source |
 |-------|--------|
 | `now` | System clock (`dt_util.utcnow()`) |
-| `ems_mode` | `select.ems_mode` |
 | `grid_import_w` | `grid_import_power` entity |
 | `grid_import_15m_avg_w` | `grid_import_15m_avg` entity or `None` |
 | `pv_w` | `pv_power` entity |
@@ -154,7 +142,7 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | `pv_forecast_remaining_kwh` | `pv_forecast_kwh` entity or `None` |
 | `house_load_forecast_kwh` | `load_forecast_kwh` entity or `None` |
 | `is_daytime` | `sun.sun` state |
-| `features` | Feature flag booleans from config entry (Step 6) |
+| `features` | Feature booleans read from `switch.ems_*` runtime switch entities |
 | `thresholds` | 12 `number.ems_*` entities (see Tunable thresholds) |
 | `mapping` | Inverter/EV select entities + verb→option maps from config (Steps 2–3) |
 | `peak_risk_latched` | Persisted hysteresis latch from `ems_state.json` |
@@ -188,11 +176,23 @@ All thresholds are HA `number` entities — adjust them live from the UI without
 
 ---
 
+## Runtime switches
+
+Toggle individual EMS features from the HA dashboard without touching the config flow. State is restored across restarts. Existing config-flow values (from a prior Step 6) are used as the initial default on first load.
+
+| Switch | Default | Effect when off |
+|--------|---------|-----------------|
+| `switch.ems_peak_shaving` | on | Disables the peak-shave rule (`_rule_peak_shave` → skip) |
+| `switch.ems_battery_grid_charging` | on | Disables proactive grid-to-battery charging (the only place `FORCE_CHARGE` is issued) |
+| `switch.ems_ev_charging` | on | Disables all EV control: EV-coupling rule is skipped and EV verb is forced to `IDLE`. **Side effect:** if the EV charges via an external source while this switch is off, the battery may discharge to feed it since the coupling rule is not active. |
+| `switch.ems_export_curtailment` | off | Disables export curtailment rule |
+| `switch.ems_ev_absorbs_curtailment` | on | When export curtailment is active, stops directing surplus to the EV charger |
+| `switch.ems_forecast_planning` | off | Reserved — flag is propagated to `Features.forecast_planning` but no rule currently reads it |
+
 ## Modes and schedules
 
 | Entity | Options | Description |
 |--------|---------|-------------|
-| `select.ems_mode` | `Auto`, `Off` | Master on/off switch; `Off` disables all writes |
 | `select.ems_ev_scheduling_strategy` | `Deadline`, `Price-optimised`, `Solar-only`, `Off` | How the EV scheduler picks the charging window |
 | `time.ems_ev_ready_by` | time (default `07:00`) | Target time by which the EV should reach `ev_target_soc` |
 
@@ -208,7 +208,7 @@ All thresholds are HA `number` entities — adjust them live from the UI without
 3. `select.select_option` on the configured **EV select entity** with the resolved option string for `decision.ev_verb`.
 4. `number.set_value` on the configured **EV max power entity** with `decision.ev_max_power_w`.
 
-Full writes are skipped when `ems_mode` is `Off` or during the startup grace period.
+Full writes are skipped during the startup grace period.
 
 ### Power-only write (`controller.write_power_only`) — called every 1 s (peak-shave only)
 Steps 2 and 4 only — adjusts wattage without changing operating modes.
@@ -221,7 +221,7 @@ Steps 2 and 4 only — adjusts wattage without changing operating modes.
 
 | Entity | Unit | Description |
 |--------|------|-------------|
-| `sensor.ems_current_strategy` | — | Active ladder rule (`peak_shave`, `battery_floor`, `ev_charging_coupling`, `export_curtail`, `proactive_charge`, `solar_to_battery`, `solar_to_ev`, `expensive_self_use`, `fallback`, `off`, `starting_up`) |
+| `sensor.ems_current_strategy` | — | Active ladder rule (`peak_shave`, `battery_floor`, `ev_charging_coupling`, `export_curtail`, `proactive_charge`, `solar_to_battery`, `solar_to_ev`, `expensive_self_use`, `fallback`, `starting_up`) |
 | `sensor.ems_solar_surplus_w` | W | `max(0, pv_w − house_load_w)` |
 | `sensor.ems_ev_kwh_needed` | kWh | Energy needed to reach `ev_target_soc` |
 | `sensor.ems_cheapest_window_start` | timestamp | Start of the next cheap EV charging window |

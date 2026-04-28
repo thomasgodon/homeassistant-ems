@@ -12,18 +12,6 @@ from .models import (
 
 def decide(inputs: Inputs) -> Decision:
     """Run the priority ladder. Returns a Decision. Never raises."""
-    if inputs.ems_mode != "Auto":
-        return Decision(
-            strategy="off",
-            inverter_verb=None,
-            inverter_power_target_w=None,
-            ev_verb=None,
-            ev_max_power_w=None,
-            new_peak_risk=False,
-            rule_chain=("off",),
-            unsupported_verbs=(),
-        )
-
     unsupported: list[str] = []
     rule_chain: list[str] = []
 
@@ -156,6 +144,8 @@ def _rule_battery_floor(inp: Inputs) -> Decision | None:
 
 
 def _rule_ev_coupling(inp: Inputs) -> Decision | None:
+    if not inp.features.ev_charging:
+        return None
     if inp.ev_power_w >= 100:
         return Decision(
             strategy="ev_charging_coupling",
@@ -309,7 +299,7 @@ def _ev_overlay(inp: Inputs, base: Decision) -> Decision:
         inp.ev_strategy == "Off"
         or not inp.ev_plugged
         or (inp.ev_soc is not None and inp.ev_soc >= inp.thresholds.ev_target_soc)
-        or not inp.features.ev_scheduling
+        or not inp.features.ev_charging
     ):
         return Decision(
             strategy=base.strategy,

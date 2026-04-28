@@ -20,6 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [
     Platform.SELECT,
+    Platform.SWITCH,
     Platform.NUMBER,
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
@@ -98,16 +99,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    async def handle_set_mode(call: ServiceCall) -> None:
-        mode = call.data.get("mode", "Off")
-        state_obj = hass.states.get("select.ems_mode")
-        if state_obj:
-            await hass.services.async_call(
-                "select", "select_option",
-                {"entity_id": "select.ems_mode", "option": mode},
-                blocking=True,
-            )
-
     async def handle_recompute_ev_window(call: ServiceCall) -> None:
         domain_data = hass.data[DOMAIN].get(entry.entry_id, {})
         orch = domain_data.get("ev_orchestrator")
@@ -144,13 +135,10 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
             "ev_max_power_w": decision.ev_max_power_w,
             "rule_chain": list(decision.rule_chain),
             "unsupported_verbs": list(decision.unsupported_verbs),
-            "would_write": inputs.ems_mode == "Auto",
-            "ems_mode": inputs.ems_mode,
             "peak_risk_latched": state.peak_risk_latched if state else False,
             "computed_at": inputs.now.isoformat(),
         }
 
-    hass.services.async_register(DOMAIN, "set_mode", handle_set_mode)
     hass.services.async_register(DOMAIN, "recompute_ev_window", handle_recompute_ev_window)
     hass.services.async_register(
         DOMAIN, "simulate", handle_simulate,
@@ -160,5 +148,5 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 def _unregister_services(hass: HomeAssistant) -> None:
     if not hass.data.get(DOMAIN):
-        for service in ("set_mode", "recompute_ev_window", "simulate"):
+        for service in ("recompute_ev_window", "simulate"):
             hass.services.async_remove(DOMAIN, service)

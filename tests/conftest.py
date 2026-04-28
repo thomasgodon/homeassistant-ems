@@ -42,7 +42,7 @@ _DEFAULT_MAPPING = VerbMapping(
 _DEFAULT_FEATURES = Features(
     peak_shaving=True,
     proactive_grid_charge=True,
-    ev_scheduling=True,
+    ev_charging=True,
     forecast_planning=False,
     export_curtail=True,
     ev_absorbs_curtail=True,
@@ -81,10 +81,9 @@ class InputsBuilder:
 
         return Inputs(
             now=get("now", _BASE_NOW),
-            ems_mode=get("ems_mode", "Auto"),
             grid_import_w=get("grid_import_w", 500.0),
             grid_import_15m_avg_w=get("grid_import_15m_avg_w", 1000.0),
-            pv_w=get("pv_w", 2000.0),
+            pv_w=get("pv_w", 500.0),
             house_load_w=get("house_load_w", 1500.0),
             house_load_non_ev_w=get("house_load_non_ev_w", 1500.0),
             battery_soc=get("battery_soc", 60.0),

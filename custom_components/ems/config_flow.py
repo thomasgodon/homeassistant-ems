@@ -9,7 +9,6 @@ from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.helpers.selector import (
-    BooleanSelector,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
@@ -21,12 +20,6 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_BATTERY_POWER,
     CONF_BATTERY_SOC,
-    CONF_ENABLE_EV_SCHEDULING,
-    CONF_ENABLE_EXPORT_CURTAIL,
-    CONF_ENABLE_FORECAST_PLANNING,
-    CONF_ENABLE_PEAK_SHAVING,
-    CONF_ENABLE_PROACTIVE_CHARGE,
-    CONF_EV_ABSORBS_CURTAIL,
     CONF_EV_CAPACITY_KWH,
     CONF_EV_MAX_CHARGE_KW,
     CONF_EV_MAX_POWER_ENTITY,
@@ -171,28 +164,13 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_forecast_sources(self, user_input=None):
         if user_input is not None:
             self._data.update(user_input)
-            return await self.async_step_behaviour()
+            return self.async_create_entry(title="EMS", data=self._data)
 
         schema = vol.Schema({
             vol.Optional(CONF_PV_FORECAST_KWH): EntitySelector(_POWER_SENSOR),
             vol.Optional(CONF_LOAD_FORECAST_KWH): EntitySelector(_POWER_SENSOR),
         })
         return self.async_show_form(step_id="forecast_sources", data_schema=schema)
-
-    async def async_step_behaviour(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return self.async_create_entry(title="EMS", data=self._data)
-
-        schema = vol.Schema({
-            vol.Optional(CONF_ENABLE_PEAK_SHAVING, default=True): BooleanSelector(),
-            vol.Optional(CONF_ENABLE_PROACTIVE_CHARGE, default=True): BooleanSelector(),
-            vol.Optional(CONF_ENABLE_EV_SCHEDULING, default=True): BooleanSelector(),
-            vol.Optional(CONF_ENABLE_FORECAST_PLANNING, default=False): BooleanSelector(),
-            vol.Optional(CONF_ENABLE_EXPORT_CURTAIL, default=False): BooleanSelector(),
-            vol.Optional(CONF_EV_ABSORBS_CURTAIL, default=True): BooleanSelector(),
-        })
-        return self.async_show_form(step_id="behaviour", data_schema=schema)
 
     @staticmethod
     def async_get_options_flow(config_entry):

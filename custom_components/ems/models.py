@@ -36,7 +36,7 @@ class VerbMapping:
 class Features:
     peak_shaving: bool
     proactive_grid_charge: bool
-    ev_scheduling: bool
+    ev_charging: bool
     forecast_planning: bool
     export_curtail: bool
     ev_absorbs_curtail: bool
@@ -68,7 +68,6 @@ class PriceSlot:
 @dataclass(frozen=True, slots=True)
 class Inputs:
     now: datetime
-    ems_mode: Literal["Auto", "Off"]
     grid_import_w: float
     grid_import_15m_avg_w: float | None
     pv_w: float
@@ -97,7 +96,6 @@ class Inputs:
 
 
 StrategyLabel = Literal[
-    "off",
     "peak_shave",
     "battery_floor",
     "ev_charging_coupling",

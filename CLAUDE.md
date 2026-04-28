@@ -12,8 +12,8 @@ Any change to integration code or behavior MUST update `README.md` in the same t
 
 `README.md` must always cover:
 - **Core working**: the three-loop architecture and priority ladder order.
-- **Inputs**: every config-flow field (all 6 steps, required vs optional), every runtime entity read by `coordinator.py::_build_inputs`, every `number.ems_*` threshold, every feature toggle.
-- **Outputs**: every HA service `controller.py` calls (full write vs power-only write), every entity the integration registers (sensor, binary_sensor, number, select, time).
+- **Inputs**: every config-flow field (all 5 steps, required vs optional), every runtime entity read by `coordinator.py::_build_inputs`, every `number.ems_*` threshold, every `switch.ems_*` feature toggle.
+- **Outputs**: every HA service `controller.py` calls (full write vs power-only write), every entity the integration registers (sensor, binary_sensor, number, select, switch, time).
 
 When updating: edit the matching README section in the same commit. If a new input or output is added, add a row to the relevant table.
 
@@ -67,13 +67,14 @@ The integration is structured around three execution loops managed by `coordinat
 - **Abstract verbs** (`FORCE_CHARGE`, `FORCE_DISCHARGE`, `IDLE`, `NORMAL`): inverter-agnostic. Users map each verb to their hardware's actual option string in the config flow. Never hardcode inverter mode strings.
 - **Priority ladder order**: peak shave → battery floor → EV coupling → export curtail → proactive charge → solar-use → expensive-grid → fallback
 
-### Config flow (6 steps, no YAML editing)
+### Config flow (5 steps, no YAML editing)
 1. Required sensors (grid power, PV, house load, battery SoC/power)
 2. Inverter select entity + verb→option mapping
 3. EV charger (optional) — mode select, power/SoC/capacity sensors
 4. Price sources (import/export, forecast paths)
 5. PV + load forecast sources
-6. Feature toggle flags (peak shaving, proactive charge, EV scheduling, export curtailment)
+
+Feature toggles are runtime `switch.ems_*` entities — no config-flow step. See README "Runtime switches".
 
 ### Persistence
 `homeassistant.helpers.storage.Store` persists `peak_risk_latched` and `cached_window` to `ems_state.json` so state survives restarts.

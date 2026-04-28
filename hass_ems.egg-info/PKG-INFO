@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: hass-ems
+Version: 0.1.0
+Requires-Python: >=3.12
+Provides-Extra: dev
+Requires-Dist: homeassistant>=2024.11.0; extra == "dev"
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: pytest-cov>=5.0; extra == "dev"
+Requires-Dist: freezegun>=1.4; extra == "dev"
+Requires-Dist: ruff>=0.4; extra == "dev"

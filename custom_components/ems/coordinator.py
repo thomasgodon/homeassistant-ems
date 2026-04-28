@@ -15,12 +15,6 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_BATTERY_POWER,
     CONF_BATTERY_SOC,
-    CONF_ENABLE_EV_SCHEDULING,
-    CONF_ENABLE_EXPORT_CURTAIL,
-    CONF_ENABLE_FORECAST_PLANNING,
-    CONF_ENABLE_PEAK_SHAVING,
-    CONF_ENABLE_PROACTIVE_CHARGE,
-    CONF_EV_ABSORBS_CURTAIL,
     CONF_EV_CAPACITY_KWH,
     CONF_EV_MAX_CHARGE_KW,
     CONF_EV_MAX_POWER_ENTITY,
@@ -162,7 +156,6 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
 
         now = dt_util.utcnow()
 
-        ems_mode = _read_select_state(hass, "select.ems_mode", "Off")
         ev_strategy = _read_select_state(hass, "select.ems_ev_scheduling_strategy", "Off")
 
         grid_import_w = _read_float(hass, data.get(CONF_GRID_IMPORT_POWER), 0.0)
@@ -201,12 +194,12 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         is_daytime = _read_select_state(hass, "sun.sun", "below_horizon") == STATE_ABOVE_HORIZON
 
         features = Features(
-            peak_shaving=bool(data.get(CONF_ENABLE_PEAK_SHAVING, True)),
-            proactive_grid_charge=bool(data.get(CONF_ENABLE_PROACTIVE_CHARGE, True)),
-            ev_scheduling=bool(data.get(CONF_ENABLE_EV_SCHEDULING, True)),
-            forecast_planning=bool(data.get(CONF_ENABLE_FORECAST_PLANNING, False)),
-            export_curtail=bool(data.get(CONF_ENABLE_EXPORT_CURTAIL, False)),
-            ev_absorbs_curtail=bool(data.get(CONF_EV_ABSORBS_CURTAIL, True)),
+            peak_shaving=_read_bool(hass, "switch.ems_peak_shaving", True),
+            proactive_grid_charge=_read_bool(hass, "switch.ems_battery_grid_charging", True),
+            ev_charging=_read_bool(hass, "switch.ems_ev_charging", True),
+            forecast_planning=_read_bool(hass, "switch.ems_forecast_planning", False),
+            export_curtail=_read_bool(hass, "switch.ems_export_curtailment", False),
+            ev_absorbs_curtail=_read_bool(hass, "switch.ems_ev_absorbs_curtailment", True),
         )
 
         thresholds = Thresholds(
@@ -264,7 +257,6 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
 
         return Inputs(
             now=now,
-            ems_mode=ems_mode,  # type: ignore[arg-type]
             grid_import_w=grid_import_w,
             grid_import_15m_avg_w=grid_import_15m,
             pv_w=pv_w,
