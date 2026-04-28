@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`homeassistant-ems` is a spec-first repository for a Home Assistant custom integration called **EMS** (Energy Management System). The full implementation specification lives in `implemenation.md`. The integration provides brand-agnostic energy management for solar + battery + EV setups via a **priority ladder algorithm**.
+`homeassistant-ems` is a Home Assistant custom integration called **EMS** (Energy Management System). It provides brand-agnostic energy management for solar + battery + EV setups via a **priority ladder algorithm**.
 
 ## Documentation
 
