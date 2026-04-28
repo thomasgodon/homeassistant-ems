@@ -10,11 +10,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
-    CONF_EV_ABSORBS_CURTAIL,
     CONF_ENABLE_EV_SCHEDULING,
-    CONF_ENABLE_EXPORT_CURTAIL,
     CONF_ENABLE_FORECAST_PLANNING,
-    CONF_ENABLE_PEAK_SHAVING,
     CONF_ENABLE_PROACTIVE_CHARGE,
     DOMAIN,
 )
@@ -31,13 +28,6 @@ class EmsSwitchDescription:
 
 _SWITCHES: tuple[EmsSwitchDescription, ...] = (
     EmsSwitchDescription(
-        unique_id="ems_peak_shaving",
-        name="EMS Peak Shaving",
-        icon="mdi:shield-bolt",
-        legacy_conf_key=CONF_ENABLE_PEAK_SHAVING,
-        default_on=True,
-    ),
-    EmsSwitchDescription(
         unique_id="ems_battery_grid_charging",
         name="EMS Battery Grid Charging",
         icon="mdi:battery-charging",
@@ -49,20 +39,6 @@ _SWITCHES: tuple[EmsSwitchDescription, ...] = (
         name="EMS EV Charging",
         icon="mdi:car-electric",
         legacy_conf_key=CONF_ENABLE_EV_SCHEDULING,
-        default_on=True,
-    ),
-    EmsSwitchDescription(
-        unique_id="ems_export_curtailment",
-        name="EMS Export Curtailment",
-        icon="mdi:transmission-tower-export",
-        legacy_conf_key=CONF_ENABLE_EXPORT_CURTAIL,
-        default_on=False,
-    ),
-    EmsSwitchDescription(
-        unique_id="ems_ev_absorbs_curtailment",
-        name="EMS EV Absorbs Curtailment",
-        icon="mdi:car-electric-outline",
-        legacy_conf_key=CONF_EV_ABSORBS_CURTAIL,
         default_on=True,
     ),
     EmsSwitchDescription(

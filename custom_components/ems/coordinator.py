@@ -17,11 +17,8 @@ from .const import (
     CONF_BATTERY_SOC,
     CONF_EV_CAPACITY_KWH,
     CONF_EV_MAX_CHARGE_KW,
-    CONF_EV_MAX_POWER_ENTITY,
-    CONF_EV_OPTIONS,
     CONF_EV_PLUG,
     CONF_EV_POWER,
-    CONF_EV_SELECT,
     CONF_EV_SOC,
     CONF_EXPORT_PRICE,
     CONF_FORECAST_PATH_IMPORT,
@@ -46,7 +43,6 @@ from .const import (
 from .controller import Controller
 from .ev_scheduler import compute_window, parse_forecast
 from .models import (
-    EvVerb,
     EvWindow,
     Features,
     Inputs,
@@ -70,9 +66,7 @@ class EmsState:
     last_result: LadderResult | None = None
     peak_risk_latched: bool = False
     last_inverter_verb_written: InverterVerb | None = None
-    last_ev_verb_written: EvVerb | None = None
     last_power_target_written_w: float | None = None
-    last_ev_max_power_written_w: float | None = None
     cached_window: EvWindow | None = None
     startup_grace_until: datetime | None = None
     forecast_parse_warned: bool = False
@@ -194,12 +188,9 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         is_daytime = _read_select_state(hass, "sun.sun", "below_horizon") == STATE_ABOVE_HORIZON
 
         features = Features(
-            peak_shaving=_read_bool(hass, "switch.ems_peak_shaving", True),
             proactive_grid_charge=_read_bool(hass, "switch.ems_battery_grid_charging", True),
             ev_charging=_read_bool(hass, "switch.ems_ev_charging", True),
             forecast_planning=_read_bool(hass, "switch.ems_forecast_planning", False),
-            export_curtail=_read_bool(hass, "switch.ems_export_curtailment", False),
-            ev_absorbs_curtail=_read_bool(hass, "switch.ems_ev_absorbs_curtailment", True),
         )
 
         thresholds = Thresholds(
@@ -225,6 +216,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             solar_surplus_threshold_w=_read_number(
                 hass, "number.ems_solar_surplus_threshold_w", 100.0
             ),
+            ev_min_charge_w=_read_number(hass, "number.ems_ev_min_charge_w", 1400.0),
         )
 
         inverter_options_raw: dict = data.get(CONF_INVERTER_OPTIONS, {})
@@ -233,26 +225,13 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             for k, v in inverter_options_raw.items()
             if k in InverterVerb.__members__
         }
-        # Ensure all verbs present (missing = not configured = unsupported)
         for verb in InverterVerb:
             inverter_options.setdefault(verb, None)
-
-        ev_options_raw: dict = data.get(CONF_EV_OPTIONS, {})
-        ev_options = {
-            EvVerb[k]: (v if v else None)
-            for k, v in ev_options_raw.items()
-            if k in EvVerb.__members__
-        }
-        for verb in EvVerb:
-            ev_options.setdefault(verb, None)
 
         mapping = VerbMapping(
             inverter_select_entity=data.get(CONF_INVERTER_SELECT),
             inverter_options=inverter_options,
             inverter_power_target_entity=data.get(CONF_INVERTER_POWER_TARGET),
-            ev_select_entity=data.get(CONF_EV_SELECT),
-            ev_options=ev_options,
-            ev_max_power_entity=data.get(CONF_EV_MAX_POWER_ENTITY),
         )
 
         return Inputs(
@@ -344,15 +323,26 @@ class EmsPeakShaveCoordinator(DataUpdateCoordinator[None]):
         if house_non_ev is None:
             house_non_ev = house_load_w - ev_power_w
 
-        thresholds = self._state.last_result.inputs.thresholds
+        prior_inputs = self._state.last_result.inputs
+        thresholds = prior_inputs.thresholds
         prior = self._state.last_result.decision
 
-        power_target_w, ev_max_power_w = strategy_module.recompute_peak_shave_power(
+        in_cheap_window = (
+            self._state.cached_window.in_window_now
+            if self._state.cached_window is not None
+            else False
+        )
+
+        power_target_w, ev_charge_power_w = strategy_module.recompute_peak_shave_power(
             prior=prior,
             grid_import_w=grid_import_w,
             grid_import_15m_avg_w=grid_import_15m,
             house_load_non_ev_w=house_non_ev,
             thresholds=thresholds,
+            ev_plugged=prior_inputs.ev_plugged,
+            ev_soc=prior_inputs.ev_soc,
+            in_cheap_window=in_cheap_window,
+            ev_max_charge_kw=prior_inputs.ev_max_charge_kw,
         )
 
         from .models import Decision as _Decision
@@ -360,8 +350,7 @@ class EmsPeakShaveCoordinator(DataUpdateCoordinator[None]):
             strategy=prior.strategy,
             inverter_verb=prior.inverter_verb,
             inverter_power_target_w=power_target_w,
-            ev_verb=prior.ev_verb,
-            ev_max_power_w=ev_max_power_w,
+            ev_charge_power_w=ev_charge_power_w,
             new_peak_risk=prior.new_peak_risk,
             rule_chain=prior.rule_chain,
             unsupported_verbs=prior.unsupported_verbs,
@@ -458,8 +447,15 @@ class EvSchedulerOrchestrator:
 
         pv_w = _read_float(hass, data.get(CONF_PV_POWER), 0.0)
         house_load_w = _read_float(hass, data.get(CONF_HOUSE_LOAD), 0.0)
-        battery_soc = _read_float(hass, data.get(CONF_BATTERY_SOC), 50.0)
-        solar_surplus_w = max(0.0, pv_w - house_load_w)
+        ev_power_w = _read_float(hass, data.get(CONF_EV_POWER), 0.0)
+        house_non_ev_entity = data.get(CONF_HOUSE_LOAD_NON_EV)
+        house_non_ev = _read_float_optional(hass, house_non_ev_entity)
+        if house_non_ev is None:
+            house_non_ev = house_load_w - ev_power_w
+        battery_power_w = _read_float(hass, data.get(CONF_BATTERY_POWER), 0.0)
+        battery_charge_w = max(0.0, battery_power_w)
+        ev_min_charge_w = _read_number(hass, "number.ems_ev_min_charge_w", 1400.0)
+        solar_surplus_w = max(0.0, pv_w - house_non_ev - battery_charge_w)
 
         self._state.cached_window = compute_window(
             now=dt_util.utcnow(),
@@ -469,7 +465,7 @@ class EvSchedulerOrchestrator:
             max_charge_kw=ev_max_charge_kw,
             forecast=forecast,
             solar_surplus_w=solar_surplus_w,
-            battery_soc=battery_soc,
+            ev_min_charge_w=ev_min_charge_w,
             previous=self._state.cached_window,
         )
 

@@ -22,11 +22,8 @@ from .const import (
     CONF_BATTERY_SOC,
     CONF_EV_CAPACITY_KWH,
     CONF_EV_MAX_CHARGE_KW,
-    CONF_EV_MAX_POWER_ENTITY,
-    CONF_EV_OPTIONS,
     CONF_EV_PLUG,
     CONF_EV_POWER,
-    CONF_EV_SELECT,
     CONF_EV_SOC,
     CONF_EXPORT_PRICE,
     CONF_FORECAST_PATH_EXPORT,
@@ -44,7 +41,7 @@ from .const import (
     CONF_PV_POWER,
     DOMAIN,
 )
-from .models import EvVerb, InverterVerb
+from .models import InverterVerb
 
 _POWER_SENSOR = EntitySelectorConfig(domain=[SENSOR_DOMAIN])
 _SOC_SENSOR = EntitySelectorConfig(domain=[SENSOR_DOMAIN])
@@ -113,28 +110,14 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_ev_charger(self, user_input=None):
         if user_input is not None:
-            ev_select = user_input.get(CONF_EV_SELECT)
-            if ev_select:
-                options = {}
-                for verb in EvVerb:
-                    key = f"ev_verb_{verb.value.lower()}"
-                    options[verb.value] = user_input.get(key) or None
-                self._data[CONF_EV_SELECT] = ev_select
-                self._data[CONF_EV_OPTIONS] = options
-                self._data[CONF_EV_POWER] = user_input.get(CONF_EV_POWER)
-                self._data[CONF_EV_PLUG] = user_input.get(CONF_EV_PLUG)
-                self._data[CONF_EV_SOC] = user_input.get(CONF_EV_SOC)
-                self._data[CONF_EV_CAPACITY_KWH] = user_input.get(CONF_EV_CAPACITY_KWH, 60.0)
-                self._data[CONF_EV_MAX_CHARGE_KW] = user_input.get(CONF_EV_MAX_CHARGE_KW, 7.4)
-                self._data[CONF_EV_MAX_POWER_ENTITY] = user_input.get(CONF_EV_MAX_POWER_ENTITY)
+            self._data[CONF_EV_POWER] = user_input.get(CONF_EV_POWER)
+            self._data[CONF_EV_PLUG] = user_input.get(CONF_EV_PLUG)
+            self._data[CONF_EV_SOC] = user_input.get(CONF_EV_SOC)
+            self._data[CONF_EV_CAPACITY_KWH] = user_input.get(CONF_EV_CAPACITY_KWH, 60.0)
+            self._data[CONF_EV_MAX_CHARGE_KW] = user_input.get(CONF_EV_MAX_CHARGE_KW, 7.4)
             return await self.async_step_price_sources()
 
         schema = vol.Schema({
-            vol.Optional(CONF_EV_SELECT): EntitySelector(_SELECT_ENTITY),
-            vol.Optional("ev_verb_charge_now"): TextSelector(),
-            vol.Optional("ev_verb_solar_only"): TextSelector(),
-            vol.Optional("ev_verb_solar_plus_battery"): TextSelector(),
-            vol.Optional("ev_verb_idle"): TextSelector(),
             vol.Optional(CONF_EV_POWER): EntitySelector(_POWER_SENSOR),
             vol.Optional(CONF_EV_PLUG): EntitySelector(_BOOL_ENTITY),
             vol.Optional(CONF_EV_SOC): EntitySelector(_SOC_SENSOR),
@@ -144,7 +127,6 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_EV_MAX_CHARGE_KW): NumberSelector(
                 NumberSelectorConfig(min=1, max=50, step=0.1, mode=NumberSelectorMode.BOX)
             ),
-            vol.Optional(CONF_EV_MAX_POWER_ENTITY): EntitySelector(_NUMBER_ENTITY),
         })
         return self.async_show_form(step_id="ev_charger", data_schema=schema)
 
@@ -215,23 +197,7 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_ev_charger(self, user_input=None):
         if user_input is not None:
-            ev_select = user_input.get(CONF_EV_SELECT)
-            if ev_select:
-                options = {}
-                for verb in EvVerb:
-                    key = f"ev_verb_{verb.value.lower()}"
-                    options[verb.value] = user_input.get(key) or None
-                self._data[CONF_EV_SELECT] = ev_select
-                self._data[CONF_EV_OPTIONS] = options
             return self.async_create_entry(title="", data=self._data)
 
-        schema = vol.Schema({
-            vol.Optional(
-                CONF_EV_SELECT, default=self._data.get(CONF_EV_SELECT, "")
-            ): EntitySelector(_SELECT_ENTITY),
-            vol.Optional("ev_verb_charge_now"): TextSelector(),
-            vol.Optional("ev_verb_solar_only"): TextSelector(),
-            vol.Optional("ev_verb_solar_plus_battery"): TextSelector(),
-            vol.Optional("ev_verb_idle"): TextSelector(),
-        })
+        schema = vol.Schema({})
         return self.async_show_form(step_id="ev_charger", data_schema=schema)

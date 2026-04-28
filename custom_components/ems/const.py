@@ -20,14 +20,11 @@ CONF_INVERTER_SELECT = "inverter_select"
 CONF_INVERTER_OPTIONS = "inverter_options"
 CONF_INVERTER_POWER_TARGET = "inverter_power_target"
 
-CONF_EV_SELECT = "ev_select"
-CONF_EV_OPTIONS = "ev_options"
 CONF_EV_POWER = "ev_power"
 CONF_EV_PLUG = "ev_plug"
 CONF_EV_SOC = "ev_soc"
 CONF_EV_CAPACITY_KWH = "ev_capacity_kwh"
 CONF_EV_MAX_CHARGE_KW = "ev_max_charge_kw"
-CONF_EV_MAX_POWER_ENTITY = "ev_max_power_entity"
 
 CONF_IMPORT_PRICE = "import_price"
 CONF_EXPORT_PRICE = "export_price"
@@ -37,12 +34,9 @@ CONF_FORECAST_PATH_EXPORT = "forecast_path_export"
 CONF_PV_FORECAST_KWH = "pv_forecast_kwh"
 CONF_LOAD_FORECAST_KWH = "load_forecast_kwh"
 
-CONF_ENABLE_PEAK_SHAVING = "enable_peak_shaving"
 CONF_ENABLE_PROACTIVE_CHARGE = "enable_proactive_charge"
 CONF_ENABLE_EV_SCHEDULING = "enable_ev_scheduling"
 CONF_ENABLE_FORECAST_PLANNING = "enable_forecast_planning"
-CONF_ENABLE_EXPORT_CURTAIL = "enable_export_curtail"
-CONF_EV_ABSORBS_CURTAIL = "ev_absorbs_curtail"
 
 # Storage
 STORAGE_KEY = "ems_state"

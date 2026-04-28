@@ -29,19 +29,13 @@
       },
       "ev_charger": {
         "title": "EV Charger",
-        "description": "Map EV charger verbs. Skip this step if you have no EV charger.",
+        "description": "Configure EV sensors. EMS publishes a sensor.ems_ev_charge_target_power (W) — wire your own automation to act on it. Skip if you have no EV.",
         "data": {
-          "ev_select": "EV charger mode select entity",
-          "ev_verb_charge_now": "CHARGE_NOW option string",
-          "ev_verb_solar_only": "SOLAR_ONLY option string",
-          "ev_verb_solar_plus_battery": "SOLAR_PLUS_BATTERY option string",
-          "ev_verb_idle": "IDLE option string",
           "ev_power": "EV charger power (W)",
           "ev_plug": "EV plug status",
           "ev_soc": "EV battery SoC (%)",
           "ev_capacity_kwh": "EV battery capacity (kWh)",
-          "ev_max_charge_kw": "EV max charge power (kW)",
-          "ev_max_power_entity": "EV max-current consumer entity"
+          "ev_max_charge_kw": "EV max charge power (kW)"
         }
       },
       "price_sources": {

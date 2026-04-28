@@ -64,17 +64,19 @@ The integration is structured around three execution loops managed by `coordinat
 
 ### Key abstractions
 
-- **Abstract verbs** (`FORCE_CHARGE`, `FORCE_DISCHARGE`, `IDLE`, `NORMAL`): inverter-agnostic. Users map each verb to their hardware's actual option string in the config flow. Never hardcode inverter mode strings.
+- **Abstract verbs** (`FORCE_CHARGE`, `FORCE_DISCHARGE`, `IDLE`, `SELF_USE`, `LIMIT_EXPORT`): inverter-agnostic. Users map each verb to their hardware's actual option string in the config flow. Never hardcode inverter mode strings.
+- **EV charge target**: strategy emits `ev_charge_power_w` (float, W). No EV verbs. No writes to charger. EMS exposes `sensor.ems_ev_charge_target_power`; user creates their own automation.
 - **Priority ladder order**: peak shave → battery floor → EV coupling → export curtail → proactive charge → solar-use → expensive-grid → fallback
+- **Peak shave and export curtail are always active** — no feature toggles for these.
 
 ### Config flow (5 steps, no YAML editing)
 1. Required sensors (grid power, PV, house load, battery SoC/power)
 2. Inverter select entity + verb→option mapping
-3. EV charger (optional) — mode select, power/SoC/capacity sensors
+3. EV charger (optional) — power/plug/SoC/capacity sensors (no charger mode select; EMS doesn't write to it)
 4. Price sources (import/export, forecast paths)
 5. PV + load forecast sources
 
-Feature toggles are runtime `switch.ems_*` entities — no config-flow step. See README "Runtime switches".
+Feature toggles are runtime `switch.ems_*` entities — no config-flow step. See README "Runtime switches". Only 3 remain: `ems_battery_grid_charging`, `ems_ev_charging`, `ems_forecast_planning`.
 
 ### Persistence
 `homeassistant.helpers.storage.Store` persists `peak_risk_latched` and `cached_window` to `ems_state.json` so state survives restarts.

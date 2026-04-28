@@ -15,31 +15,18 @@ class InverterVerb(StrEnum):
     IDLE = "IDLE"
 
 
-class EvVerb(StrEnum):
-    CHARGE_NOW = "CHARGE_NOW"
-    SOLAR_ONLY = "SOLAR_ONLY"
-    SOLAR_PLUS_BATTERY = "SOLAR_PLUS_BATTERY"
-    IDLE = "IDLE"
-
-
 @dataclass(frozen=True, slots=True)
 class VerbMapping:
     inverter_select_entity: str | None
     inverter_options: Mapping[InverterVerb, str | None]  # None = unsupported
     inverter_power_target_entity: str | None  # number entity, watts, non-negative
-    ev_select_entity: str | None
-    ev_options: Mapping[EvVerb, str | None]
-    ev_max_power_entity: str | None  # number entity, watts
 
 
 @dataclass(frozen=True, slots=True)
 class Features:
-    peak_shaving: bool
     proactive_grid_charge: bool
     ev_charging: bool
     forecast_planning: bool
-    export_curtail: bool
-    ev_absorbs_curtail: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +43,7 @@ class Thresholds:
     ev_target_soc: float
     peak_shave_headroom_w: float
     solar_surplus_threshold_w: float
+    ev_min_charge_w: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +90,6 @@ StrategyLabel = Literal[
     "export_curtail",
     "proactive_charge",
     "solar_to_battery",
-    "solar_to_ev",
     "expensive_self_use",
     "fallback",
     "starting_up",
@@ -114,8 +101,7 @@ class Decision:
     strategy: StrategyLabel
     inverter_verb: InverterVerb | None
     inverter_power_target_w: float | None  # non-negative; None = leave unchanged
-    ev_verb: EvVerb | None
-    ev_max_power_w: float | None  # peak-shave cap, watts
+    ev_charge_power_w: float  # watts; 0 = idle
     new_peak_risk: bool  # hysteresis latch output
     rule_chain: tuple[str, ...]  # diagnostic trace
     unsupported_verbs: tuple[str, ...]  # mode_unsupported_<verb> labels

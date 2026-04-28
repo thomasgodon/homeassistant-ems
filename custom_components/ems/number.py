@@ -142,13 +142,13 @@ _NUMBERS: tuple[EmsNumberDescription, ...] = (
         icon="mdi:solar-power",
     ),
     EmsNumberDescription(
-        key="ems_ev_max_power_w",
-        name="EMS EV Max Power",
+        key="ems_ev_min_charge_w",
+        name="EMS EV Minimum Charge Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         native_min_value=0,
-        native_max_value=22000,
-        native_step=100,
-        default_value=7400,
+        native_max_value=7000,
+        native_step=50,
+        default_value=1400,
         icon="mdi:ev-station",
     ),
     EmsNumberDescription(

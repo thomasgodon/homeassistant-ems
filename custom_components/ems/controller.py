@@ -5,11 +5,10 @@ from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 
-from .models import Decision, EvVerb, InverterVerb, VerbMapping
+from .models import Decision, InverterVerb, VerbMapping
 
 _LOGGER = logging.getLogger(__name__)
 
-# How long before repeating a mode_unsupported warning (24 h)
 _WARN_REPEAT_AFTER = timedelta(hours=24)
 _WARN_DEDUP_MAX = 64
 
@@ -19,10 +18,7 @@ class Controller:
         self._hass = hass
         self._mapping = mapping
         self._last_inverter_verb: InverterVerb | None = None
-        self._last_ev_verb: EvVerb | None = None
         self._last_power_target_w: float | None = None
-        self._last_ev_max_power_w: float | None = None
-        # dedup key → (first_warned_at, count, last_warned_at)
         self._unsupported_warned: dict[str, tuple[datetime, int, datetime]] = {}
 
     def update_mapping(self, mapping: VerbMapping) -> None:
@@ -35,13 +31,10 @@ class Controller:
             return
 
         await self._write_inverter(decision)
-        await self._write_ev(decision)
-        await self._write_ev_max_power(decision)
 
     async def write_power_only(self, decision: Decision) -> None:
-        """Called by 1 s coord. Writes inverter_power_target and ev_max_power only."""
+        """Called by 1 s coord. Writes inverter_power_target only."""
         await self._write_power_target(decision.inverter_power_target_w)
-        await self._write_ev_max_power(decision)
 
     # ── private helpers ───────────────────────────────────────────────────────
 
@@ -83,48 +76,8 @@ class Controller:
             )
             self._last_power_target_w = power_w
 
-    async def _write_ev(self, decision: Decision) -> None:
-        verb = decision.ev_verb
-        if verb is None:
-            return
-        option = self._resolve_ev(verb)
-        if option is None:
-            return
-
-        if verb != self._last_ev_verb:
-            entity = self._mapping.ev_select_entity
-            if entity:
-                _LOGGER.info("EV charger → %s (%s) via %s", verb.value, option, entity)
-                await self._hass.services.async_call(
-                    entity.split(".", 1)[0],
-                    "select_option",
-                    {"entity_id": entity, "option": option},
-                    blocking=True,
-                )
-                self._last_ev_verb = verb
-
-    async def _write_ev_max_power(self, decision: Decision) -> None:
-        power_w = decision.ev_max_power_w
-        if power_w is None:
-            return
-        entity = self._mapping.ev_max_power_entity
-        if not entity:
-            return
-        if power_w != self._last_ev_max_power_w:
-            _LOGGER.info("EV max power → %.0f W via %s", power_w, entity)
-            await self._hass.services.async_call(
-                "number",
-                "set_value",
-                {"entity_id": entity, "value": power_w},
-                blocking=True,
-            )
-            self._last_ev_max_power_w = power_w
-
     def _resolve_inverter(self, verb: InverterVerb) -> str | None:
         return self._mapping.inverter_options.get(verb)
-
-    def _resolve_ev(self, verb: EvVerb) -> str | None:
-        return self._mapping.ev_options.get(verb)
 
     def log_unsupported(self, verb_label: str, now: datetime) -> None:
         """Log mode_unsupported warnings with 24 h dedup."""
@@ -155,6 +108,4 @@ class Controller:
     def reset_write_cache(self) -> None:
         """Re-sync cache against live HA state at startup."""
         self._last_inverter_verb = None
-        self._last_ev_verb = None
         self._last_power_target_w = None
-        self._last_ev_max_power_w = None

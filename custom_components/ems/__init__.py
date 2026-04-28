@@ -14,7 +14,7 @@ from .coordinator import (
     EmsStrategyCoordinator,
     EvSchedulerOrchestrator,
 )
-from .models import EvVerb, InverterVerb, VerbMapping
+from .models import InverterVerb, VerbMapping
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,22 +41,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for verb in InverterVerb:
         inverter_options.setdefault(verb, None)
 
-    ev_options_raw: dict = data.get("ev_options", {})
-    ev_options = {
-        EvVerb[k]: (v if v else None)
-        for k, v in ev_options_raw.items()
-        if k in EvVerb.__members__
-    }
-    for verb in EvVerb:
-        ev_options.setdefault(verb, None)
-
     mapping = VerbMapping(
         inverter_select_entity=data.get("inverter_select"),
         inverter_options=inverter_options,
         inverter_power_target_entity=data.get("inverter_power_target"),
-        ev_select_entity=data.get("ev_select"),
-        ev_options=ev_options,
-        ev_max_power_entity=data.get("ev_max_power_entity"),
     )
 
     state = EmsState()
@@ -127,12 +115,7 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 if decision.inverter_verb else None
             ),
             "inverter_power_target_w": decision.inverter_power_target_w,
-            "ev_verb": decision.ev_verb.value if decision.ev_verb else None,
-            "ev_option": (
-                inputs.mapping.ev_options.get(decision.ev_verb)
-                if decision.ev_verb else None
-            ),
-            "ev_max_power_w": decision.ev_max_power_w,
+            "ev_charge_power_w": decision.ev_charge_power_w,
             "rule_chain": list(decision.rule_chain),
             "unsupported_verbs": list(decision.unsupported_verbs),
             "peak_risk_latched": state.peak_risk_latched if state else False,

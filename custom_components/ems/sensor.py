@@ -26,8 +26,8 @@ async def async_setup_entry(
         EmsExpectedBatteryDeficitSensor(coordinator),
         Ems24hAvgPriceSensor(coordinator),
         EmsInverterTargetVerbSensor(coordinator),
-        EmsEvTargetVerbSensor(coordinator),
         EmsInverterPowerTargetSensor(coordinator),
+        EmsEvChargeTargetPowerSensor(coordinator),
     ])
 
 
@@ -160,19 +160,6 @@ class EmsInverterTargetVerbSensor(_EmsBaseSensor):
         return verb.value if verb else None
 
 
-class EmsEvTargetVerbSensor(_EmsBaseSensor):
-    _attr_unique_id = "ems_ev_target_verb"
-    _attr_name = "EMS EV Target Verb"
-    _attr_icon = "mdi:car-electric"
-
-    @property
-    def native_value(self) -> str | None:
-        if self._result is None:
-            return None
-        verb = self._result.decision.ev_verb
-        return verb.value if verb else None
-
-
 class EmsInverterPowerTargetSensor(_EmsBaseSensor):
     _attr_unique_id = "ems_inverter_power_target_w"
     _attr_name = "EMS Inverter Power Target"
@@ -185,3 +172,17 @@ class EmsInverterPowerTargetSensor(_EmsBaseSensor):
         if self._result is None:
             return None
         return self._result.decision.inverter_power_target_w
+
+
+class EmsEvChargeTargetPowerSensor(_EmsBaseSensor):
+    _attr_unique_id = "ems_ev_charge_target_power"
+    _attr_name = "EMS EV Charge Target Power"
+    _attr_native_unit_of_measurement = "W"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:ev-station"
+
+    @property
+    def native_value(self) -> float:
+        if self._result is None:
+            return 0.0
+        return self._result.decision.ev_charge_power_w

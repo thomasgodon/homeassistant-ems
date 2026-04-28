@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.ems.controller import Controller
-from custom_components.ems.models import Decision, EvVerb, InverterVerb, VerbMapping
+from custom_components.ems.models import Decision, InverterVerb, VerbMapping
 
 _UTC = datetime.UTC
 _NOW = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=_UTC)
@@ -22,14 +22,6 @@ _MAPPING = VerbMapping(
         InverterVerb.IDLE: "Idle",
     },
     inverter_power_target_entity="number.inverter_power",
-    ev_select_entity="select.ev",
-    ev_options={
-        EvVerb.CHARGE_NOW: "Charge",
-        EvVerb.SOLAR_ONLY: "Solar Only",
-        EvVerb.SOLAR_PLUS_BATTERY: "Solar + Battery",
-        EvVerb.IDLE: "Idle",
-    },
-    ev_max_power_entity="number.ev_max_power",
 )
 
 
@@ -38,8 +30,7 @@ def _make_decision(**overrides) -> Decision:
         strategy="fallback",
         inverter_verb=InverterVerb.SELF_USE,
         inverter_power_target_w=None,
-        ev_verb=EvVerb.IDLE,
-        ev_max_power_w=None,
+        ev_charge_power_w=0.0,
         new_peak_risk=False,
         rule_chain=(),
         unsupported_verbs=(),
@@ -134,7 +125,7 @@ async def test_peak_shave_fast_loop_writes_only_power_target(controller) -> None
 @pytest.mark.asyncio
 async def test_off_mode_no_op(controller) -> None:
     ctrl, hass = controller
-    decision = _make_decision(strategy="off", inverter_verb=None, ev_verb=None)
+    decision = _make_decision(strategy="off", inverter_verb=None)
     await ctrl.write_full(decision)
     hass.services.async_call.assert_not_called()
 

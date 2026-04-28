@@ -1,8 +1,8 @@
 # EMS — Energy Management System
 
-A brand-agnostic Home Assistant custom integration for solar + battery + EV setups. It runs a **priority ladder** algorithm every 10 seconds to decide how to operate your inverter and EV charger, with a 1-second fast loop for peak shaving and a 5-minute scheduler for cheap EV charging windows.
+A brand-agnostic Home Assistant custom integration for solar + battery + EV setups. It runs a **priority ladder** algorithm every 10 seconds to decide how to operate your inverter and optionally compute an EV charge target, with a 1-second fast loop for peak shaving and a 5-minute scheduler for cheap EV charging windows.
 
-Works with any hardware that exposes a `select` entity for operating modes and a `number` entity for power targets — no inverter-specific code.
+Works with any inverter that exposes a `select` entity for operating modes and a `number` entity for power targets — no inverter-specific code.
 
 ---
 
@@ -15,10 +15,10 @@ Three execution loops share a single `EmsState` object:
 2. `strategy.decide(inputs)` — pure function; evaluates the priority ladder and returns a `Decision`.
 3. Updates the hysteresis latch `peak_risk_latched`.
 4. Writes are skipped for `startup_grace_seconds` after startup to avoid flapping on `unavailable` sensors.
-5. `controller.write_full()` — idempotent: calls `select.select_option()` on the inverter/EV charger and `number.set_value()` for power targets.
+5. `controller.write_full()` — idempotent: calls `select.select_option()` on the inverter and `number.set_value()` for the power target.
 
 ### 1-second peak-shave loop (`EmsPeakShaveCoordinator`)
-Active only when `peak_risk_latched` is `true`. Re-reads grid, house load, and EV power, calls `strategy.recompute_peak_shave_power()`, and calls `controller.write_power_only()` — adjusts wattage only, never flips operating modes.
+Active only when `peak_risk_latched` is `true`. Re-reads grid, house load, and EV power, calls `strategy.recompute_peak_shave_power()`, and calls `controller.write_power_only()` — adjusts wattage only, never flips operating modes. Also updates `decision.ev_charge_power_w` so the EV sensor reflects the reduced cap.
 
 ### 5-minute EV scheduler (`EvSchedulerOrchestrator`)
 Calls `ev_scheduler.compute_window()` to pick the cheapest charging hours from the price forecast. Result stored in `EmsState.cached_window`; the 10-second loop reads `cached_window.in_window_now`.
@@ -27,14 +27,16 @@ Calls `ev_scheduler.compute_window()` to pick the cheapest charging hours from t
 
 | Priority | Rule | Trigger |
 |----------|------|---------|
-| 1 | **Peak shave** | Grid import ≥ `max_grid_import_w` |
+| 1 | **Peak shave** | Grid import ≥ `max_grid_import_w` (always active) |
 | 2 | **Battery floor** | Battery SoC ≤ `battery_reserve_soc` |
-| 3 | **EV charging coupling** | EV plugged, in cheap window, SoC < target |
-| 4 | **Export curtail** | Export price ≤ `export_curtail_price` |
+| 3 | **EV charging coupling** | EV drawing ≥ 100 W (keep inverter in SELF_USE) |
+| 4 | **Export curtail** | Battery full + export price ≤ `export_curtail_price` (always active) |
 | 5 | **Proactive charge** | Import price ≤ `proactive_grid_charge_price` |
-| 6 | **Solar to battery/EV** | Solar surplus ≥ `solar_surplus_threshold_w` |
+| 6 | **Solar to battery** | Solar surplus ≥ `solar_surplus_threshold_w` |
 | 7 | **Expensive self-use** | Import price > `avg_24h_price × multiplier` |
 | 8 | **Fallback** | None of the above |
+
+EV charge power is computed independently from the inverter rule. See [EV charge target](#ev-charge-target-sensorems_ev_charge_target_power).
 
 ---
 
@@ -82,19 +84,15 @@ Map abstract verbs to the exact option strings your inverter's select entity use
 
 All optional. Skip entirely if you have no managed EV charger.
 
+The EMS does **not** write to your EV charger directly. Instead it publishes `sensor.ems_ev_charge_target_power` (W) and you create your own HA automation to act on it (e.g. set your charger's current limit).
+
 | Config key | Type | Description |
 |------------|------|-------------|
-| `ev_select` | select entity | The HA select entity that controls EV charger mode |
-| `ev_verb_charge_now` | text | Option string for `CHARGE_NOW` |
-| `ev_verb_solar_only` | text | Option string for `SOLAR_ONLY` |
-| `ev_verb_solar_plus_battery` | text | Option string for `SOLAR_PLUS_BATTERY` |
-| `ev_verb_idle` | text | Option string for `IDLE` |
 | `ev_power` | sensor entity | Current EV charging power (W) |
 | `ev_plug` | binary_sensor / input_boolean | Whether the EV is plugged in |
 | `ev_soc` | sensor entity | EV battery state of charge (%) |
 | `ev_capacity_kwh` | number (kWh) | EV battery capacity; default `60.0` |
 | `ev_max_charge_kw` | number (kW) | EV maximum charge rate; default `7.4` |
-| `ev_max_power_entity` | number entity | HA number entity the integration writes to cap EV power during peak-shave |
 
 ### Step 4 — Price sources
 
@@ -143,8 +141,8 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | `house_load_forecast_kwh` | `load_forecast_kwh` entity or `None` |
 | `is_daytime` | `sun.sun` state |
 | `features` | Feature booleans read from `switch.ems_*` runtime switch entities |
-| `thresholds` | 12 `number.ems_*` entities (see Tunable thresholds) |
-| `mapping` | Inverter/EV select entities + verb→option maps from config (Steps 2–3) |
+| `thresholds` | 13 `number.ems_*` entities (see Tunable thresholds) |
+| `mapping` | Inverter select entity + verb→option map from config (Step 2) |
 | `peak_risk_latched` | Persisted hysteresis latch from `ems_state.json` |
 
 The 1-second peak-shave loop re-reads only: `grid_import_w`, `grid_import_15m_avg_w`, `house_load_w`, `house_load_non_ev_w`, `ev_power_w`.
@@ -162,14 +160,14 @@ All thresholds are HA `number` entities — adjust them live from the UI without
 | `number.ems_battery_target_soc_sunset` | 80 | % | Target SoC to reach by sunset (used with forecast planning) |
 | `number.ems_battery_capacity_kwh` | 10 | kWh | Total usable battery capacity |
 | `number.ems_battery_max_discharge_w` | 3000 | W | Maximum battery discharge rate |
-| `number.ems_battery_full_soc` | 95 | % | SoC considered "full" |
+| `number.ems_battery_full_soc` | 95 | % | SoC considered "full" (triggers export curtail) |
 | `number.ems_proactive_grid_charge_price` | 0.05 | EUR/kWh | Import price at or below which proactive grid charging triggers |
 | `number.ems_expensive_price_multiplier` | 1.3 | × | Current import must exceed `avg_24h_price × multiplier` to be classed as expensive |
 | `number.ems_export_curtail_price` | 0.0 | EUR/kWh | Export price at or below which export curtailment triggers |
 | `number.ems_ev_target_soc` | 80 | % | EV SoC target for scheduling and kWh-needed calculations |
 | `number.ems_peak_shave_headroom_w` | 300 | W | Safety margin kept below `max_grid_import_w` during peak-shave control |
-| `number.ems_solar_surplus_threshold_w` | 100 | W | Minimum solar surplus (W) before solar-to-EV/battery rules activate |
-| `number.ems_ev_max_power_w` | 7400 | W | EV charge power cap written during peak-shave |
+| `number.ems_solar_surplus_threshold_w` | 100 | W | Minimum solar surplus before solar-to-battery rules activate |
+| `number.ems_ev_min_charge_w` | 1400 | W | Minimum solar surplus required before EV is offered solar power (below this the EV gets 0 W) |
 | `number.ems_strategy_interval_s` | 10 | s | Strategy loop interval |
 | `number.ems_peak_shave_interval_s` | 1 | s | Peak-shave loop interval |
 | `number.ems_startup_grace_seconds` | 45 | s | No writes to hardware during this window after startup |
@@ -178,16 +176,15 @@ All thresholds are HA `number` entities — adjust them live from the UI without
 
 ## Runtime switches
 
-Toggle individual EMS features from the HA dashboard without touching the config flow. State is restored across restarts. Existing config-flow values (from a prior Step 6) are used as the initial default on first load.
+Toggle individual EMS features from the HA dashboard without touching the config flow. State is restored across restarts.
 
 | Switch | Default | Effect when off |
 |--------|---------|-----------------|
-| `switch.ems_peak_shaving` | on | Disables the peak-shave rule (`_rule_peak_shave` → skip) |
-| `switch.ems_battery_grid_charging` | on | Disables proactive grid-to-battery charging (the only place `FORCE_CHARGE` is issued) |
-| `switch.ems_ev_charging` | on | Disables all EV control: EV-coupling rule is skipped and EV verb is forced to `IDLE`. **Side effect:** if the EV charges via an external source while this switch is off, the battery may discharge to feed it since the coupling rule is not active. |
-| `switch.ems_export_curtailment` | off | Disables export curtailment rule |
-| `switch.ems_ev_absorbs_curtailment` | on | When export curtailment is active, stops directing surplus to the EV charger |
+| `switch.ems_battery_grid_charging` | on | Disables proactive grid-to-battery charging |
+| `switch.ems_ev_charging` | on | Disables all EV management: EV-coupling rule is skipped and `ev_charge_power_w` is forced to 0. |
 | `switch.ems_forecast_planning` | off | Reserved — flag is propagated to `Features.forecast_planning` but no rule currently reads it |
+
+Peak shaving and export curtailment are always active (no toggle).
 
 ## Modes and schedules
 
@@ -198,6 +195,22 @@ Toggle individual EMS features from the HA dashboard without touching the config
 
 ---
 
+## EV charge target (`sensor.ems_ev_charge_target_power`)
+
+The EMS does **not** write to your EV charger. Instead it publishes a single sensor that tells you exactly how many watts the EV should charge at. Wire your own HA automation to act on it.
+
+| Situation | Sensor value |
+|---|---|
+| EV not plugged, `ev_strategy = Off`, or `ev_soc ≥ ev_target_soc` | `0 W` |
+| `export_curtail` rule active + EV plugged + SoC < target | `ev_max_charge_kw` (full speed, overrides ev_strategy including Off) |
+| In cheap window (Deadline / Price-optimised) | `ev_max_charge_kw`, capped by peak-shave headroom if active |
+| Solar-only or fallback with surplus | `pv_w − house_load_non_ev_w − battery_charge_w`, if ≥ `ev_min_charge_w`; else `0 W` |
+| Peak-shave active | All values above are additionally capped to `max_grid_import_w + battery_max_discharge_w − house_load_non_ev_w` |
+
+Battery always gets first dibs on solar surplus (its charging power is subtracted before computing the EV's share).
+
+---
+
 ## Outputs (writes to your hardware)
 
 `controller.py` is the only module that calls HA services. All writes are idempotent — the last written value is cached and a call is skipped if the value has not changed.
@@ -205,13 +218,11 @@ Toggle individual EMS features from the HA dashboard without touching the config
 ### Full write (`controller.write_full`) — called every 10 s
 1. `select.select_option` on the configured **inverter select entity** with the resolved option string for `decision.inverter_verb`.
 2. `number.set_value` on the configured **inverter power target entity** with `decision.inverter_power_target_w`.
-3. `select.select_option` on the configured **EV select entity** with the resolved option string for `decision.ev_verb`.
-4. `number.set_value` on the configured **EV max power entity** with `decision.ev_max_power_w`.
 
 Full writes are skipped during the startup grace period.
 
 ### Power-only write (`controller.write_power_only`) — called every 1 s (peak-shave only)
-Steps 2 and 4 only — adjusts wattage without changing operating modes.
+Step 2 only — adjusts wattage without changing operating modes.
 
 ---
 
@@ -221,7 +232,7 @@ Steps 2 and 4 only — adjusts wattage without changing operating modes.
 
 | Entity | Unit | Description |
 |--------|------|-------------|
-| `sensor.ems_current_strategy` | — | Active ladder rule (`peak_shave`, `battery_floor`, `ev_charging_coupling`, `export_curtail`, `proactive_charge`, `solar_to_battery`, `solar_to_ev`, `expensive_self_use`, `fallback`, `starting_up`) |
+| `sensor.ems_current_strategy` | — | Active ladder rule (`peak_shave`, `battery_floor`, `ev_charging_coupling`, `export_curtail`, `proactive_charge`, `solar_to_battery`, `expensive_self_use`, `fallback`, `starting_up`) |
 | `sensor.ems_solar_surplus_w` | W | `max(0, pv_w − house_load_w)` |
 | `sensor.ems_ev_kwh_needed` | kWh | Energy needed to reach `ev_target_soc` |
 | `sensor.ems_cheapest_window_start` | timestamp | Start of the next cheap EV charging window |
@@ -229,8 +240,8 @@ Steps 2 and 4 only — adjusts wattage without changing operating modes.
 | `sensor.ems_expected_battery_deficit_evening_kwh` | kWh | Projected deficit at end of day given forecasts |
 | `sensor.ems_24h_avg_price` | EUR/kWh | Rolling 24 h average import price |
 | `sensor.ems_inverter_target_verb` | — | Abstract verb last sent to inverter (`SELF_USE`, `FORCE_CHARGE`, etc.) |
-| `sensor.ems_ev_target_verb` | — | Abstract verb last sent to EV charger |
 | `sensor.ems_inverter_power_target_w` | W | Power target last written to inverter |
+| `sensor.ems_ev_charge_target_power` | W | Recommended EV charge rate (0 = idle); wire your own automation |
 
 ### Binary sensors (`binary_sensor.ems_*`)
 

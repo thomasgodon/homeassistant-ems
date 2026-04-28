@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .models import (
     Decision,
-    EvVerb,
     Inputs,
     InverterVerb,
     Thresholds,
@@ -39,14 +38,13 @@ def decide(inputs: Inputs) -> Decision:
         base = _rule_fallback(inputs)
         rule_chain.append("fallback")
 
-    final = _ev_overlay(inputs, base)
+    ev_power_w = _compute_ev_charge_power_w(inputs, base)
 
     return Decision(
-        strategy=final.strategy,
-        inverter_verb=final.inverter_verb,
-        inverter_power_target_w=final.inverter_power_target_w,
-        ev_verb=final.ev_verb,
-        ev_max_power_w=final.ev_max_power_w,
+        strategy=base.strategy,
+        inverter_verb=base.inverter_verb,
+        inverter_power_target_w=base.inverter_power_target_w,
+        ev_charge_power_w=ev_power_w,
         new_peak_risk=_peak_risk(inputs),
         rule_chain=tuple(rule_chain),
         unsupported_verbs=tuple(unsupported),
@@ -59,20 +57,29 @@ def recompute_peak_shave_power(
     grid_import_15m_avg_w: float | None,
     house_load_non_ev_w: float,
     thresholds: Thresholds,
+    ev_plugged: bool,
+    ev_soc: float | None,
+    in_cheap_window: bool,
+    ev_max_charge_kw: float,
 ) -> tuple[float, float]:
     """Fast-path helper for the 1 s peak-shave loop.
-    Returns (inverter_power_target_w, ev_max_power_w), both non-negative."""
+    Returns (inverter_power_target_w, ev_charge_power_w), both non-negative."""
     cap = thresholds.max_grid_import_w
     batt_max = thresholds.battery_max_discharge_w
 
-    # How much surplus power the battery discharge provides
     surge = max(0.0, grid_import_w - cap)
     inverter_power_w = min(batt_max, surge) if surge > 0 else (prior.inverter_power_target_w or 0.0)
 
-    # EV cap: what the EV is allowed to draw without breaching the grid cap
     ev_cap = max(0.0, cap + batt_max - house_load_non_ev_w)
 
-    return inverter_power_w, ev_cap
+    if not ev_plugged or (ev_soc is not None and ev_soc >= thresholds.ev_target_soc):
+        ev_charge_power_w = 0.0
+    elif in_cheap_window:
+        ev_charge_power_w = min(ev_max_charge_kw * 1000.0, ev_cap)
+    else:
+        ev_charge_power_w = min(prior.ev_charge_power_w, ev_cap)
+
+    return inverter_power_w, ev_charge_power_w
 
 
 # ── hysteresis ────────────────────────────────────────────────────────────────
@@ -95,8 +102,6 @@ def _peak_risk(inp: Inputs) -> bool:
 # ── rule functions ─────────────────────────────────────────────────────────────
 
 def _rule_peak_shave(inp: Inputs) -> Decision | None:
-    if not inp.features.peak_shaving:
-        return None
     if inp.grid_import_15m_avg_w is None:
         return None
     if not _peak_risk(inp):
@@ -109,19 +114,11 @@ def _rule_peak_shave(inp: Inputs) -> Decision | None:
     surge = max(0.0, inp.grid_import_w - cap)
     power_target = min(batt_max, surge) if surge > 0 else batt_max
 
-    house_non_ev = (
-        inp.house_load_non_ev_w
-        if inp.house_load_non_ev_w is not None
-        else (inp.house_load_w - inp.ev_power_w)
-    )
-    ev_cap = max(0.0, cap + batt_max - house_non_ev)
-
     return Decision(
         strategy="peak_shave",
         inverter_verb=InverterVerb.FORCE_DISCHARGE,
         inverter_power_target_w=power_target,
-        ev_verb=None,  # ev_overlay will decide
-        ev_max_power_w=ev_cap,
+        ev_charge_power_w=0.0,  # filled in by _compute_ev_charge_power_w
         new_peak_risk=True,
         rule_chain=(),
         unsupported_verbs=(),
@@ -134,8 +131,7 @@ def _rule_battery_floor(inp: Inputs) -> Decision | None:
             strategy="battery_floor",
             inverter_verb=InverterVerb.IDLE,
             inverter_power_target_w=None,
-            ev_verb=None,
-            ev_max_power_w=None,
+            ev_charge_power_w=0.0,
             new_peak_risk=False,
             rule_chain=(),
             unsupported_verbs=(),
@@ -151,8 +147,7 @@ def _rule_ev_coupling(inp: Inputs) -> Decision | None:
             strategy="ev_charging_coupling",
             inverter_verb=InverterVerb.SELF_USE,
             inverter_power_target_w=None,
-            ev_verb=None,
-            ev_max_power_w=None,
+            ev_charge_power_w=0.0,
             new_peak_risk=False,
             rule_chain=(),
             unsupported_verbs=(),
@@ -161,8 +156,6 @@ def _rule_ev_coupling(inp: Inputs) -> Decision | None:
 
 
 def _rule_export_curtail(inp: Inputs) -> Decision | None:
-    if not inp.features.export_curtail:
-        return None
     if inp.battery_soc < inp.thresholds.battery_full_soc:
         return None
     if inp.pv_w <= 0:
@@ -176,21 +169,11 @@ def _rule_export_curtail(inp: Inputs) -> Decision | None:
     if solar_surplus <= 0:
         return None
 
-    # Pre-set EV verb when absorption is enabled
-    ev_verb: EvVerb | None = None
-    if (
-        inp.features.ev_absorbs_curtail
-        and inp.ev_plugged
-        and (inp.ev_soc is None or inp.ev_soc < inp.thresholds.ev_target_soc)
-    ):
-        ev_verb = EvVerb.CHARGE_NOW
-
     return Decision(
         strategy="export_curtail",
         inverter_verb=InverterVerb.LIMIT_EXPORT,
         inverter_power_target_w=max(0.0, inp.house_load_w),
-        ev_verb=ev_verb,
-        ev_max_power_w=None,
+        ev_charge_power_w=0.0,  # filled in by _compute_ev_charge_power_w
         new_peak_risk=False,
         rule_chain=(),
         unsupported_verbs=(),
@@ -213,9 +196,8 @@ def _rule_proactive_charge(inp: Inputs) -> Decision | None:
     return Decision(
         strategy="proactive_charge",
         inverter_verb=InverterVerb.FORCE_CHARGE,
-        inverter_power_target_w=None,  # coordinator/controller uses battery_max
-        ev_verb=None,
-        ev_max_power_w=None,
+        inverter_power_target_w=None,
+        ev_charge_power_w=0.0,
         new_peak_risk=False,
         rule_chain=(),
         unsupported_verbs=(),
@@ -227,24 +209,11 @@ def _rule_solar(inp: Inputs) -> Decision | None:
     if solar_surplus < inp.thresholds.solar_surplus_threshold_w:
         return None
 
-    if inp.battery_soc >= inp.thresholds.battery_full_soc and inp.ev_plugged:
-        return Decision(
-            strategy="solar_to_ev",
-            inverter_verb=InverterVerb.SELF_USE,
-            inverter_power_target_w=None,
-            ev_verb=EvVerb.SOLAR_ONLY,
-            ev_max_power_w=None,
-            new_peak_risk=False,
-            rule_chain=(),
-            unsupported_verbs=(),
-        )
-
     return Decision(
         strategy="solar_to_battery",
         inverter_verb=InverterVerb.SELF_USE,
         inverter_power_target_w=None,
-        ev_verb=None,
-        ev_max_power_w=None,
+        ev_charge_power_w=0.0,
         new_peak_risk=False,
         rule_chain=(),
         unsupported_verbs=(),
@@ -264,8 +233,7 @@ def _rule_expensive(inp: Inputs) -> Decision | None:
         strategy="expensive_self_use",
         inverter_verb=InverterVerb.SELF_USE,
         inverter_power_target_w=None,
-        ev_verb=None,
-        ev_max_power_w=None,
+        ev_charge_power_w=0.0,
         new_peak_risk=False,
         rule_chain=(),
         unsupported_verbs=(),
@@ -277,63 +245,63 @@ def _rule_fallback(inp: Inputs) -> Decision:
         strategy="fallback",
         inverter_verb=InverterVerb.SELF_USE,
         inverter_power_target_w=None,
-        ev_verb=None,
-        ev_max_power_w=None,
+        ev_charge_power_w=0.0,
         new_peak_risk=False,
         rule_chain=(),
         unsupported_verbs=(),
     )
 
 
-# ── EV overlay ────────────────────────────────────────────────────────────────
+# ── EV power computation ──────────────────────────────────────────────────────
 
-def _ev_overlay(inp: Inputs, base: Decision) -> Decision:
-    """Adds ev_verb after inverter verb is chosen.
-    peak_shave and export_curtail may pre-set ev_verb; overlay respects that."""
-    # If EV verb was already forced by a rule (e.g. export_curtail), keep it
-    if base.ev_verb is not None:
-        return base
+def _compute_ev_charge_power_w(inp: Inputs, base: Decision) -> float:
+    """Compute EV charge target in watts after inverter decision is made."""
+    t = inp.thresholds
 
-    # Off / unplugged / satisfied / scheduling disabled
-    if (
-        inp.ev_strategy == "Off"
-        or not inp.ev_plugged
-        or (inp.ev_soc is not None and inp.ev_soc >= inp.thresholds.ev_target_soc)
-        or not inp.features.ev_charging
-    ):
-        return Decision(
-            strategy=base.strategy,
-            inverter_verb=base.inverter_verb,
-            inverter_power_target_w=base.inverter_power_target_w,
-            ev_verb=EvVerb.IDLE,
-            ev_max_power_w=base.ev_max_power_w,
-            new_peak_risk=base.new_peak_risk,
-            rule_chain=base.rule_chain,
-            unsupported_verbs=base.unsupported_verbs,
+    # Hard gates: not plugged or already at target SoC always yield 0
+    if not inp.ev_plugged:
+        return 0.0
+    if inp.ev_soc is not None and inp.ev_soc >= t.ev_target_soc:
+        return 0.0
+
+    ev_max_w = inp.ev_max_charge_kw * 1000.0
+
+    # Compute peak-shave cap (applies regardless of charge source)
+    if inp.peak_risk_latched:
+        house_non_ev = (
+            inp.house_load_non_ev_w
+            if inp.house_load_non_ev_w is not None
+            else (inp.house_load_w - inp.ev_power_w)
         )
-
-    if inp.in_cheap_window:
-        ev_verb = EvVerb.CHARGE_NOW
+        ev_peak_cap = max(0.0, t.max_grid_import_w + t.battery_max_discharge_w - house_non_ev)
     else:
-        solar_surplus = inp.pv_w - inp.house_load_w
-        if (
-            solar_surplus >= inp.thresholds.solar_surplus_threshold_w
-            and inp.battery_soc >= inp.thresholds.battery_full_soc
-        ):
-            ev_verb = EvVerb.SOLAR_ONLY
-        else:
-            ev_verb = EvVerb.IDLE
+        ev_peak_cap = ev_max_w
 
-    return Decision(
-        strategy=base.strategy,
-        inverter_verb=base.inverter_verb,
-        inverter_power_target_w=base.inverter_power_target_w,
-        ev_verb=ev_verb,
-        ev_max_power_w=base.ev_max_power_w,
-        new_peak_risk=base.new_peak_risk,
-        rule_chain=base.rule_chain,
-        unsupported_verbs=base.unsupported_verbs,
+    # export_curtail always absorbs (overrides ev_strategy including "Off")
+    if base.strategy == "export_curtail":
+        return min(ev_max_w, ev_peak_cap)
+
+    # Respect ev_strategy and feature toggle for all other cases
+    if inp.ev_strategy == "Off" or not inp.features.ev_charging:
+        return 0.0
+
+    # Cheap window (Deadline / Price-optimised scheduler)
+    if inp.in_cheap_window:
+        return min(ev_max_w, ev_peak_cap)
+
+    # Solar surplus path
+    house_non_ev = (
+        inp.house_load_non_ev_w
+        if inp.house_load_non_ev_w is not None
+        else (inp.house_load_w - inp.ev_power_w)
     )
+    battery_charge_w = max(0.0, inp.battery_power_w)  # positive = charging
+    surplus_w = max(0.0, inp.pv_w - house_non_ev - battery_charge_w)
+
+    if surplus_w >= t.ev_min_charge_w:
+        return min(surplus_w, ev_max_w, ev_peak_cap)
+
+    return 0.0
 
 
 # ── unsupported verb fallthrough ──────────────────────────────────────────────

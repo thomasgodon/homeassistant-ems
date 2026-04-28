@@ -6,7 +6,6 @@ from typing import Any
 import pytest
 
 from custom_components.ems.models import (
-    EvVerb,
     Features,
     Inputs,
     InverterVerb,
@@ -23,29 +22,16 @@ _ALL_INVERTER_OPTIONS: dict[InverterVerb, str] = {
     InverterVerb.IDLE: "Idle",
 }
 
-_ALL_EV_OPTIONS: dict[EvVerb, str] = {
-    EvVerb.CHARGE_NOW: "Charge",
-    EvVerb.SOLAR_ONLY: "Solar Only",
-    EvVerb.SOLAR_PLUS_BATTERY: "Solar + Battery",
-    EvVerb.IDLE: "Idle",
-}
-
 _DEFAULT_MAPPING = VerbMapping(
     inverter_select_entity="select.inverter_mode",
     inverter_options=_ALL_INVERTER_OPTIONS,
     inverter_power_target_entity="number.inverter_power",
-    ev_select_entity="select.ev_mode",
-    ev_options=_ALL_EV_OPTIONS,
-    ev_max_power_entity="number.ev_max_power",
 )
 
 _DEFAULT_FEATURES = Features(
-    peak_shaving=True,
     proactive_grid_charge=True,
     ev_charging=True,
     forecast_planning=False,
-    export_curtail=True,
-    ev_absorbs_curtail=True,
 )
 
 _DEFAULT_THRESHOLDS = Thresholds(
@@ -61,6 +47,7 @@ _DEFAULT_THRESHOLDS = Thresholds(
     ev_target_soc=80.0,
     peak_shave_headroom_w=300.0,
     solar_surplus_threshold_w=100.0,
+    ev_min_charge_w=1400.0,
 )
 
 _BASE_NOW = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)

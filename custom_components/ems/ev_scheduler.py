@@ -17,7 +17,7 @@ def compute_window(
     max_charge_kw: float,
     forecast: Sequence[PriceSlot] | None,
     solar_surplus_w: float,
-    battery_soc: float,
+    ev_min_charge_w: float,
     previous: EvWindow | None,
 ) -> EvWindow:
     """Pure function. No HA state. Returns EvWindow."""
@@ -28,7 +28,7 @@ def compute_window(
         return EvWindow(start=None, end=None, in_window_now=False, reason="no_need")
 
     if strategy == "Solar-only":
-        return _solar_only_window(now, solar_surplus_w, battery_soc)
+        return _solar_only_window(now, solar_surplus_w, ev_min_charge_w)
 
     # Deadline / Price-optimised need a forecast
     if not forecast:
@@ -104,8 +104,8 @@ def parse_forecast(raw: object) -> Sequence[PriceSlot] | None:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _solar_only_window(now: datetime, solar_surplus_w: float, battery_soc: float) -> EvWindow:
-    in_window = solar_surplus_w >= 1400 and battery_soc >= 85
+def _solar_only_window(now: datetime, solar_surplus_w: float, ev_min_charge_w: float) -> EvWindow:
+    in_window = solar_surplus_w >= ev_min_charge_w
     return EvWindow(
         start=now if in_window else None,
         end=None,

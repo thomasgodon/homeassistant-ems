@@ -9,6 +9,7 @@ from custom_components.ems.models import EvWindow, PriceSlot
 _UTC = datetime.UTC
 _NOW = datetime.datetime(2026, 4, 27, 10, 0, 0, tzinfo=_UTC)
 _DEADLINE = datetime.time(7, 0)
+_MIN_W = 1400.0
 
 
 def _make_slots(prices: list[float], start: datetime.datetime | None = None) -> list[PriceSlot]:
@@ -29,7 +30,7 @@ def test_kwh_needed_zero_returns_empty_window() -> None:
     result = compute_window(
         now=_NOW, deadline=_DEADLINE, strategy="Deadline",
         kwh_needed=0, max_charge_kw=7.4, forecast=_make_slots([0.1] * 10),
-        solar_surplus_w=0, battery_soc=50, previous=None,
+        solar_surplus_w=0, ev_min_charge_w=_MIN_W, previous=None,
     )
     assert result == EvWindow(start=None, end=None, in_window_now=False, reason="no_need")
 
@@ -45,7 +46,7 @@ def test_forecast_shorter_than_hours_needed_preserves_previous() -> None:
         now=_NOW, deadline=datetime.time(23, 0), strategy="Price-optimised",
         kwh_needed=kwh_needed, max_charge_kw=max_kw,
         forecast=_make_slots([0.1, 0.2]),  # only 2 slots, need 4
-        solar_surplus_w=0, battery_soc=50, previous=previous,
+        solar_surplus_w=0, ev_min_charge_w=_MIN_W, previous=previous,
     )
     assert result.reason == "stale_forecast"
     assert result.start == previous.start
@@ -57,7 +58,7 @@ def test_solar_only_strategy_ignores_price() -> None:
         now=_NOW, deadline=_DEADLINE, strategy="Solar-only",
         kwh_needed=5, max_charge_kw=7.4,
         forecast=_make_slots([1.0] * 24),  # expensive prices — should be ignored
-        solar_surplus_w=1500, battery_soc=90, previous=None,
+        solar_surplus_w=1500, ev_min_charge_w=_MIN_W, previous=None,
     )
     assert result.in_window_now is True
     assert result.reason == "solar"
@@ -67,23 +68,41 @@ def test_solar_only_inactive_when_low_surplus() -> None:
     result = compute_window(
         now=_NOW, deadline=_DEADLINE, strategy="Solar-only",
         kwh_needed=5, max_charge_kw=7.4, forecast=None,
-        solar_surplus_w=500, battery_soc=90, previous=None,
+        solar_surplus_w=500, ev_min_charge_w=_MIN_W, previous=None,
     )
     assert result.in_window_now is False
+
+
+def test_solar_only_active_at_minimum_threshold() -> None:
+    """Exactly at ev_min_charge_w → in_window."""
+    result = compute_window(
+        now=_NOW, deadline=_DEADLINE, strategy="Solar-only",
+        kwh_needed=5, max_charge_kw=7.4, forecast=None,
+        solar_surplus_w=_MIN_W, ev_min_charge_w=_MIN_W, previous=None,
+    )
+    assert result.in_window_now is True
+
+
+def test_solar_only_no_battery_soc_gate() -> None:
+    """Solar-only fires even with low solar — only the wattage threshold matters."""
+    result = compute_window(
+        now=_NOW, deadline=_DEADLINE, strategy="Solar-only",
+        kwh_needed=5, max_charge_kw=7.4, forecast=None,
+        solar_surplus_w=2000, ev_min_charge_w=_MIN_W, previous=None,
+    )
+    assert result.in_window_now is True
+    assert result.reason == "solar"
 
 
 def test_deadline_strategy_filters_to_deadline() -> None:
     # Cheapest hour is at index 20 (hour 20 from now), well past 7:00 tomorrow deadline
     prices = [0.30] * 20 + [0.01] + [0.30] * 3
     slots = _make_slots(prices)
-    # deadline is next day 7:00 → only first ~21 hours qualify
     result = compute_window(
         now=_NOW, deadline=datetime.time(7, 0), strategy="Deadline",
         kwh_needed=1, max_charge_kw=7.4, forecast=slots,
-        solar_surplus_w=0, battery_soc=50, previous=None,
+        solar_surplus_w=0, ev_min_charge_w=_MIN_W, previous=None,
     )
-    # Should pick the cheapest within deadline window, not the very cheap hour 20
-    # (since deadline is tomorrow 7:00 = 21 hours from now, slot 20 IS within range)
     assert result.reason == "deadline"
     assert result.start is not None
 
@@ -95,7 +114,7 @@ def test_price_optimised_uses_next_24h() -> None:
     result = compute_window(
         now=_NOW, deadline=datetime.time(7, 0), strategy="Price-optimised",
         kwh_needed=1, max_charge_kw=7.4, forecast=slots,
-        solar_surplus_w=0, battery_soc=50, previous=None,
+        solar_surplus_w=0, ev_min_charge_w=_MIN_W, previous=None,
     )
     assert result.reason == "price"
     assert result.start is not None
@@ -116,7 +135,7 @@ def test_empty_forecast_list_degrades() -> None:
     result = compute_window(
         now=_NOW, deadline=_DEADLINE, strategy="Price-optimised",
         kwh_needed=5, max_charge_kw=7.4, forecast=[],
-        solar_surplus_w=0, battery_soc=50, previous=None,
+        solar_surplus_w=0, ev_min_charge_w=_MIN_W, previous=None,
     )
     assert result.reason == "stale_forecast"
     assert result.start is None
@@ -137,12 +156,11 @@ def test_forecast_with_holes() -> None:
     """Gaps in the forecast should not cause crashes."""
     t = _NOW
     slots = _make_slots([0.2, 0.1, 0.3, 0.15], start=t)
-    # Remove index 2 to create a hole
     slots_with_hole = [slots[0], slots[1], slots[3]]
     result = compute_window(
         now=t, deadline=datetime.time(23, 0), strategy="Price-optimised",
         kwh_needed=2, max_charge_kw=7.4, forecast=slots_with_hole,
-        solar_surplus_w=0, battery_soc=50, previous=None,
+        solar_surplus_w=0, ev_min_charge_w=_MIN_W, previous=None,
     )
     assert result is not None
 
@@ -151,7 +169,7 @@ def test_off_strategy_returns_off() -> None:
     result = compute_window(
         now=_NOW, deadline=_DEADLINE, strategy="Off",
         kwh_needed=10, max_charge_kw=7.4, forecast=_make_slots([0.1] * 24),
-        solar_surplus_w=0, battery_soc=50, previous=None,
+        solar_surplus_w=0, ev_min_charge_w=_MIN_W, previous=None,
     )
     assert result.reason == "off"
     assert result.in_window_now is False
