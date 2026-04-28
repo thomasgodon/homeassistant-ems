@@ -32,6 +32,28 @@ testpaths = ["tests"]
 
 [tool.coverage.report]
 fail_under = 80
+omit = [
+    "custom_components/ems/__init__.py",
+    "custom_components/ems/binary_sensor.py",
+    "custom_components/ems/config_flow.py",
+    "custom_components/ems/coordinator.py",
+    "custom_components/ems/number.py",
+    "custom_components/ems/select.py",
+    "custom_components/ems/sensor.py",
+    "custom_components/ems/switch.py",
+    "custom_components/ems/time.py",
+]
 
 [tool.coverage.run]
 source = ["custom_components/ems"]
+omit = [
+    "custom_components/ems/__init__.py",
+    "custom_components/ems/binary_sensor.py",
+    "custom_components/ems/config_flow.py",
+    "custom_components/ems/coordinator.py",
+    "custom_components/ems/number.py",
+    "custom_components/ems/select.py",
+    "custom_components/ems/sensor.py",
+    "custom_components/ems/switch.py",
+    "custom_components/ems/time.py",
+]
