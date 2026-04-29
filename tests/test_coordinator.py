@@ -8,7 +8,6 @@ from custom_components.ems.const import (
     CONF_EV_TARGET_SOC,
     CONF_MAX_GRID_IMPORT_W,
     DEFAULT_EV_CAPACITY_KWH,
-    DEFAULT_EV_MAX_CHARGE_KW,
     DEFAULT_EV_TARGET_SOC,
     DEFAULT_MAX_GRID_IMPORT_W,
 )
@@ -36,7 +35,7 @@ def _make_hass(states: dict | None = None) -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# _build_inputs reads max_grid_import_w / ev_capacity_kwh / ev_max_charge_kw
+# _build_inputs reads max_grid_import_w / ev_capacity_kwh / ev_target_soc
 # from entities (entity_ids stored in entry.data)
 # ---------------------------------------------------------------------------
 
@@ -50,7 +49,7 @@ async def test_build_inputs_reads_max_grid_import_from_entity():
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
         CONF_MAX_GRID_IMPORT_W: "input_number.max_grid",
-        CONF_EV_TARGET_SOC: 75.0,
+        CONF_EV_TARGET_SOC: "input_number.ev_target_soc",
     })
 
     hass = _make_hass({
@@ -59,6 +58,7 @@ async def test_build_inputs_reads_max_grid_import_from_entity():
         "sensor.load": 1000,
         "sensor.ev": 0,
         "input_number.max_grid": 6000,
+        "input_number.ev_target_soc": 75,
         "number.ems_ev_min_charge_w": 1400,
         "switch.ems_ev_charging": "on",
         "select.ems_ev_scheduling_strategy": "Off",
@@ -81,7 +81,7 @@ async def test_build_inputs_reads_max_grid_import_from_entity():
 
 
 @pytest.mark.asyncio
-async def test_build_inputs_reads_ev_capacity_and_max_charge_from_entities():
+async def test_build_inputs_reads_ev_capacity_from_entity():
     from custom_components.ems.coordinator import EmsStrategyCoordinator
 
     entry = _make_entry({
@@ -90,9 +90,7 @@ async def test_build_inputs_reads_ev_capacity_and_max_charge_from_entities():
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
         CONF_MAX_GRID_IMPORT_W: "input_number.max_grid",
-        CONF_EV_TARGET_SOC: 80.0,
         "ev_capacity_kwh": "input_number.ev_cap",
-        "ev_max_charge_kw": "input_number.ev_max",
     })
 
     hass = _make_hass({
@@ -102,7 +100,6 @@ async def test_build_inputs_reads_ev_capacity_and_max_charge_from_entities():
         "sensor.ev": 0,
         "input_number.max_grid": 4500,
         "input_number.ev_cap": 77.0,
-        "input_number.ev_max": 11.0,
         "number.ems_ev_min_charge_w": 1400,
         "switch.ems_ev_charging": "on",
         "select.ems_ev_scheduling_strategy": "Off",
@@ -121,7 +118,6 @@ async def test_build_inputs_reads_ev_capacity_and_max_charge_from_entities():
         inputs = await coordinator._build_inputs()
 
     assert inputs.ev_capacity_kwh == 77.0
-    assert inputs.ev_max_charge_kw == 11.0
 
 
 @pytest.mark.asyncio
@@ -133,7 +129,7 @@ async def test_build_inputs_uses_defaults_when_keys_absent():
         "pv_power": "sensor.pv",
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
-        # all three entity-id keys absent
+        # all entity-id keys absent
     })
 
     hass = _make_hass({
@@ -158,7 +154,6 @@ async def test_build_inputs_uses_defaults_when_keys_absent():
     assert inputs.thresholds.max_grid_import_w == DEFAULT_MAX_GRID_IMPORT_W
     assert inputs.thresholds.ev_target_soc == DEFAULT_EV_TARGET_SOC
     assert inputs.ev_capacity_kwh == DEFAULT_EV_CAPACITY_KWH
-    assert inputs.ev_max_charge_kw == DEFAULT_EV_MAX_CHARGE_KW
 
 
 @pytest.mark.asyncio
@@ -170,9 +165,9 @@ async def test_build_inputs_uses_defaults_when_entity_unavailable():
         "pv_power": "sensor.pv",
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
-        CONF_MAX_GRID_IMPORT_W: "input_number.max_grid",  # entity present but unavailable
+        CONF_MAX_GRID_IMPORT_W: "input_number.max_grid",
         "ev_capacity_kwh": "input_number.ev_cap",
-        "ev_max_charge_kw": "input_number.ev_max",
+        CONF_EV_TARGET_SOC: "input_number.ev_target_soc",
     })
 
     def _unavailable_state(entity_id):
@@ -186,7 +181,8 @@ async def test_build_inputs_uses_defaults_when_entity_unavailable():
             s = MagicMock()
             s.state = base_map[entity_id]
             return s
-        if entity_id in ("input_number.max_grid", "input_number.ev_cap", "input_number.ev_max"):
+        if entity_id in ("input_number.max_grid", "input_number.ev_cap",
+                         "input_number.ev_target_soc"):
             s = MagicMock()
             s.state = "unavailable"
             return s
@@ -208,8 +204,8 @@ async def test_build_inputs_uses_defaults_when_entity_unavailable():
         inputs = await coordinator._build_inputs()
 
     assert inputs.thresholds.max_grid_import_w == DEFAULT_MAX_GRID_IMPORT_W
+    assert inputs.thresholds.ev_target_soc == DEFAULT_EV_TARGET_SOC
     assert inputs.ev_capacity_kwh == DEFAULT_EV_CAPACITY_KWH
-    assert inputs.ev_max_charge_kw == DEFAULT_EV_MAX_CHARGE_KW
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +221,6 @@ async def test_build_inputs_ev_min_charge_w_still_from_number_entity():
         "pv_power": "sensor.pv",
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
-        CONF_EV_TARGET_SOC: 80.0,
     })
 
     hass = _make_hass({
@@ -251,7 +246,7 @@ async def test_build_inputs_ev_min_charge_w_still_from_number_entity():
 
 
 # ---------------------------------------------------------------------------
-# EvSchedulerOrchestrator._recompute reads ev_capacity_kwh / ev_max_charge_kw
+# EvSchedulerOrchestrator._recompute reads ev_capacity_kwh / ev_target_soc
 # from entities
 # ---------------------------------------------------------------------------
 
@@ -263,8 +258,7 @@ async def test_ev_scheduler_recompute_reads_ev_capacity_from_entities():
         "ev_plug": "binary_sensor.plug",
         "ev_soc": "sensor.soc",
         "ev_capacity_kwh": "input_number.ev_cap",
-        "ev_max_charge_kw": "input_number.ev_max",
-        CONF_EV_TARGET_SOC: 65.0,
+        CONF_EV_TARGET_SOC: "input_number.ev_target_soc",
         "pv_power": "sensor.pv",
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
@@ -277,7 +271,7 @@ async def test_ev_scheduler_recompute_reads_ev_capacity_from_entities():
         "sensor.load": "800",
         "sensor.ev": "0",
         "input_number.ev_cap": "80.0",
-        "input_number.ev_max": "11.0",
+        "input_number.ev_target_soc": "65.0",
         "number.ems_ev_min_charge_w": "1400",
         "select.ems_ev_scheduling_strategy": "Off",
     }
@@ -306,5 +300,5 @@ async def test_ev_scheduler_recompute_reads_ev_capacity_from_entities():
     call_kwargs = mock_cw.call_args.kwargs
     # soc=50, target=65, capacity=80 → needed = (65-50)/100 * 80 = 12.0 kWh
     assert call_kwargs["kwh_needed"] == pytest.approx(12.0)
-    # max_charge_kw=11 → passed through
-    assert call_kwargs["max_charge_kw"] == pytest.approx(11.0)
+    # max_charge_kw no longer passed to compute_window
+    assert "max_charge_kw" not in call_kwargs

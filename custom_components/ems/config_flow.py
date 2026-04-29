@@ -12,15 +12,11 @@ from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.helpers.selector import (
     EntitySelector,
     EntitySelectorConfig,
-    NumberSelector,
-    NumberSelectorConfig,
-    NumberSelectorMode,
     TextSelector,
 )
 
 from .const import (
     CONF_EV_CAPACITY_KWH,
-    CONF_EV_MAX_CHARGE_KW,
     CONF_EV_PLUG,
     CONF_EV_POWER,
     CONF_EV_SOC,
@@ -31,11 +27,9 @@ from .const import (
     CONF_HOUSE_LOAD,
     CONF_IMPORT_PRICE,
     CONF_INVERTER_OPTIONS,
-    CONF_INVERTER_POWER_TARGET,
     CONF_INVERTER_SELECT,
     CONF_MAX_GRID_IMPORT_W,
     CONF_PV_POWER,
-    DEFAULT_EV_TARGET_SOC,
     DOMAIN,
 )
 
@@ -43,12 +37,11 @@ _POWER_SENSOR = EntitySelectorConfig(domain=[SENSOR_DOMAIN])
 _SOC_SENSOR = EntitySelectorConfig(domain=[SENSOR_DOMAIN])
 _BOOL_ENTITY = EntitySelectorConfig(domain=[BINARY_SENSOR_DOMAIN, INPUT_BOOLEAN_DOMAIN])
 _SELECT_ENTITY = EntitySelectorConfig(domain=[SELECT_DOMAIN, INPUT_SELECT_DOMAIN])
-_NUMBER_ENTITY = EntitySelectorConfig(domain=[NUMBER_DOMAIN])
 _NUMBER_OR_INPUT_NUMBER = EntitySelectorConfig(domain=[NUMBER_DOMAIN, INPUT_NUMBER_DOMAIN])
 
 
 class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 3
+    VERSION = 4
 
     def __init__(self) -> None:
         self._data: dict = {}
@@ -83,13 +76,11 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_INVERTER_OPTIONS] = {
                     "SELF_USE": user_input.get("inverter_verb_self_use") or None
                 }
-                self._data[CONF_INVERTER_POWER_TARGET] = user_input.get(CONF_INVERTER_POWER_TARGET)
             return await self.async_step_ev_charger()
 
         schema = vol.Schema({
             vol.Optional(CONF_INVERTER_SELECT): EntitySelector(_SELECT_ENTITY),
             vol.Optional("inverter_verb_self_use"): TextSelector(),
-            vol.Optional(CONF_INVERTER_POWER_TARGET): EntitySelector(_NUMBER_ENTITY),
         })
         return self.async_show_form(step_id="inverter", data_schema=schema)
 
@@ -98,20 +89,14 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_EV_PLUG] = user_input.get(CONF_EV_PLUG)
             self._data[CONF_EV_SOC] = user_input.get(CONF_EV_SOC)
             self._data[CONF_EV_CAPACITY_KWH] = user_input.get(CONF_EV_CAPACITY_KWH)
-            self._data[CONF_EV_MAX_CHARGE_KW] = user_input.get(CONF_EV_MAX_CHARGE_KW)
-            self._data[CONF_EV_TARGET_SOC] = user_input.get(
-                CONF_EV_TARGET_SOC, DEFAULT_EV_TARGET_SOC
-            )
+            self._data[CONF_EV_TARGET_SOC] = user_input.get(CONF_EV_TARGET_SOC)
             return await self.async_step_price_sources()
 
         schema = vol.Schema({
             vol.Optional(CONF_EV_PLUG): EntitySelector(_BOOL_ENTITY),
             vol.Optional(CONF_EV_SOC): EntitySelector(_SOC_SENSOR),
             vol.Optional(CONF_EV_CAPACITY_KWH): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
-            vol.Optional(CONF_EV_MAX_CHARGE_KW): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
-            vol.Required(CONF_EV_TARGET_SOC, default=DEFAULT_EV_TARGET_SOC): NumberSelector(
-                NumberSelectorConfig(min=0, max=100, step=1, mode=NumberSelectorMode.BOX)
-            ),
+            vol.Optional(CONF_EV_TARGET_SOC): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
         })
         return self.async_show_form(step_id="ev_charger", data_schema=schema)
 
@@ -182,7 +167,6 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
                 self._data[CONF_INVERTER_OPTIONS] = {
                     "SELF_USE": user_input.get("inverter_verb_self_use") or None
                 }
-                self._data[CONF_INVERTER_POWER_TARGET] = user_input.get(CONF_INVERTER_POWER_TARGET)
             return await self.async_step_ev_charger()
 
         existing_options = self._data.get(CONF_INVERTER_OPTIONS, {})
@@ -195,10 +179,6 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
                 "inverter_verb_self_use",
                 default=existing_options.get("SELF_USE"),
             ): TextSelector(),
-            vol.Optional(
-                CONF_INVERTER_POWER_TARGET,
-                default=self._data.get(CONF_INVERTER_POWER_TARGET),
-            ): EntitySelector(_NUMBER_ENTITY),
         })
         return self.async_show_form(step_id="inverter", data_schema=schema)
 
@@ -207,10 +187,7 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
             self._data[CONF_EV_PLUG] = user_input.get(CONF_EV_PLUG)
             self._data[CONF_EV_SOC] = user_input.get(CONF_EV_SOC)
             self._data[CONF_EV_CAPACITY_KWH] = user_input.get(CONF_EV_CAPACITY_KWH)
-            self._data[CONF_EV_MAX_CHARGE_KW] = user_input.get(CONF_EV_MAX_CHARGE_KW)
-            self._data[CONF_EV_TARGET_SOC] = user_input.get(
-                CONF_EV_TARGET_SOC, DEFAULT_EV_TARGET_SOC
-            )
+            self._data[CONF_EV_TARGET_SOC] = user_input.get(CONF_EV_TARGET_SOC)
             return await self.async_step_price_sources()
 
         schema = vol.Schema({
@@ -227,15 +204,9 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
                 default=self._data.get(CONF_EV_CAPACITY_KWH),
             ): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
             vol.Optional(
-                CONF_EV_MAX_CHARGE_KW,
-                default=self._data.get(CONF_EV_MAX_CHARGE_KW),
-            ): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
-            vol.Required(
                 CONF_EV_TARGET_SOC,
-                default=self._data.get(CONF_EV_TARGET_SOC, DEFAULT_EV_TARGET_SOC),
-            ): NumberSelector(
-                NumberSelectorConfig(min=0, max=100, step=1, mode=NumberSelectorMode.BOX)
-            ),
+                default=self._data.get(CONF_EV_TARGET_SOC),
+            ): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
         })
         return self.async_show_form(step_id="ev_charger", data_schema=schema)
 

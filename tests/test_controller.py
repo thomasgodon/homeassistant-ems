@@ -10,13 +10,11 @@ from custom_components.ems.models import Decision, InverterVerb, VerbMapping
 _MAPPING = VerbMapping(
     inverter_select_entity="select.inverter",
     self_use_option="Self Use",
-    inverter_power_target_entity="number.inverter_power",
 )
 
 _MAPPING_NO_INVERTER = VerbMapping(
     inverter_select_entity=None,
     self_use_option=None,
-    inverter_power_target_entity=None,
 )
 
 
@@ -24,7 +22,6 @@ def _make_decision(**overrides) -> Decision:
     defaults = dict(
         strategy="ev_charging_solar",
         inverter_verb=InverterVerb.SELF_USE,
-        inverter_power_target_w=None,
         ev_charge_power_w=3500.0,
     )
     defaults.update(overrides)
@@ -35,7 +32,6 @@ def _make_idle() -> Decision:
     return Decision(
         strategy="ev_idle",
         inverter_verb=None,
-        inverter_power_target_w=None,
         ev_charge_power_w=0.0,
     )
 
@@ -94,31 +90,6 @@ async def test_idempotent_select_write(controller) -> None:
         if c[0][0] == "select"
     ]
     assert len(select_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_power_target_written_when_provided(controller) -> None:
-    """A decision with power_target writes the number entity."""
-    ctrl, hass = controller
-    decision = _make_decision(inverter_power_target_w=1500.0)
-
-    await ctrl.write_full(decision)
-    number_calls = [
-        c for c in hass.services.async_call.call_args_list
-        if c[0][0] == "number"
-    ]
-    assert len(number_calls) == 1
-    # args: (domain, service, service_data); service_data is positional arg 2
-    assert number_calls[0][0][2]["value"] == 1500.0
-
-
-@pytest.mark.asyncio
-async def test_power_only_skips_when_idle() -> None:
-    """write_power_only with ev_charge_power_w=0 resets cache and does not write."""
-    hass = _make_hass()
-    ctrl = Controller(hass, _MAPPING)
-    await ctrl.write_power_only(_make_idle())
-    hass.services.async_call.assert_not_called()
 
 
 @pytest.mark.asyncio

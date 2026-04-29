@@ -10,7 +10,6 @@ from homeassistant.helpers.restore_state import RestoreStateData
 from .const import (
     CONF_EV_TARGET_SOC,
     CONF_INVERTER_OPTIONS,
-    CONF_INVERTER_POWER_TARGET,
     CONF_INVERTER_SELECT,
     CONF_MAX_GRID_IMPORT_W,
     DEFAULT_EV_TARGET_SOC,
@@ -39,7 +38,7 @@ PLATFORMS = [
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    if entry.version >= 3:
+    if entry.version >= 4:
         return True
 
     new_data = {**entry.data}
@@ -59,23 +58,44 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             except (ValueError, AttributeError):
                 new_data[key] = default
 
-    # v2 → v3: max_grid_import_w / ev_capacity_kwh / ev_max_charge_kw are now entity_ids
-    # Drop any scalar values — user must re-attach via Configure.
-    _SCALAR_KEYS = (CONF_MAX_GRID_IMPORT_W, "ev_capacity_kwh", "ev_max_charge_kw")
-    dropped = []
-    for key in _SCALAR_KEYS:
-        val = new_data.get(key)
-        if isinstance(val, (int, float)):
+    if entry.version < 3:
+        # v2 → v3: max_grid_import_w / ev_capacity_kwh / ev_max_charge_kw are now entity_ids
+        # Drop any scalar values — user must re-attach via Configure.
+        _SCALAR_KEYS_V3 = (CONF_MAX_GRID_IMPORT_W, "ev_capacity_kwh", "ev_max_charge_kw")
+        dropped = []
+        for key in _SCALAR_KEYS_V3:
+            val = new_data.get(key)
+            if isinstance(val, (int, float)):
+                del new_data[key]
+                dropped.append(key)
+        if dropped:
+            _LOGGER.warning(
+                "EMS v3 migration: removed scalar value(s) %s — go to Settings → "
+                "Devices & Services → EMS → Configure to re-attach number entities.",
+                dropped,
+            )
+
+    # v3 → v4: ev_target_soc is now an entity_id; inverter_power_target and
+    # ev_max_charge_kw are removed entirely. Drop any lingering scalar/string values
+    # so the user re-attaches ev_target_soc via Configure.
+    _SCALAR_KEYS_V4 = ("inverter_power_target", "ev_max_charge_kw")
+    dropped_v4 = []
+    for key in _SCALAR_KEYS_V4:
+        if key in new_data:
             del new_data[key]
-            dropped.append(key)
-    if dropped:
+            dropped_v4.append(key)
+    ev_target = new_data.get(CONF_EV_TARGET_SOC)
+    if isinstance(ev_target, (int, float)):
+        del new_data[CONF_EV_TARGET_SOC]
+        dropped_v4.append(CONF_EV_TARGET_SOC)
+    if dropped_v4:
         _LOGGER.warning(
-            "EMS v3 migration: removed scalar value(s) %s — go to Settings → "
+            "EMS v4 migration: removed key(s) %s — go to Settings → "
             "Devices & Services → EMS → Configure to re-attach number entities.",
-            dropped,
+            dropped_v4,
         )
 
-    hass.config_entries.async_update_entry(entry, data=new_data, version=3)
+    hass.config_entries.async_update_entry(entry, data=new_data, version=4)
     return True
 
 
@@ -89,7 +109,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     mapping = VerbMapping(
         inverter_select_entity=data.get(CONF_INVERTER_SELECT),
         self_use_option=self_use_option,
-        inverter_power_target_entity=data.get(CONF_INVERTER_POWER_TARGET),
     )
 
     state = EmsState()
@@ -155,7 +174,6 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
             "strategy": decision.strategy,
             "inverter_verb": decision.inverter_verb.value if decision.inverter_verb else None,
             "inverter_option": inputs.mapping.self_use_option if decision.inverter_verb else None,
-            "inverter_power_target_w": decision.inverter_power_target_w,
             "ev_charge_power_w": decision.ev_charge_power_w,
             "computed_at": inputs.now.isoformat(),
         }

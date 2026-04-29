@@ -16,7 +16,6 @@ from custom_components.ems.models import (
 _DEFAULT_MAPPING = VerbMapping(
     inverter_select_entity="select.inverter_mode",
     self_use_option="Self Use",
-    inverter_power_target_entity="number.inverter_power",
 )
 
 _DEFAULT_FEATURES = Features(
@@ -55,7 +54,6 @@ class InputsBuilder:
             ev_power_w=get("ev_power_w", 0.0),
             ev_soc=get("ev_soc", None),
             ev_capacity_kwh=get("ev_capacity_kwh", 60.0),
-            ev_max_charge_kw=get("ev_max_charge_kw", 7.4),
             ev_ready_by=get("ev_ready_by", _BASE_EV_READY_BY),
             ev_strategy=get("ev_strategy", "Off"),
             import_price=get("import_price", 0.20),

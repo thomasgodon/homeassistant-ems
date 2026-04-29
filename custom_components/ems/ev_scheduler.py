@@ -14,7 +14,6 @@ def compute_window(
     deadline: time,
     strategy: Literal["Deadline", "Price-optimised", "Solar-only", "Off"],
     kwh_needed: float,
-    max_charge_kw: float,
     forecast: Sequence[PriceSlot] | None,
     solar_surplus_w: float,
     ev_min_charge_w: float,
@@ -34,7 +33,8 @@ def compute_window(
     if not forecast:
         return _stale(previous)
 
-    hours_needed = math.ceil(kwh_needed / (max_charge_kw * 0.9))
+    # Assume 7.4 kW charger at 90 % efficiency for slot-count sizing.
+    hours_needed = math.ceil(kwh_needed / (7.4 * 0.9))
 
     if strategy == "Deadline":
         deadline_dt = _deadline_dt(now, deadline)

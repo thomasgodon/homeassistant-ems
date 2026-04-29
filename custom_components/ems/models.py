@@ -14,7 +14,6 @@ class InverterVerb(StrEnum):
 class VerbMapping:
     inverter_select_entity: str | None
     self_use_option: str | None  # option string for the SELF_USE mode
-    inverter_power_target_entity: str | None  # number entity, watts, non-negative
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +46,6 @@ class Inputs:
     ev_power_w: float
     ev_soc: float | None
     ev_capacity_kwh: float
-    ev_max_charge_kw: float
     ev_ready_by: time
     ev_strategy: Literal["Deadline", "Price-optimised", "Solar-only", "Off"]
     import_price: float | None
@@ -69,7 +67,6 @@ StrategyLabel = Literal[
 class Decision:
     strategy: StrategyLabel
     inverter_verb: InverterVerb | None
-    inverter_power_target_w: float | None  # non-negative; None = don't write
     ev_charge_power_w: float  # watts; 0 = idle
 
 

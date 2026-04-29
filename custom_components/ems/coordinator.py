@@ -14,7 +14,6 @@ from homeassistant.util import dt as dt_util
 from . import strategy as strategy_module
 from .const import (
     CONF_EV_CAPACITY_KWH,
-    CONF_EV_MAX_CHARGE_KW,
     CONF_EV_PLUG,
     CONF_EV_POWER,
     CONF_EV_SOC,
@@ -25,12 +24,10 @@ from .const import (
     CONF_HOUSE_LOAD,
     CONF_IMPORT_PRICE,
     CONF_INVERTER_OPTIONS,
-    CONF_INVERTER_POWER_TARGET,
     CONF_INVERTER_SELECT,
     CONF_MAX_GRID_IMPORT_W,
     CONF_PV_POWER,
     DEFAULT_EV_CAPACITY_KWH,
-    DEFAULT_EV_MAX_CHARGE_KW,
     DEFAULT_EV_TARGET_SOC,
     DEFAULT_MAX_GRID_IMPORT_W,
     DOMAIN,
@@ -137,9 +134,6 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         ev_capacity_kwh = _read_float(
             hass, data.get(CONF_EV_CAPACITY_KWH), DEFAULT_EV_CAPACITY_KWH
         )
-        ev_max_charge_kw = _read_float(
-            hass, data.get(CONF_EV_MAX_CHARGE_KW), DEFAULT_EV_MAX_CHARGE_KW
-        )
 
         import datetime as _dt
         ev_ready_by_state = _read_time_state(hass, "time.ems_ev_ready_by")
@@ -161,7 +155,9 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             max_grid_import_w=_read_float(
                 hass, data.get(CONF_MAX_GRID_IMPORT_W), DEFAULT_MAX_GRID_IMPORT_W
             ),
-            ev_target_soc=float(data.get(CONF_EV_TARGET_SOC, DEFAULT_EV_TARGET_SOC)),
+            ev_target_soc=_read_float(
+                hass, data.get(CONF_EV_TARGET_SOC), DEFAULT_EV_TARGET_SOC
+            ),
             ev_min_charge_w=_read_number(hass, "number.ems_ev_min_charge_w", 1400.0),
         )
 
@@ -171,7 +167,6 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         mapping = VerbMapping(
             inverter_select_entity=data.get(CONF_INVERTER_SELECT),
             self_use_option=self_use_option,
-            inverter_power_target_entity=data.get(CONF_INVERTER_POWER_TARGET),
         )
 
         return Inputs(
@@ -184,7 +179,6 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             ev_power_w=ev_power_w,
             ev_soc=ev_soc,
             ev_capacity_kwh=ev_capacity_kwh,
-            ev_max_charge_kw=ev_max_charge_kw,
             ev_ready_by=ev_ready_by,
             ev_strategy=ev_strategy,  # type: ignore[arg-type]
             import_price=import_price,
@@ -255,7 +249,6 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
             ev_strategy=prior_inputs.ev_strategy,
             ev_charging_enabled=prior_inputs.features.ev_charging,
             in_cheap_window=in_cheap_window,
-            ev_max_charge_kw=prior_inputs.ev_max_charge_kw,
             thresholds=prior_inputs.thresholds,
         )
         await self._controller.write_full(fast_decision)
@@ -320,12 +313,9 @@ class EvSchedulerOrchestrator:
             return
 
         ev_soc = _read_float_optional(hass, data.get(CONF_EV_SOC)) or 0.0
-        ev_target_soc = float(data.get(CONF_EV_TARGET_SOC, DEFAULT_EV_TARGET_SOC))
+        ev_target_soc = _read_float(hass, data.get(CONF_EV_TARGET_SOC), DEFAULT_EV_TARGET_SOC)
         ev_capacity_kwh = _read_float(
             hass, data.get(CONF_EV_CAPACITY_KWH), DEFAULT_EV_CAPACITY_KWH
-        )
-        ev_max_charge_kw = _read_float(
-            hass, data.get(CONF_EV_MAX_CHARGE_KW), DEFAULT_EV_MAX_CHARGE_KW
         )
 
         kwh_needed = max(0.0, (ev_target_soc - ev_soc) / 100.0 * ev_capacity_kwh)
@@ -364,7 +354,6 @@ class EvSchedulerOrchestrator:
             deadline=ev_ready_by,
             strategy=ev_strategy,  # type: ignore[arg-type]
             kwh_needed=kwh_needed,
-            max_charge_kw=ev_max_charge_kw,
             forecast=forecast,
             solar_surplus_w=solar_surplus_w,
             ev_min_charge_w=ev_min_charge_w,

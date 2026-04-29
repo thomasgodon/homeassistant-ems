@@ -14,11 +14,10 @@
       },
       "inverter": {
         "title": "Inverter Control (optional)",
-        "description": "Map your inverter's normal operating mode. Skip if you have no home battery. When the EV is charging, EMS writes this mode with a discharge-power cap to prevent the battery from draining into the car.",
+        "description": "Map your inverter's normal operating mode. Skip if you have no home battery.",
         "data": {
           "inverter_select": "Inverter mode select entity",
-          "inverter_verb_self_use": "SELF_USE option string (your inverter's normal/self-use mode)",
-          "inverter_power_target": "Inverter power target entity (W) — for setting discharge cap"
+          "inverter_verb_self_use": "SELF_USE option string (your inverter's normal/self-use mode)"
         }
       },
       "ev_charger": {
@@ -28,7 +27,7 @@
           "ev_plug": "EV plug status",
           "ev_soc": "EV battery SoC (%)",
           "ev_capacity_kwh": "EV battery capacity (kWh)",
-          "ev_max_charge_kw": "EV max charge power (kW)"
+          "ev_target_soc": "EV target SoC — number entity (%)"
         }
       },
       "price_sources": {

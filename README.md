@@ -1,8 +1,8 @@
 # EMS — Energy Management System
 
-A brand-agnostic Home Assistant custom integration for **EV charging management**. It decides how many watts your EV should charge at every second, using solar surplus or cheap grid windows, while enforcing a maximum grid import cap and preventing the home battery from being drained into the car.
+A brand-agnostic Home Assistant custom integration for **EV charging management**. It decides how many watts your EV should charge at every second, using solar surplus or cheap grid windows, while enforcing a maximum grid import cap.
 
-Works with any inverter that exposes a `select` entity for operating modes and a `number` entity for power targets — no inverter-specific code.
+Works with any inverter that exposes a `select` entity for operating modes — no inverter-specific code.
 
 ---
 
@@ -12,9 +12,9 @@ Three execution loops share a single `EmsState` object:
 
 ### 10-second strategy loop (`EmsStrategyCoordinator`)
 1. `_build_inputs()` — reads all configured HA entities into a frozen `Inputs` dataclass.
-2. `strategy.decide(inputs)` — pure function; returns a `Decision` (EV target watts, inverter verb, inverter discharge cap).
+2. `strategy.decide(inputs)` — pure function; returns a `Decision` (EV target watts, inverter verb).
 3. Writes are skipped for 60 seconds after startup to avoid flapping on `unavailable` sensors.
-4. `controller.write_full()` — idempotent: writes inverter mode and discharge cap only when EV is actively charging.
+4. `controller.write_full()` — idempotent: writes inverter mode only when EV is actively charging.
 
 ### 1-second fast loop (`EmsFastLoopCoordinator`)
 Always runs once the integration is active. Re-reads grid, house load, and EV power, runs the same `strategy.recompute()` formula, and calls `controller.write_full()`. This keeps the grid import cap enforced within one second when loads change suddenly (e.g. kettle comes on).
@@ -26,7 +26,6 @@ Calls `ev_scheduler.compute_window()` to pick the cheapest charging hours from t
 
 ```
 house_non_ev = max(0.0, house_load_w − ev_power_w)
-ev_max_w     = ev_max_charge_kw × 1000
 surplus      = max(0.0, pv_w − house_non_ev)
 
 # Hard gates → idle
@@ -38,20 +37,16 @@ if not ev_plugged
 
 # Cheap window (Deadline / Price-optimised)
 elif ev_strategy != "Solar-only" and in_cheap_window:
-    ev_target = clamp(max_grid_import_w + pv_w − house_non_ev, 0, ev_max_w)
+    ev_target = max(0, max_grid_import_w + pv_w − house_non_ev)
     → ev_charging_grid
 
 # Solar surplus path
 elif surplus ≥ ev_min_charge_w:
-    ev_target = min(surplus, ev_max_w)
+    ev_target = surplus
     → ev_charging_solar
 
 else:
     → ev_idle
-
-# Inverter (only when ev_target > 0):
-    inverter_verb           = SELF_USE
-    inverter_power_target_w = max(0.0, house_non_ev − pv_w)  # discharge cap
 ```
 
 When `ev_target = 0`, EMS writes nothing to the inverter and resets its write-cache.
@@ -89,13 +84,12 @@ The **Configure** button (Settings → Devices & Services → EMS → Configure)
 
 Skip this step if you have no home battery or do not want EMS to control the inverter.
 
-When configured, EMS writes `SELF_USE` mode and a discharge cap (`max(0, house_non_ev − pv_w)`) whenever the EV is charging. This prevents the battery from being drained into the car while still allowing it to cover house load.
+When configured, EMS writes `SELF_USE` mode whenever the EV is charging.
 
 | Config key | Type | Description |
 |------------|------|-------------|
 | `inverter_select` | select entity | The HA select entity that controls inverter operating mode |
 | `inverter_verb_self_use` | text | Option string for your inverter's normal / self-use mode |
-| `inverter_power_target` | number entity | HA number entity (W) the integration writes the discharge cap to |
 
 ### Step 3 — EV charger
 
@@ -108,8 +102,7 @@ EMS does **not** write to your EV charger directly. It publishes `sensor.ems_ev_
 | `ev_plug` | binary_sensor / input_boolean | Whether the EV is plugged in |
 | `ev_soc` | sensor entity | EV battery state of charge (%) |
 | `ev_capacity_kwh` | `number` / `input_number` entity | EV battery capacity (kWh); reads entity state at runtime; falls back to `60.0` kWh when unset or unavailable |
-| `ev_max_charge_kw` | `number` / `input_number` entity | EV maximum charge rate (kW); reads entity state at runtime; falls back to `7.4` kW when unset or unavailable |
-| `ev_target_soc` | number (%) | SoC at which EV charging stops; default `80` |
+| `ev_target_soc` | `number` / `input_number` entity | SoC at which EV charging stops; reads entity state at runtime; falls back to `80` % when unset or unavailable |
 
 ### Step 4 — Price sources
 
@@ -137,13 +130,12 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | `ev_power_w` | `ev_power` entity |
 | `ev_soc` | `ev_soc` entity (%) or `None` |
 | `ev_capacity_kwh` | `ev_capacity_kwh` entity (config step 3); default `60.0` kWh |
-| `ev_max_charge_kw` | `ev_max_charge_kw` entity (config step 3); default `7.4` kW |
 | `ev_ready_by` | `time.ems_ev_ready_by` |
 | `ev_strategy` | `select.ems_ev_scheduling_strategy` |
 | `import_price` | `import_price` entity (EUR/kWh) or `None` |
 | `in_cheap_window` | `EmsState.cached_window.in_window_now` (set by EV scheduler) |
 | `features` | Feature boolean read from `switch.ems_ev_charging` |
-| `thresholds` | `max_grid_import_w` from entity (config step 1); `ev_target_soc` from config scalar; `ev_min_charge_w` from `number.ems_ev_min_charge_w` |
+| `thresholds` | `max_grid_import_w` from entity (config step 1); `ev_target_soc` from entity (config step 3); `ev_min_charge_w` from `number.ems_ev_min_charge_w` |
 | `mapping` | Inverter select entity + SELF_USE option string from config (Step 2) |
 
 The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`; remaining fields are reused from the last 10 s result.
@@ -152,9 +144,7 @@ The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`; rema
 
 ## Tunable thresholds
 
-`ev_target_soc` is set as a numeric value in the config flow (Step 3) and can be changed via **Configure** without reinstalling.
-
-`max_grid_import_w`, `ev_capacity_kwh`, and `ev_max_charge_kw` are now entity references: pick any `number` or `input_number` entity in the config flow; EMS reads the current value at runtime. Leave unset to use the default.
+`ev_target_soc`, `max_grid_import_w`, and `ev_capacity_kwh` are entity references: pick any `number` or `input_number` entity in the config flow; EMS reads the current value at runtime. Leave unset to use the default.
 
 `ev_min_charge_w` is a live HA `number` entity — adjust it from the UI at any time.
 
@@ -162,8 +152,7 @@ The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`; rema
 |-------|-------------|---------|------|-------------|
 | Config flow Step 1 (entity selector) | `max_grid_import_w` | 4500 | W | Hard ceiling on grid import; EMS reads entity state each cycle |
 | Config flow Step 3 (entity selector) | `ev_capacity_kwh` | 60 | kWh | EV battery capacity; used to calculate kWh needed |
-| Config flow Step 3 (entity selector) | `ev_max_charge_kw` | 7.4 | kW | EV maximum charge rate cap |
-| Config flow Step 3 (scalar) | `ev_target_soc` | 80 | % | EV SoC at which charging stops |
+| Config flow Step 3 (entity selector) | `ev_target_soc` | 80 | % | EV SoC at which charging stops; edit via dashboard without reconfiguring |
 | `number.ems_ev_min_charge_w` | — | 1400 | W | Minimum solar surplus required to start EV charging; below this the EV gets 0 W |
 
 ---
@@ -193,10 +182,10 @@ EMS publishes this sensor and you wire your own HA automation to act on it (e.g.
 |-----------|-------------|
 | EV not plugged | 0 W |
 | `ev_strategy = Off` | 0 W |
-| `ev_soc ≥ ev_target_soc` (config scalar) | 0 W |
+| `ev_soc ≥ ev_target_soc` | 0 W |
 | `switch.ems_ev_charging = off` | 0 W |
-| In cheap window (Deadline / Price-optimised) | `clamp(max_grid_import_w + pv_w − house_non_ev_w, 0, ev_max_charge_kw_entity × 1000)` |
-| Solar surplus ≥ `ev_min_charge_w` | `min(pv_w − house_non_ev_w, ev_max_charge_kw_entity × 1000)` |
+| In cheap window (Deadline / Price-optimised) | `max(0, max_grid_import_w + pv_w − house_non_ev_w)` |
+| Solar surplus ≥ `ev_min_charge_w` | `pv_w − house_non_ev_w` |
 | Solar surplus < `ev_min_charge_w`, outside cheap window | 0 W |
 
 ---
@@ -210,9 +199,8 @@ EMS publishes this sensor and you wire your own HA automation to act on it (e.g.
 | Service | Entity | Value |
 |---------|--------|-------|
 | `select.select_option` | Inverter select entity (Step 2) | SELF_USE option string |
-| `number.set_value` | Inverter power target entity (Step 2) | `max(0, house_non_ev_w − pv_w)` — discharge cap (W) |
 
-Both writes are skipped during the startup grace period.
+Writes are skipped during the startup grace period.
 
 ### When EV is idle (`ev_charge_power_w = 0`)
 
@@ -231,7 +219,6 @@ No writes are made. The controller's write-cache is cleared so the next active t
 | `sensor.ems_cheapest_window_start` | timestamp | Start of the next cheap EV charging window |
 | `sensor.ems_cheapest_window_end` | timestamp | End of the next cheap EV charging window |
 | `sensor.ems_inverter_target_verb` | — | Verb last sent to inverter (`SELF_USE`) |
-| `sensor.ems_inverter_power_target_w` | W | Discharge cap last written to inverter |
 | `sensor.ems_ev_charge_target_power` | W | Recommended EV charge rate (0 = idle); wire your own automation |
 
 ### Binary sensors (`binary_sensor.ems_*`)

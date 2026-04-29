@@ -23,7 +23,6 @@ async def async_setup_entry(
         EmsCheapestWindowStartSensor(coordinator),
         EmsCheapestWindowEndSensor(coordinator),
         EmsInverterTargetVerbSensor(coordinator),
-        EmsInverterPowerTargetSensor(coordinator),
         EmsEvChargeTargetPowerSensor(coordinator),
     ])
 
@@ -107,20 +106,6 @@ class EmsInverterTargetVerbSensor(_EmsBaseSensor):
             return None
         verb = self._result.decision.inverter_verb
         return verb.value if verb else None
-
-
-class EmsInverterPowerTargetSensor(_EmsBaseSensor):
-    _attr_unique_id = "ems_inverter_power_target_w"
-    _attr_name = "EMS Inverter Power Target"
-    _attr_native_unit_of_measurement = "W"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:gauge"
-
-    @property
-    def native_value(self) -> float | None:
-        if self._result is None:
-            return None
-        return self._result.decision.inverter_power_target_w
 
 
 class EmsEvChargeTargetPowerSensor(_EmsBaseSensor):

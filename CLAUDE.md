@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`homeassistant-ems` is a Home Assistant custom integration called **EMS** (Energy Management System). It provides brand-agnostic **EV charging management** for solar + optional battery + EV setups. It decides how many watts to charge at based on solar surplus or cheap grid windows, while enforcing a maximum grid import cap and preventing the home battery from being drained into the car.
+`homeassistant-ems` is a Home Assistant custom integration called **EMS** (Energy Management System). It provides brand-agnostic **EV charging management** for solar + optional battery + EV setups. It decides how many watts to charge at based on solar surplus or cheap grid windows, while enforcing a maximum grid import cap.
 
 ## Documentation
 
@@ -36,14 +36,14 @@ The integration is structured around three execution loops managed by `coordinat
 
 **10-second strategy loop** (`EmsStrategyCoordinator`):
 1. `_build_inputs()` freezes all mapped HA entity states into a frozen `Inputs` dataclass
-2. `strategy.decide(inputs)` — pure function, returns a `Decision` (EV target watts, inverter verb, discharge cap)
+2. `strategy.decide(inputs)` — pure function, returns a `Decision` (EV target watts, inverter verb)
 3. Skips writes during startup grace (first 60 s) to avoid flapping on `unavailable` sensors
-4. `controller.write_full()` — idempotent: writes inverter mode + discharge cap only when `ev_charge_power_w > 0`; on idle resets write-cache
+4. `controller.write_full()` — idempotent: writes inverter mode only when `ev_charge_power_w > 0`; on idle resets write-cache
 
 **1-second fast loop** (`EmsFastLoopCoordinator`):
 - Always runs once the integration is active (no latch gate)
 - Re-reads `pv_w`, `house_load_w`, `ev_power_w` and calls `strategy.recompute()`
-- Calls `controller.write_full()` — keeps EV target and inverter cap enforced within 1 s of load changes
+- Calls `controller.write_full()` — keeps EV target enforced within 1 s of load changes
 
 **5-minute EV scheduler** (`EvSchedulerOrchestrator`):
 - Calls pure `ev_scheduler.compute_window()` to pick cheapest charging hours
@@ -61,15 +61,14 @@ The integration is structured around three execution loops managed by `coordinat
 
 ### Key abstractions
 
-- **Single inverter verb** (`SELF_USE`): maps to the inverter's normal operating option string configured in Step 2. EMS writes it with a discharge cap to prevent the battery from draining into the EV.
-- **Discharge cap**: `max(0, house_non_ev_w − pv_w)` — allows the battery to cover house deficit but nothing more.
+- **Single inverter verb** (`SELF_USE`): maps to the inverter's normal operating option string configured in Step 2. EMS writes it when the EV is charging.
 - **EV charge target**: strategy emits `ev_charge_power_w` (float, W). No writes to charger. EMS exposes `sensor.ems_ev_charge_target_power`; user creates their own automation.
 - **house_non_ev**: derived inline as `max(0.0, house_load_w − ev_power_w)` — never a stored field.
 
 ### Config flow (4 steps, no YAML editing)
 1. Required sensors (grid power, PV, house load, EV power); optional: `grid_import_15m_avg`
-2. Inverter (optional) — select entity + single SELF_USE option string + power target entity
-3. EV charger (optional) — plug/SoC/capacity sensors (no charger mode select; EMS doesn't write to it)
+2. Inverter (optional) — select entity + single SELF_USE option string
+3. EV charger (optional) — plug/SoC/capacity/target-SoC entity selectors; EMS reads entity states at runtime
 4. Price sources (import price, forecast attribute path)
 
 ### Feature toggles

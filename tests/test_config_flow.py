@@ -7,10 +7,8 @@ import pytest
 from custom_components.ems.config_flow import EmsConfigFlow, EmsOptionsFlow
 from custom_components.ems.const import (
     CONF_EV_CAPACITY_KWH,
-    CONF_EV_MAX_CHARGE_KW,
     CONF_EV_TARGET_SOC,
     CONF_MAX_GRID_IMPORT_W,
-    DEFAULT_EV_TARGET_SOC,
 )
 
 
@@ -43,12 +41,11 @@ async def test_ev_charger_contains_ev_target_soc_and_entity_selectors():
     schema_keys = {str(k) for k in result["data_schema"].schema}
     assert CONF_EV_TARGET_SOC in schema_keys
     assert CONF_EV_CAPACITY_KWH in schema_keys
-    assert CONF_EV_MAX_CHARGE_KW in schema_keys
 
 
 @pytest.mark.asyncio
 async def test_full_config_flow_stores_entity_ids():
-    """Walk the full config flow and assert entity-id strings are stored (not scalars)."""
+    """Walk the full config flow and assert entity-id strings are stored."""
     flow = EmsConfigFlow()
     flow.hass = _make_hass()
     flow.context = {}
@@ -69,25 +66,12 @@ async def test_full_config_flow_stores_entity_ids():
         flow, "async_step_price_sources", new=AsyncMock(return_value={"type": "form"})
     ):
         await flow.async_step_ev_charger(user_input={
-            CONF_EV_TARGET_SOC: 90.0,
+            CONF_EV_TARGET_SOC: "input_number.ev_target_soc",
             CONF_EV_CAPACITY_KWH: "input_number.ev_capacity",
-            CONF_EV_MAX_CHARGE_KW: "input_number.ev_max_charge",
         })
 
-    assert flow._data[CONF_EV_TARGET_SOC] == 90.0
+    assert flow._data[CONF_EV_TARGET_SOC] == "input_number.ev_target_soc"
     assert flow._data[CONF_EV_CAPACITY_KWH] == "input_number.ev_capacity"
-    assert flow._data[CONF_EV_MAX_CHARGE_KW] == "input_number.ev_max_charge"
-
-
-@pytest.mark.asyncio
-async def test_ev_charger_defaults_ev_target_soc_when_missing():
-    flow = EmsConfigFlow()
-    flow._data = {}
-    with patch.object(
-        flow, "async_step_price_sources", new=AsyncMock(return_value={"type": "form"})
-    ):
-        await flow.async_step_ev_charger(user_input={})
-    assert flow._data[CONF_EV_TARGET_SOC] == DEFAULT_EV_TARGET_SOC
 
 
 # ---------------------------------------------------------------------------
@@ -115,8 +99,7 @@ async def test_options_flow_ev_charger_step_shows_entity_selectors():
     entry = MagicMock()
     entry.data = {
         CONF_EV_CAPACITY_KWH: "input_number.ev_cap",
-        CONF_EV_MAX_CHARGE_KW: "input_number.ev_max",
-        CONF_EV_TARGET_SOC: 80.0,
+        CONF_EV_TARGET_SOC: "input_number.ev_target_soc",
     }
     flow = EmsOptionsFlow(entry)
     result = await flow.async_step_ev_charger(user_input=None)
@@ -124,7 +107,7 @@ async def test_options_flow_ev_charger_step_shows_entity_selectors():
     assert result["step_id"] == "ev_charger"
     schema_keys = {str(k) for k in result["data_schema"].schema}
     assert CONF_EV_CAPACITY_KWH in schema_keys
-    assert CONF_EV_MAX_CHARGE_KW in schema_keys
+    assert CONF_EV_TARGET_SOC in schema_keys
 
 
 @pytest.mark.asyncio
@@ -136,9 +119,8 @@ async def test_options_flow_writes_back_all_steps():
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
         CONF_MAX_GRID_IMPORT_W: "input_number.max_grid",
-        CONF_EV_TARGET_SOC: 80.0,
+        CONF_EV_TARGET_SOC: "input_number.ev_target_soc",
         CONF_EV_CAPACITY_KWH: "input_number.ev_cap",
-        CONF_EV_MAX_CHARGE_KW: "input_number.ev_max",
     }
     flow = EmsOptionsFlow(entry)
     flow.hass = _make_hass()
@@ -159,13 +141,11 @@ async def test_options_flow_writes_back_all_steps():
     _ps_result = {"type": "form"}
     with patch.object(flow, "async_step_price_sources", new=AsyncMock(return_value=_ps_result)):
         await flow.async_step_ev_charger(user_input={
-            CONF_EV_TARGET_SOC: 95.0,
+            CONF_EV_TARGET_SOC: "input_number.ev_target_new",
             CONF_EV_CAPACITY_KWH: "input_number.ev_cap_new",
-            CONF_EV_MAX_CHARGE_KW: "input_number.ev_max_new",
         })
-    assert flow._data[CONF_EV_TARGET_SOC] == 95.0
+    assert flow._data[CONF_EV_TARGET_SOC] == "input_number.ev_target_new"
     assert flow._data[CONF_EV_CAPACITY_KWH] == "input_number.ev_cap_new"
-    assert flow._data[CONF_EV_MAX_CHARGE_KW] == "input_number.ev_max_new"
 
     # Step 4 — price sources (final step triggers write-back)
     flow.hass.config_entries.async_update_entry = MagicMock()
@@ -223,10 +203,10 @@ async def test_migrate_entry_v2_to_v3_drops_scalar_values():
     entry = MagicMock()
     entry.version = 2
     entry.data = {
-        CONF_MAX_GRID_IMPORT_W: 4500.0,   # scalar — must be dropped
-        "ev_capacity_kwh": 60.0,           # scalar — must be dropped
-        "ev_max_charge_kw": 7.4,           # scalar — must be dropped
-        CONF_EV_TARGET_SOC: 80.0,          # scalar — must be kept (still a scalar)
+        CONF_MAX_GRID_IMPORT_W: 4500.0,   # scalar — must be dropped by v2→v3
+        "ev_capacity_kwh": 60.0,           # scalar — must be dropped by v2→v3
+        "ev_max_charge_kw": 7.4,           # dropped by v2→v3 (also listed in v4 cleanup)
+        CONF_EV_TARGET_SOC: 80.0,          # scalar — dropped by v3→v4
         "grid_import_power": "sensor.grid",
     }
 
@@ -237,13 +217,13 @@ async def test_migrate_entry_v2_to_v3_drops_scalar_values():
     call_kwargs = hass.config_entries.async_update_entry.call_args
     new_data = call_kwargs.kwargs["data"]
 
-    # Three entity-id keys dropped because their values were scalars
+    # v2→v3 dropped entity-id keys whose values were scalars
     assert CONF_MAX_GRID_IMPORT_W not in new_data
     assert "ev_capacity_kwh" not in new_data
     assert "ev_max_charge_kw" not in new_data
-
+    # v3→v4 dropped ev_target_soc scalar
+    assert CONF_EV_TARGET_SOC not in new_data
     # Unrelated keys kept
-    assert new_data[CONF_EV_TARGET_SOC] == 80.0
     assert new_data["grid_import_power"] == "sensor.grid"
 
 
@@ -258,8 +238,8 @@ async def test_migrate_entry_v2_to_v3_keeps_entity_ids():
     entry.data = {
         CONF_MAX_GRID_IMPORT_W: "input_number.max_grid",  # already entity_id — keep
         "ev_capacity_kwh": "input_number.ev_cap",
-        "ev_max_charge_kw": "input_number.ev_max",
-        CONF_EV_TARGET_SOC: 80.0,
+        "ev_max_charge_kw": "input_number.ev_max",  # removed by v3→v4 anyway
+        CONF_EV_TARGET_SOC: "input_number.ev_target_soc",  # entity_id — kept through v3→v4
     }
 
     result = await async_migrate_entry(hass, entry)
@@ -270,17 +250,52 @@ async def test_migrate_entry_v2_to_v3_keeps_entity_ids():
 
     assert new_data[CONF_MAX_GRID_IMPORT_W] == "input_number.max_grid"
     assert new_data["ev_capacity_kwh"] == "input_number.ev_cap"
-    assert new_data["ev_max_charge_kw"] == "input_number.ev_max"
+    # ev_max_charge_kw is removed by v3→v4 regardless of value type
+    assert "ev_max_charge_kw" not in new_data
+    # ev_target_soc entity_id is preserved (not a scalar, so not dropped)
+    assert new_data[CONF_EV_TARGET_SOC] == "input_number.ev_target_soc"
 
 
 @pytest.mark.asyncio
-async def test_migrate_entry_already_v3_is_noop():
+async def test_migrate_entry_v3_to_v4_drops_scalar_ev_target_soc():
+    """v3→v4: ev_target_soc scalar and inverter_power_target are removed."""
     from custom_components.ems import async_migrate_entry
 
     hass = _make_hass()
     entry = MagicMock()
     entry.version = 3
-    entry.data = {CONF_MAX_GRID_IMPORT_W: "input_number.max_grid", CONF_EV_TARGET_SOC: 80.0}
+    entry.data = {
+        CONF_MAX_GRID_IMPORT_W: "input_number.max_grid",
+        CONF_EV_TARGET_SOC: 80.0,           # scalar — must be dropped
+        "inverter_power_target": "number.inverter",  # removed field — must be dropped
+        "ev_max_charge_kw": "input_number.ev_max",   # removed field — must be dropped
+        "grid_import_power": "sensor.grid",
+    }
+
+    result = await async_migrate_entry(hass, entry)
+
+    assert result is True
+    call_kwargs = hass.config_entries.async_update_entry.call_args
+    new_data = call_kwargs.kwargs["data"]
+
+    assert CONF_EV_TARGET_SOC not in new_data
+    assert "inverter_power_target" not in new_data
+    assert "ev_max_charge_kw" not in new_data
+    assert new_data[CONF_MAX_GRID_IMPORT_W] == "input_number.max_grid"
+    assert new_data["grid_import_power"] == "sensor.grid"
+
+
+@pytest.mark.asyncio
+async def test_migrate_entry_already_v4_is_noop():
+    from custom_components.ems import async_migrate_entry
+
+    hass = _make_hass()
+    entry = MagicMock()
+    entry.version = 4
+    entry.data = {
+        CONF_MAX_GRID_IMPORT_W: "input_number.max_grid",
+        CONF_EV_TARGET_SOC: "input_number.ev_target_soc",
+    }
 
     result = await async_migrate_entry(hass, entry)
 

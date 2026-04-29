@@ -14,7 +14,6 @@ def decide(inputs: Inputs) -> Decision:
         ev_strategy=inputs.ev_strategy,
         ev_charging_enabled=inputs.features.ev_charging,
         in_cheap_window=inputs.in_cheap_window,
-        ev_max_charge_kw=inputs.ev_max_charge_kw,
         thresholds=inputs.thresholds,
     )
 
@@ -29,7 +28,6 @@ def recompute(
     ev_strategy: str,
     ev_charging_enabled: bool,
     in_cheap_window: bool,
-    ev_max_charge_kw: float,
     thresholds: Thresholds,
 ) -> Decision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
@@ -42,7 +40,6 @@ def recompute(
         ev_strategy=ev_strategy,
         ev_charging_enabled=ev_charging_enabled,
         in_cheap_window=in_cheap_window,
-        ev_max_charge_kw=ev_max_charge_kw,
         thresholds=thresholds,
     )
 
@@ -58,12 +55,8 @@ def _make_decision(
     ev_strategy: str,
     ev_charging_enabled: bool,
     in_cheap_window: bool,
-    ev_max_charge_kw: float,
     thresholds: Thresholds,
 ) -> Decision:
-    ev_max_w = ev_max_charge_kw * 1000.0
-    # Discharge cap: battery may cover house deficit, but no more.
-    inverter_cap_w = max(0.0, house_non_ev - pv_w)
     surplus = max(0.0, pv_w - house_non_ev)
 
     # Hard gates — always idle
@@ -77,15 +70,11 @@ def _make_decision(
 
     # Cheap window (Deadline / Price-optimised) — pull from grid + solar
     if ev_strategy != "Solar-only" and in_cheap_window:
-        ev_target_w = min(
-            max(0.0, thresholds.max_grid_import_w + pv_w - house_non_ev),
-            ev_max_w,
-        )
+        ev_target_w = max(0.0, thresholds.max_grid_import_w + pv_w - house_non_ev)
         if ev_target_w > 0:
             return Decision(
                 strategy="ev_charging_grid",
                 inverter_verb=InverterVerb.SELF_USE,
-                inverter_power_target_w=inverter_cap_w,
                 ev_charge_power_w=ev_target_w,
             )
         return _idle()
@@ -95,8 +84,7 @@ def _make_decision(
         return Decision(
             strategy="ev_charging_solar",
             inverter_verb=InverterVerb.SELF_USE,
-            inverter_power_target_w=inverter_cap_w,
-            ev_charge_power_w=min(surplus, ev_max_w),
+            ev_charge_power_w=surplus,
         )
 
     return _idle()
@@ -106,6 +94,5 @@ def _idle() -> Decision:
     return Decision(
         strategy="ev_idle",
         inverter_verb=None,
-        inverter_power_target_w=None,
         ev_charge_power_w=0.0,
     )
