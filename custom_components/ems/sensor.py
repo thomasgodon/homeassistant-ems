@@ -19,7 +19,6 @@ async def async_setup_entry(
     coordinator: EmsStrategyCoordinator = hass.data[DOMAIN][entry.entry_id]["strategy_coordinator"]
     async_add_entities([
         EmsCurrentStrategySensor(coordinator),
-        EmsSolarSurplusSensor(coordinator),
         EmsEvKwhNeededSensor(coordinator),
         EmsCheapestWindowStartSensor(coordinator),
         EmsCheapestWindowEndSensor(coordinator),
@@ -52,22 +51,6 @@ class EmsCurrentStrategySensor(_EmsBaseSensor):
         if self._result is None:
             return "starting_up"
         return self._result.decision.strategy
-
-
-class EmsSolarSurplusSensor(_EmsBaseSensor):
-    _attr_unique_id = "ems_solar_surplus_w"
-    _attr_name = "EMS Solar Surplus"
-    _attr_native_unit_of_measurement = "W"
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:solar-power"
-
-    @property
-    def native_value(self) -> float | None:
-        if self._result is None:
-            return None
-        inp = self._result.inputs
-        house_non_ev = max(0.0, inp.house_load_w - inp.ev_power_w)
-        return max(0.0, inp.pv_w - house_non_ev)
 
 
 class EmsEvKwhNeededSensor(_EmsBaseSensor):

@@ -13,7 +13,7 @@ Three execution loops share a single `EmsState` object:
 ### 10-second strategy loop (`EmsStrategyCoordinator`)
 1. `_build_inputs()` — reads all configured HA entities into a frozen `Inputs` dataclass.
 2. `strategy.decide(inputs)` — pure function; returns a `Decision` (EV target watts, inverter verb, inverter discharge cap).
-3. Writes are skipped for `startup_grace_seconds` after startup to avoid flapping on `unavailable` sensors.
+3. Writes are skipped for 60 seconds after startup to avoid flapping on `unavailable` sensors.
 4. `controller.write_full()` — idempotent: writes inverter mode and discharge cap only when EV is actively charging.
 
 ### 1-second fast loop (`EmsFastLoopCoordinator`)
@@ -155,9 +155,6 @@ All thresholds are HA `number` entities — adjust them live from the UI without
 | `number.ems_max_grid_import_w` | 4500 | W | Hard ceiling on grid import; EV target is capped so grid draw stays at or below this |
 | `number.ems_ev_target_soc` | 80 | % | EV SoC at which charging stops |
 | `number.ems_ev_min_charge_w` | 1400 | W | Minimum solar surplus required to start EV charging; below this the EV gets 0 W |
-| `number.ems_strategy_interval_s` | 10 | s | Strategy loop interval |
-| `number.ems_fast_loop_interval_s` | 1 | s | Fast loop interval |
-| `number.ems_startup_grace_seconds` | 45 | s | No writes to hardware during this window after startup |
 
 ---
 
@@ -220,7 +217,6 @@ No writes are made. The controller's write-cache is cleared so the next active t
 | Entity | Unit | Description |
 |--------|------|-------------|
 | `sensor.ems_current_strategy` | — | Active label: `ev_charging_grid`, `ev_charging_solar`, `ev_idle`, `starting_up` |
-| `sensor.ems_solar_surplus_w` | W | `max(0, pv_w − house_non_ev_w)` |
 | `sensor.ems_ev_kwh_needed` | kWh | Energy needed to reach `ev_target_soc` |
 | `sensor.ems_cheapest_window_start` | timestamp | Start of the next cheap EV charging window |
 | `sensor.ems_cheapest_window_end` | timestamp | End of the next cheap EV charging window |

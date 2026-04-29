@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfPower, UnitOfTime
+from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -50,36 +50,6 @@ _NUMBERS: tuple[EmsNumberDescription, ...] = (
         native_step=50,
         default_value=1400,
         icon="mdi:ev-station",
-    ),
-    EmsNumberDescription(
-        key="ems_strategy_interval_s",
-        name="EMS Strategy Interval",
-        native_unit_of_measurement=UnitOfTime.SECONDS,
-        native_min_value=1,
-        native_max_value=60,
-        native_step=1,
-        default_value=10,
-        icon="mdi:timer",
-    ),
-    EmsNumberDescription(
-        key="ems_fast_loop_interval_s",
-        name="EMS Fast Loop Interval",
-        native_unit_of_measurement=UnitOfTime.SECONDS,
-        native_min_value=0.5,
-        native_max_value=5,
-        native_step=0.5,
-        default_value=1,
-        icon="mdi:timer",
-    ),
-    EmsNumberDescription(
-        key="ems_startup_grace_seconds",
-        name="EMS Startup Grace Period",
-        native_unit_of_measurement=UnitOfTime.SECONDS,
-        native_min_value=10,
-        native_max_value=300,
-        native_step=5,
-        default_value=45,
-        icon="mdi:timer-sand",
     ),
 )
 

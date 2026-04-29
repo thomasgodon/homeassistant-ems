@@ -37,7 +37,7 @@ The integration is structured around three execution loops managed by `coordinat
 **10-second strategy loop** (`EmsStrategyCoordinator`):
 1. `_build_inputs()` freezes all mapped HA entity states into a frozen `Inputs` dataclass
 2. `strategy.decide(inputs)` — pure function, returns a `Decision` (EV target watts, inverter verb, discharge cap)
-3. Skips writes during startup grace (first 45 s) to avoid flapping on `unavailable` sensors
+3. Skips writes during startup grace (first 60 s) to avoid flapping on `unavailable` sensors
 4. `controller.write_full()` — idempotent: writes inverter mode + discharge cap only when `ev_charge_power_w > 0`; on idle resets write-cache
 
 **1-second fast loop** (`EmsFastLoopCoordinator`):

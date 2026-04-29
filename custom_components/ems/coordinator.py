@@ -27,9 +27,6 @@ from .const import (
     CONF_INVERTER_POWER_TARGET,
     CONF_INVERTER_SELECT,
     CONF_PV_POWER,
-    DEFAULT_FAST_LOOP_INTERVAL_S,
-    DEFAULT_STARTUP_GRACE_S,
-    DEFAULT_STRATEGY_INTERVAL_S,
     DOMAIN,
     STORAGE_KEY,
     STORAGE_VERSION,
@@ -77,7 +74,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             hass,
             _LOGGER,
             name=f"{DOMAIN}_strategy",
-            update_interval=timedelta(seconds=DEFAULT_STRATEGY_INTERVAL_S),
+            update_interval=timedelta(seconds=10),
         )
 
     async def async_setup(self) -> None:
@@ -92,19 +89,10 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
                     in_window_now=window_data.get("in_window_now", False),
                     reason=window_data.get("reason", "stale_forecast"),
                 )
-        grace_s = entry_option(self._entry, "startup_grace_s", DEFAULT_STARTUP_GRACE_S)
-        self._state.startup_grace_until = dt_util.utcnow() + timedelta(seconds=grace_s)
+        self._state.startup_grace_until = dt_util.utcnow() + timedelta(seconds=60)
         self._controller.reset_write_cache()
 
     async def _async_update_data(self) -> LadderResult:
-        # Live-tune interval
-        interval_s = _read_number_state(
-            self.hass, "number.ems_strategy_interval_s", DEFAULT_STRATEGY_INTERVAL_S
-        )
-        new_interval = timedelta(seconds=interval_s)
-        if new_interval != self.update_interval:
-            self.update_interval = new_interval
-
         try:
             inputs = await self._build_inputs()
         except Exception as exc:
@@ -223,18 +211,10 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
             hass,
             _LOGGER,
             name=f"{DOMAIN}_fast_loop",
-            update_interval=timedelta(seconds=DEFAULT_FAST_LOOP_INTERVAL_S),
+            update_interval=timedelta(seconds=1),
         )
 
     async def _async_update_data(self) -> None:
-        # Live-tune interval
-        interval_s = _read_number_state(
-            self.hass, "number.ems_fast_loop_interval_s", DEFAULT_FAST_LOOP_INTERVAL_S
-        )
-        new_interval = timedelta(seconds=interval_s)
-        if new_interval != self.update_interval:
-            self.update_interval = new_interval
-
         if self._state.last_result is None:
             return
         grace_until = self._state.startup_grace_until
@@ -434,10 +414,6 @@ def _read_number(hass: HomeAssistant, entity_id: str, default: float) -> float:
     return _read_float(hass, entity_id, default)
 
 
-def _read_number_state(hass: HomeAssistant, entity_id: str, default: float) -> float:
-    return _read_float(hass, entity_id, default)
-
-
 def _read_time_state(hass: HomeAssistant, entity_id: str):
     """Read a time entity and return a datetime.time or None."""
     import datetime as dt_module
@@ -474,5 +450,3 @@ def _parse_stored_dt(value: str | None) -> datetime | None:
         return None
 
 
-def entry_option(entry: ConfigEntry, key: str, default):
-    return entry.options.get(key, entry.data.get(key, default))

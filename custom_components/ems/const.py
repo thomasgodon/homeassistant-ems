@@ -2,11 +2,6 @@ from __future__ import annotations
 
 DOMAIN = "ems"
 
-# Default tick intervals (seconds)
-DEFAULT_STRATEGY_INTERVAL_S = 10
-DEFAULT_FAST_LOOP_INTERVAL_S = 1
-DEFAULT_STARTUP_GRACE_S = 45
-
 # Config entry data keys — sensors
 CONF_GRID_IMPORT_POWER = "grid_import_power"
 CONF_GRID_IMPORT_15M_AVG = "grid_import_15m_avg"
