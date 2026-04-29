@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfPower
+from homeassistant.const import UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -21,26 +21,6 @@ class EmsNumberDescription(NumberEntityDescription):
 
 
 _NUMBERS: tuple[EmsNumberDescription, ...] = (
-    EmsNumberDescription(
-        key="ems_max_grid_import_w",
-        name="EMS Max Grid Import",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        native_min_value=0,
-        native_max_value=25000,
-        native_step=100,
-        default_value=4500,
-        icon="mdi:transmission-tower-import",
-    ),
-    EmsNumberDescription(
-        key="ems_ev_target_soc",
-        name="EMS EV Target SoC",
-        native_unit_of_measurement=PERCENTAGE,
-        native_min_value=0,
-        native_max_value=100,
-        native_step=1,
-        default_value=80,
-        icon="mdi:car-electric",
-    ),
     EmsNumberDescription(
         key="ems_ev_min_charge_w",
         name="EMS EV Minimum Charge Power",

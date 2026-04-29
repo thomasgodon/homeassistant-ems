@@ -5,8 +5,18 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.helpers.restore_state import RestoreStateData
 
-from .const import CONF_INVERTER_OPTIONS, CONF_INVERTER_POWER_TARGET, CONF_INVERTER_SELECT, DOMAIN
+from .const import (
+    CONF_EV_TARGET_SOC,
+    CONF_INVERTER_OPTIONS,
+    CONF_INVERTER_POWER_TARGET,
+    CONF_INVERTER_SELECT,
+    CONF_MAX_GRID_IMPORT_W,
+    DEFAULT_EV_TARGET_SOC,
+    DEFAULT_MAX_GRID_IMPORT_W,
+    DOMAIN,
+)
 from .controller import Controller
 from .coordinator import (
     EmsFastLoopCoordinator,
@@ -26,6 +36,47 @@ PLATFORMS = [
     Platform.BINARY_SENSOR,
     Platform.TIME,
 ]
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    if entry.version >= 3:
+        return True
+
+    new_data = {**entry.data}
+
+    if entry.version < 2:
+        # v1 → v2: read max_grid_import_w / ev_target_soc from old number entities
+        restore = await RestoreStateData.async_get_instance(hass)
+        for key, entity_id, default in (
+            (CONF_MAX_GRID_IMPORT_W, "number.ems_max_grid_import_w", DEFAULT_MAX_GRID_IMPORT_W),
+            (CONF_EV_TARGET_SOC, "number.ems_ev_target_soc", DEFAULT_EV_TARGET_SOC),
+        ):
+            if key in new_data:
+                continue
+            last = restore.last_states.get(entity_id)
+            try:
+                new_data[key] = float(last.state.state) if last else default
+            except (ValueError, AttributeError):
+                new_data[key] = default
+
+    # v2 → v3: max_grid_import_w / ev_capacity_kwh / ev_max_charge_kw are now entity_ids
+    # Drop any scalar values — user must re-attach via Configure.
+    _SCALAR_KEYS = (CONF_MAX_GRID_IMPORT_W, "ev_capacity_kwh", "ev_max_charge_kw")
+    dropped = []
+    for key in _SCALAR_KEYS:
+        val = new_data.get(key)
+        if isinstance(val, (int, float)):
+            del new_data[key]
+            dropped.append(key)
+    if dropped:
+        _LOGGER.warning(
+            "EMS v3 migration: removed scalar value(s) %s — go to Settings → "
+            "Devices & Services → EMS → Configure to re-attach number entities.",
+            dropped,
+        )
+
+    hass.config_entries.async_update_entry(entry, data=new_data, version=3)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

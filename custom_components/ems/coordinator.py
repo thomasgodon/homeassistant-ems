@@ -18,6 +18,7 @@ from .const import (
     CONF_EV_PLUG,
     CONF_EV_POWER,
     CONF_EV_SOC,
+    CONF_EV_TARGET_SOC,
     CONF_FORECAST_PATH_IMPORT,
     CONF_GRID_IMPORT_15M_AVG,
     CONF_GRID_IMPORT_POWER,
@@ -26,7 +27,12 @@ from .const import (
     CONF_INVERTER_OPTIONS,
     CONF_INVERTER_POWER_TARGET,
     CONF_INVERTER_SELECT,
+    CONF_MAX_GRID_IMPORT_W,
     CONF_PV_POWER,
+    DEFAULT_EV_CAPACITY_KWH,
+    DEFAULT_EV_MAX_CHARGE_KW,
+    DEFAULT_EV_TARGET_SOC,
+    DEFAULT_MAX_GRID_IMPORT_W,
     DOMAIN,
     STORAGE_KEY,
     STORAGE_VERSION,
@@ -128,8 +134,12 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         ev_plugged = _read_bool(hass, data.get(CONF_EV_PLUG), False)
         ev_power_w = _read_float(hass, data.get(CONF_EV_POWER), 0.0)
         ev_soc = _read_float_optional(hass, data.get(CONF_EV_SOC))
-        ev_capacity_kwh = float(data.get(CONF_EV_CAPACITY_KWH, 60.0))
-        ev_max_charge_kw = float(data.get(CONF_EV_MAX_CHARGE_KW, 7.4))
+        ev_capacity_kwh = _read_float(
+            hass, data.get(CONF_EV_CAPACITY_KWH), DEFAULT_EV_CAPACITY_KWH
+        )
+        ev_max_charge_kw = _read_float(
+            hass, data.get(CONF_EV_MAX_CHARGE_KW), DEFAULT_EV_MAX_CHARGE_KW
+        )
 
         import datetime as _dt
         ev_ready_by_state = _read_time_state(hass, "time.ems_ev_ready_by")
@@ -148,8 +158,10 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         )
 
         thresholds = Thresholds(
-            max_grid_import_w=_read_number(hass, "number.ems_max_grid_import_w", 4500.0),
-            ev_target_soc=_read_number(hass, "number.ems_ev_target_soc", 80.0),
+            max_grid_import_w=_read_float(
+                hass, data.get(CONF_MAX_GRID_IMPORT_W), DEFAULT_MAX_GRID_IMPORT_W
+            ),
+            ev_target_soc=float(data.get(CONF_EV_TARGET_SOC, DEFAULT_EV_TARGET_SOC)),
             ev_min_charge_w=_read_number(hass, "number.ems_ev_min_charge_w", 1400.0),
         )
 
@@ -308,9 +320,13 @@ class EvSchedulerOrchestrator:
             return
 
         ev_soc = _read_float_optional(hass, data.get(CONF_EV_SOC)) or 0.0
-        ev_target_soc = _read_number(hass, "number.ems_ev_target_soc", 80.0)
-        ev_capacity_kwh = float(data.get(CONF_EV_CAPACITY_KWH, 60.0))
-        ev_max_charge_kw = float(data.get(CONF_EV_MAX_CHARGE_KW, 7.4))
+        ev_target_soc = float(data.get(CONF_EV_TARGET_SOC, DEFAULT_EV_TARGET_SOC))
+        ev_capacity_kwh = _read_float(
+            hass, data.get(CONF_EV_CAPACITY_KWH), DEFAULT_EV_CAPACITY_KWH
+        )
+        ev_max_charge_kw = _read_float(
+            hass, data.get(CONF_EV_MAX_CHARGE_KW), DEFAULT_EV_MAX_CHARGE_KW
+        )
 
         kwh_needed = max(0.0, (ev_target_soc - ev_soc) / 100.0 * ev_capacity_kwh)
 
