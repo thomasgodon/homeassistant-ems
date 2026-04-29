@@ -38,6 +38,7 @@ _SOC_SENSOR = EntitySelectorConfig(domain=[SENSOR_DOMAIN])
 _BOOL_ENTITY = EntitySelectorConfig(domain=[BINARY_SENSOR_DOMAIN, INPUT_BOOLEAN_DOMAIN])
 _SELECT_ENTITY = EntitySelectorConfig(domain=[SELECT_DOMAIN, INPUT_SELECT_DOMAIN])
 _NUMBER_OR_INPUT_NUMBER = EntitySelectorConfig(domain=[NUMBER_DOMAIN, INPUT_NUMBER_DOMAIN])
+_NUMBER_OR_SENSOR = EntitySelectorConfig(domain=[NUMBER_DOMAIN, INPUT_NUMBER_DOMAIN, SENSOR_DOMAIN])
 
 
 class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -96,7 +97,7 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_EV_PLUG): EntitySelector(_BOOL_ENTITY),
             vol.Optional(CONF_EV_SOC): EntitySelector(_SOC_SENSOR),
             vol.Optional(CONF_EV_CAPACITY_KWH): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
-            vol.Optional(CONF_EV_TARGET_SOC): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
+            vol.Optional(CONF_EV_TARGET_SOC): EntitySelector(_NUMBER_OR_SENSOR),
         })
         return self.async_show_form(step_id="ev_charger", data_schema=schema)
 
@@ -206,7 +207,7 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
             vol.Optional(
                 CONF_EV_TARGET_SOC,
                 default=self._data.get(CONF_EV_TARGET_SOC),
-            ): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
+            ): EntitySelector(_NUMBER_OR_SENSOR),
         })
         return self.async_show_form(step_id="ev_charger", data_schema=schema)
 

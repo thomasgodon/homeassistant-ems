@@ -102,7 +102,7 @@ EMS does **not** write to your EV charger directly. It publishes `sensor.ems_ev_
 | `ev_plug` | binary_sensor / input_boolean | Whether the EV is plugged in |
 | `ev_soc` | sensor entity | EV battery state of charge (%) |
 | `ev_capacity_kwh` | `number` / `input_number` entity | EV battery capacity (kWh); reads entity state at runtime; falls back to `60.0` kWh when unset or unavailable |
-| `ev_target_soc` | `number` / `input_number` entity | SoC at which EV charging stops; reads entity state at runtime; falls back to `80` % when unset or unavailable |
+| `ev_target_soc` | `number` / `input_number` / `sensor` entity | SoC at which EV charging stops; reads entity state at runtime; falls back to `80` % when unset or unavailable |
 
 ### Step 4 — Price sources
 
@@ -144,7 +144,7 @@ The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`; rema
 
 ## Tunable thresholds
 
-`ev_target_soc`, `max_grid_import_w`, and `ev_capacity_kwh` are entity references: pick any `number` or `input_number` entity in the config flow; EMS reads the current value at runtime. Leave unset to use the default.
+`ev_target_soc`, `max_grid_import_w`, and `ev_capacity_kwh` are entity references: pick any `number`, `input_number`, or (for `ev_target_soc`) `sensor` entity in the config flow; EMS reads the current value at runtime. Leave unset to use the default.
 
 `ev_min_charge_w` is a live HA `number` entity — adjust it from the UI at any time.
 
@@ -152,7 +152,7 @@ The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`; rema
 |-------|-------------|---------|------|-------------|
 | Config flow Step 1 (entity selector) | `max_grid_import_w` | 4500 | W | Hard ceiling on grid import; EMS reads entity state each cycle |
 | Config flow Step 3 (entity selector) | `ev_capacity_kwh` | 60 | kWh | EV battery capacity; used to calculate kWh needed |
-| Config flow Step 3 (entity selector) | `ev_target_soc` | 80 | % | EV SoC at which charging stops; edit via dashboard without reconfiguring |
+| Config flow Step 3 (entity selector) | `ev_target_soc` | 80 | % | EV SoC at which charging stops; any `number`, `input_number`, or `sensor` entity; edit via dashboard without reconfiguring |
 | `number.ems_ev_min_charge_w` | — | 1400 | W | Minimum solar surplus required to start EV charging; below this the EV gets 0 W |
 
 ---

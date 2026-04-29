@@ -28,7 +28,7 @@
           "ev_plug": "EV plug status",
           "ev_soc": "EV battery SoC (%)",
           "ev_capacity_kwh": "EV battery capacity — number entity (kWh) — optional, defaults to 60 kWh",
-          "ev_target_soc": "EV target SoC — number entity (%) — optional, defaults to 80 %"
+          "ev_target_soc": "EV target SoC — number or sensor entity (%) — optional, defaults to 80 %"
         }
       },
       "price_sources": {
@@ -70,7 +70,7 @@
           "ev_plug": "EV plug status",
           "ev_soc": "EV battery SoC (%)",
           "ev_capacity_kwh": "EV battery capacity — number entity (kWh) — optional, defaults to 60 kWh",
-          "ev_target_soc": "EV target SoC — number entity (%) — optional, defaults to 80 %"
+          "ev_target_soc": "EV target SoC — number or sensor entity (%) — optional, defaults to 80 %"
         }
       },
       "price_sources": {
