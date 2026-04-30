@@ -7,7 +7,6 @@ import pytest
 from custom_components.ems.const import (
     CONF_EV_TARGET_SOC,
     CONF_MAX_GRID_IMPORT_W,
-    DEFAULT_EV_CAPACITY_KWH,
     DEFAULT_EV_TARGET_SOC,
     DEFAULT_MAX_GRID_IMPORT_W,
 )
@@ -35,8 +34,7 @@ def _make_hass(states: dict | None = None) -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# _build_inputs reads max_grid_import_w / ev_capacity_kwh / ev_target_soc
-# from entities (entity_ids stored in entry.data)
+# _build_inputs reads max_grid_import_w / ev_target_soc from entities
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -60,13 +58,11 @@ async def test_build_inputs_reads_max_grid_import_from_entity():
         "input_number.max_grid": 6000,
         "input_number.ev_target_soc": 75,
         "number.ems_ev_min_charge_w": 1400,
-        "switch.ems_ev_charging": "on",
-        "select.ems_ev_scheduling_strategy": "Off",
+        "select.ems_ev_charging_mode": "Off",
     })
 
     state = MagicMock()
     state.startup_grace_until = None
-    state.cached_window = None
 
     coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
     coordinator.hass = hass
@@ -78,46 +74,6 @@ async def test_build_inputs_reads_max_grid_import_from_entity():
 
     assert inputs.thresholds.max_grid_import_w == 6000.0
     assert inputs.thresholds.ev_target_soc == 75.0
-
-
-@pytest.mark.asyncio
-async def test_build_inputs_reads_ev_capacity_from_entity():
-    from custom_components.ems.coordinator import EmsStrategyCoordinator
-
-    entry = _make_entry({
-        "grid_import_power": "sensor.grid",
-        "pv_power": "sensor.pv",
-        "house_load": "sensor.load",
-        "ev_power": "sensor.ev",
-        CONF_MAX_GRID_IMPORT_W: "input_number.max_grid",
-        "ev_capacity_kwh": "input_number.ev_cap",
-    })
-
-    hass = _make_hass({
-        "sensor.grid": 0,
-        "sensor.pv": 0,
-        "sensor.load": 0,
-        "sensor.ev": 0,
-        "input_number.max_grid": 4500,
-        "input_number.ev_cap": 77.0,
-        "number.ems_ev_min_charge_w": 1400,
-        "switch.ems_ev_charging": "on",
-        "select.ems_ev_scheduling_strategy": "Off",
-    })
-
-    state = MagicMock()
-    state.startup_grace_until = None
-    state.cached_window = None
-
-    coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
-    coordinator.hass = hass
-    coordinator._entry = entry
-    coordinator._state = state
-
-    with patch("custom_components.ems.coordinator.dt_util"):
-        inputs = await coordinator._build_inputs()
-
-    assert inputs.ev_capacity_kwh == 77.0
 
 
 @pytest.mark.asyncio
@@ -135,13 +91,11 @@ async def test_build_inputs_uses_defaults_when_keys_absent():
     hass = _make_hass({
         "sensor.grid": 0, "sensor.pv": 0, "sensor.load": 0, "sensor.ev": 0,
         "number.ems_ev_min_charge_w": 1400,
-        "switch.ems_ev_charging": "on",
-        "select.ems_ev_scheduling_strategy": "Off",
+        "select.ems_ev_charging_mode": "Off",
     })
 
     state = MagicMock()
     state.startup_grace_until = None
-    state.cached_window = None
 
     coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
     coordinator.hass = hass
@@ -153,7 +107,6 @@ async def test_build_inputs_uses_defaults_when_keys_absent():
 
     assert inputs.thresholds.max_grid_import_w == DEFAULT_MAX_GRID_IMPORT_W
     assert inputs.thresholds.ev_target_soc == DEFAULT_EV_TARGET_SOC
-    assert inputs.ev_capacity_kwh == DEFAULT_EV_CAPACITY_KWH
 
 
 @pytest.mark.asyncio
@@ -166,7 +119,6 @@ async def test_build_inputs_uses_defaults_when_entity_unavailable():
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
         CONF_MAX_GRID_IMPORT_W: "input_number.max_grid",
-        "ev_capacity_kwh": "input_number.ev_cap",
         CONF_EV_TARGET_SOC: "input_number.ev_target_soc",
     })
 
@@ -174,15 +126,13 @@ async def test_build_inputs_uses_defaults_when_entity_unavailable():
         base_map = {
             "sensor.grid": "0", "sensor.pv": "0", "sensor.load": "0", "sensor.ev": "0",
             "number.ems_ev_min_charge_w": "1400",
-            "switch.ems_ev_charging": "on",
-            "select.ems_ev_scheduling_strategy": "Off",
+            "select.ems_ev_charging_mode": "Off",
         }
         if entity_id in base_map:
             s = MagicMock()
             s.state = base_map[entity_id]
             return s
-        if entity_id in ("input_number.max_grid", "input_number.ev_cap",
-                         "input_number.ev_target_soc"):
+        if entity_id in ("input_number.max_grid", "input_number.ev_target_soc"):
             s = MagicMock()
             s.state = "unavailable"
             return s
@@ -193,7 +143,6 @@ async def test_build_inputs_uses_defaults_when_entity_unavailable():
 
     state = MagicMock()
     state.startup_grace_until = None
-    state.cached_window = None
 
     coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
     coordinator.hass = hass
@@ -205,15 +154,10 @@ async def test_build_inputs_uses_defaults_when_entity_unavailable():
 
     assert inputs.thresholds.max_grid_import_w == DEFAULT_MAX_GRID_IMPORT_W
     assert inputs.thresholds.ev_target_soc == DEFAULT_EV_TARGET_SOC
-    assert inputs.ev_capacity_kwh == DEFAULT_EV_CAPACITY_KWH
 
-
-# ---------------------------------------------------------------------------
-# ev_min_charge_w still comes from number.ems_ev_min_charge_w
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_build_inputs_ev_min_charge_w_still_from_number_entity():
+async def test_build_inputs_ev_min_charge_w_from_number_entity():
     from custom_components.ems.coordinator import EmsStrategyCoordinator
 
     entry = _make_entry({
@@ -226,13 +170,11 @@ async def test_build_inputs_ev_min_charge_w_still_from_number_entity():
     hass = _make_hass({
         "sensor.grid": 0, "sensor.pv": 0, "sensor.load": 0, "sensor.ev": 0,
         "number.ems_ev_min_charge_w": 2000,
-        "switch.ems_ev_charging": "on",
-        "select.ems_ev_scheduling_strategy": "Off",
+        "select.ems_ev_charging_mode": "Off",
     })
 
     state = MagicMock()
     state.startup_grace_until = None
-    state.cached_window = None
 
     coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
     coordinator.hass = hass
@@ -245,60 +187,73 @@ async def test_build_inputs_ev_min_charge_w_still_from_number_entity():
     assert inputs.thresholds.ev_min_charge_w == 2000.0
 
 
-# ---------------------------------------------------------------------------
-# EvSchedulerOrchestrator._recompute reads ev_capacity_kwh / ev_target_soc
-# from entities
-# ---------------------------------------------------------------------------
-
 @pytest.mark.asyncio
-async def test_ev_scheduler_recompute_reads_ev_capacity_from_entities():
-    from custom_components.ems.coordinator import EvSchedulerOrchestrator
+async def test_build_inputs_reads_grid_import():
+    """grid_import_w is passed through from the sensor entity."""
+    from custom_components.ems.coordinator import EmsStrategyCoordinator
 
     entry = _make_entry({
-        "ev_plug": "binary_sensor.plug",
-        "ev_soc": "sensor.soc",
-        "ev_capacity_kwh": "input_number.ev_cap",
-        CONF_EV_TARGET_SOC: "input_number.ev_target_soc",
+        "grid_import_power": "sensor.grid",
         "pv_power": "sensor.pv",
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
     })
 
-    states = {
-        "binary_sensor.plug": "on",
-        "sensor.soc": "50",
-        "sensor.pv": "2000",
-        "sensor.load": "800",
-        "sensor.ev": "0",
-        "input_number.ev_cap": "80.0",
-        "input_number.ev_target_soc": "65.0",
-        "number.ems_ev_min_charge_w": "1400",
-        "select.ems_ev_scheduling_strategy": "Off",
-    }
-
-    hass = MagicMock()
-    hass.states.get = MagicMock(side_effect=lambda eid: (
-        lambda s: (lambda m: (setattr(m, "state", s), m)[1])(MagicMock())
-    )(states[eid]) if eid in states else None)
+    hass = _make_hass({
+        "sensor.grid": 1234,
+        "sensor.pv": 500,
+        "sensor.load": 800,
+        "sensor.ev": 0,
+        "number.ems_ev_min_charge_w": 1400,
+        "select.ems_ev_charging_mode": "Off",
+    })
 
     state = MagicMock()
-    state.cached_window = None
-    state.forecast_parse_warned = False
+    state.startup_grace_until = None
 
-    orch = EvSchedulerOrchestrator.__new__(EvSchedulerOrchestrator)
-    orch._hass = hass
-    orch._entry = entry
-    orch._state = state
+    coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
+    coordinator.hass = hass
+    coordinator._entry = entry
+    coordinator._state = state
 
-    with (
-        patch("custom_components.ems.coordinator.dt_util"),
-        patch("custom_components.ems.coordinator.compute_window") as mock_cw,
-    ):
-        mock_cw.return_value = MagicMock()
-        await orch._recompute()
+    with patch("custom_components.ems.coordinator.dt_util"):
+        inputs = await coordinator._build_inputs()
 
-    call_kwargs = mock_cw.call_args.kwargs
-    # soc=50, target=65, capacity=80 → needed = (65-50)/100 * 80 = 12.0 kWh
-    assert call_kwargs["kwh_needed"] == pytest.approx(12.0)
-    # max_charge_kw no longer passed to compute_window
-    assert "max_charge_kw" not in call_kwargs
+    assert inputs.grid_import_w == 1234.0
+
+
+@pytest.mark.asyncio
+async def test_build_inputs_battery_control_option_from_inverter_options():
+    """battery_control_option is extracted from CONF_INVERTER_OPTIONS['BATTERY_CONTROL']."""
+    from custom_components.ems.coordinator import EmsStrategyCoordinator
+
+    entry = _make_entry({
+        "grid_import_power": "sensor.grid",
+        "pv_power": "sensor.pv",
+        "house_load": "sensor.load",
+        "ev_power": "sensor.ev",
+        "inverter_select": "select.inv",
+        "inverter_options": {"SELF_USE": "Self Use", "BATTERY_CONTROL": "Bat Ctrl"},
+        "battery_discharge_cap_entity": "number.bat_cap",
+    })
+
+    hass = _make_hass({
+        "sensor.grid": 0, "sensor.pv": 0, "sensor.load": 0, "sensor.ev": 0,
+        "number.ems_ev_min_charge_w": 1400,
+        "select.ems_ev_charging_mode": "Off",
+    })
+
+    state = MagicMock()
+    state.startup_grace_until = None
+
+    coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
+    coordinator.hass = hass
+    coordinator._entry = entry
+    coordinator._state = state
+
+    with patch("custom_components.ems.coordinator.dt_util"):
+        inputs = await coordinator._build_inputs()
+
+    assert inputs.mapping.battery_control_option == "Bat Ctrl"
+    assert inputs.mapping.battery_discharge_cap_entity == "number.bat_cap"
+    assert inputs.mapping.self_use_option == "Self Use"

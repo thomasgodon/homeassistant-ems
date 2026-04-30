@@ -6,36 +6,30 @@
         "description": "Map your power sensors to EMS inputs.",
         "data": {
           "grid_import_power": "Grid import power (W)",
-          "grid_import_15m_avg": "Grid import 15-min average (W) — optional",
           "pv_power": "PV production power (W)",
           "house_load": "Total house load power (W)",
-          "ev_power": "EV charger power (W)"
+          "ev_power": "EV charger power (W)",
+          "max_grid_import_w": "Maximum grid import — number entity (W) — optional, defaults to 4500 W"
         }
       },
       "inverter": {
         "title": "Inverter Control (optional)",
-        "description": "Map your inverter's normal operating mode. Skip if you have no home battery.",
+        "description": "Configure inverter mode strings and battery discharge control. Skip if you have no home battery.",
         "data": {
           "inverter_select": "Inverter mode select entity",
-          "inverter_verb_self_use": "SELF_USE option string (your inverter's normal/self-use mode)"
+          "inverter_verb_self_use": "Normal/self-use option string (used when EV is not charging)",
+          "inverter_verb_battery_control": "Battery control option string (used when EV is charging)",
+          "battery_discharge_cap_entity": "Battery max discharge power entity (W)"
         }
       },
       "ev_charger": {
         "title": "EV Charger",
-        "description": "Configure EV sensors. EMS publishes sensor.ems_ev_charge_target_power (W) — wire your own automation to act on it.",
+        "description": "Configure EV sensors. EMS writes computed watts directly to ev_charge_target_entity every second.",
         "data": {
           "ev_plug": "EV plug status",
           "ev_soc": "EV battery SoC (%)",
-          "ev_capacity_kwh": "EV battery capacity (kWh)",
-          "ev_target_soc": "EV target SoC — number or sensor entity (%)"
-        }
-      },
-      "price_sources": {
-        "title": "Price Sources",
-        "description": "Required for Deadline and Price-optimised charging modes. Skip if you only use Solar-only or Off.",
-        "data": {
-          "import_price": "Current import price entity",
-          "forecast_path_import": "Import price forecast attribute path (dot-separated)"
+          "ev_target_soc": "EV target SoC — number or sensor entity (%)",
+          "ev_charge_target_entity": "EV charge power target entity (W)"
         }
       }
     }

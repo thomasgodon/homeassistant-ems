@@ -5,15 +5,12 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.helpers.restore_state import RestoreStateData
 
 from .const import (
-    CONF_EV_TARGET_SOC,
+    CONF_BATTERY_DISCHARGE_CAP_ENTITY,
+    CONF_EV_CHARGE_TARGET_ENTITY,
     CONF_INVERTER_OPTIONS,
     CONF_INVERTER_SELECT,
-    CONF_MAX_GRID_IMPORT_W,
-    DEFAULT_EV_TARGET_SOC,
-    DEFAULT_MAX_GRID_IMPORT_W,
     DOMAIN,
 )
 from .controller import Controller
@@ -21,7 +18,6 @@ from .coordinator import (
     EmsFastLoopCoordinator,
     EmsState,
     EmsStrategyCoordinator,
-    EvSchedulerOrchestrator,
 )
 from .models import VerbMapping
 
@@ -29,73 +25,39 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [
     Platform.SELECT,
-    Platform.SWITCH,
     Platform.NUMBER,
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
-    Platform.TIME,
 ]
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    if entry.version >= 4:
+    if entry.version >= 5:
         return True
 
     new_data = {**entry.data}
 
-    if entry.version < 2:
-        # v1 → v2: read max_grid_import_w / ev_target_soc from old number entities
-        restore = await RestoreStateData.async_get_instance(hass)
-        for key, entity_id, default in (
-            (CONF_MAX_GRID_IMPORT_W, "number.ems_max_grid_import_w", DEFAULT_MAX_GRID_IMPORT_W),
-            (CONF_EV_TARGET_SOC, "number.ems_ev_target_soc", DEFAULT_EV_TARGET_SOC),
-        ):
-            if key in new_data:
-                continue
-            last = restore.last_states.get(entity_id)
-            try:
-                new_data[key] = float(last.state.state) if last else default
-            except (ValueError, AttributeError):
-                new_data[key] = default
-
-    if entry.version < 3:
-        # v2 → v3: max_grid_import_w / ev_capacity_kwh / ev_max_charge_kw are now entity_ids
-        # Drop any scalar values — user must re-attach via Configure.
-        _SCALAR_KEYS_V3 = (CONF_MAX_GRID_IMPORT_W, "ev_capacity_kwh", "ev_max_charge_kw")
-        dropped = []
-        for key in _SCALAR_KEYS_V3:
-            val = new_data.get(key)
-            if isinstance(val, (int, float)):
-                del new_data[key]
-                dropped.append(key)
-        if dropped:
-            _LOGGER.warning(
-                "EMS v3 migration: removed scalar value(s) %s — go to Settings → "
-                "Devices & Services → EMS → Configure to re-attach number entities.",
-                dropped,
-            )
-
-    # v3 → v4: ev_target_soc is now an entity_id; inverter_power_target and
-    # ev_max_charge_kw are removed entirely. Drop any lingering scalar/string values
-    # so the user re-attaches ev_target_soc via Configure.
-    _SCALAR_KEYS_V4 = ("inverter_power_target", "ev_max_charge_kw")
-    dropped_v4 = []
-    for key in _SCALAR_KEYS_V4:
-        if key in new_data:
-            del new_data[key]
-            dropped_v4.append(key)
-    ev_target = new_data.get(CONF_EV_TARGET_SOC)
-    if isinstance(ev_target, (int, float)):
-        del new_data[CONF_EV_TARGET_SOC]
-        dropped_v4.append(CONF_EV_TARGET_SOC)
-    if dropped_v4:
+    # v1–v4 → v5: drop all old keys that no longer exist
+    _DROPPED_KEYS = (
+        "grid_import_15m_avg",
+        "ev_capacity_kwh",
+        "ev_max_charge_kw",
+        "inverter_power_target",
+        "import_price",
+        "forecast_path_import",
+        "ev_ready_by",
+    )
+    dropped = [k for k in _DROPPED_KEYS if k in new_data]
+    for key in dropped:
+        del new_data[key]
+    if dropped:
         _LOGGER.warning(
-            "EMS v4 migration: removed key(s) %s — go to Settings → "
-            "Devices & Services → EMS → Configure to re-attach number entities.",
-            dropped_v4,
+            "EMS v5 migration: removed obsolete key(s) %s — go to Settings → "
+            "Devices & Services → EMS → Configure to re-attach entities.",
+            dropped,
         )
 
-    hass.config_entries.async_update_entry(entry, data=new_data, version=4)
+    hass.config_entries.async_update_entry(entry, data=new_data, version=5)
     return True
 
 
@@ -104,11 +66,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     data = entry.data
     inverter_options_raw: dict = data.get(CONF_INVERTER_OPTIONS, {})
-    self_use_option = inverter_options_raw.get("SELF_USE") or None
 
     mapping = VerbMapping(
         inverter_select_entity=data.get(CONF_INVERTER_SELECT),
-        self_use_option=self_use_option,
+        self_use_option=inverter_options_raw.get("SELF_USE") or None,
+        battery_control_option=inverter_options_raw.get("BATTERY_CONTROL") or None,
+        battery_discharge_cap_entity=data.get(CONF_BATTERY_DISCHARGE_CAP_ENTITY),
+        ev_charge_target_entity=data.get(CONF_EV_CHARGE_TARGET_ENTITY),
     )
 
     state = EmsState()
@@ -116,20 +80,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     strategy_coordinator = EmsStrategyCoordinator(hass, entry, state, controller)
     fast_loop_coordinator = EmsFastLoopCoordinator(hass, entry, state, controller)
-    ev_orchestrator = EvSchedulerOrchestrator(hass, entry, state)
 
     await strategy_coordinator.async_setup()
 
     await strategy_coordinator.async_config_entry_first_refresh()
     await fast_loop_coordinator.async_config_entry_first_refresh()
-    await ev_orchestrator.async_start()
 
     hass.data[DOMAIN][entry.entry_id] = {
         "state": state,
         "controller": controller,
         "strategy_coordinator": strategy_coordinator,
         "fast_loop_coordinator": fast_loop_coordinator,
-        "ev_orchestrator": ev_orchestrator,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -142,21 +103,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        domain_data = hass.data[DOMAIN].pop(entry.entry_id, {})
-        ev_orch = domain_data.get("ev_orchestrator")
-        if ev_orch:
-            ev_orch.async_stop()
+        hass.data[DOMAIN].pop(entry.entry_id, {})
         _unregister_services(hass)
     return unload_ok
 
 
 def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    async def handle_recompute_ev_window(call: ServiceCall) -> None:
-        domain_data = hass.data[DOMAIN].get(entry.entry_id, {})
-        orch = domain_data.get("ev_orchestrator")
-        if orch:
-            await orch._recompute()
-
     async def handle_simulate(call: ServiceCall) -> dict:
         domain_data = hass.data[DOMAIN].get(entry.entry_id, {})
         coordinator = domain_data.get("strategy_coordinator")
@@ -172,13 +124,11 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
         return {
             "strategy": decision.strategy,
-            "inverter_verb": decision.inverter_verb.value if decision.inverter_verb else None,
-            "inverter_option": inputs.mapping.self_use_option if decision.inverter_verb else None,
+            "battery_discharge_cap_w": decision.battery_discharge_cap_w,
             "ev_charge_power_w": decision.ev_charge_power_w,
             "computed_at": inputs.now.isoformat(),
         }
 
-    hass.services.async_register(DOMAIN, "recompute_ev_window", handle_recompute_ev_window)
     hass.services.async_register(
         DOMAIN, "simulate", handle_simulate,
         supports_response=SupportsResponse.ONLY,
@@ -187,5 +137,4 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 def _unregister_services(hass: HomeAssistant) -> None:
     if not hass.data.get(DOMAIN):
-        for service in ("recompute_ev_window", "simulate"):
-            hass.services.async_remove(DOMAIN, service)
+        hass.services.async_remove(DOMAIN, "simulate")

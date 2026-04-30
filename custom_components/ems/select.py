@@ -15,14 +15,14 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     async_add_entities([
-        EmsEvSchedulingStrategy(),
+        EmsEvChargingMode(),
     ])
 
 
-class EmsEvSchedulingStrategy(SelectEntity, RestoreEntity):
-    _attr_unique_id = "ems_ev_scheduling_strategy"
-    _attr_name = "EMS EV Scheduling Strategy"
-    _attr_options = ["Deadline", "Price-optimised", "Solar-only", "Off"]
+class EmsEvChargingMode(SelectEntity, RestoreEntity):
+    _attr_unique_id = "ems_ev_charging_mode"
+    _attr_name = "EMS EV Charging Mode"
+    _attr_options = ["Energy-optimised", "Off"]
     _attr_current_option = "Off"
     _attr_icon = "mdi:car-electric"
 

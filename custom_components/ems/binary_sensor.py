@@ -18,7 +18,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator: EmsStrategyCoordinator = hass.data[DOMAIN][entry.entry_id]["strategy_coordinator"]
     async_add_entities([
-        EmsInEvChargingWindowSensor(coordinator),
+        EmsEvChargingActiveSensor(coordinator),
     ])
 
 
@@ -35,17 +35,14 @@ class _EmsBaseBinarySensor(CoordinatorEntity[EmsStrategyCoordinator], BinarySens
         return self.coordinator.data
 
 
-class EmsInEvChargingWindowSensor(_EmsBaseBinarySensor):
-    _attr_unique_id = "ems_in_ev_charging_window"
-    _attr_name = "EMS In EV Charging Window"
+class EmsEvChargingActiveSensor(_EmsBaseBinarySensor):
+    _attr_unique_id = "ems_ev_charging_active"
+    _attr_name = "EMS EV Charging Active"
     _attr_icon = "mdi:car-electric"
 
     @property
     def is_on(self) -> bool:
-        window = self.coordinator._state.cached_window
-        if window is None or not window.in_window_now:
-            return False
-        if self._result is None:
-            return False
-        inp = self._result.inputs
-        return inp.ev_plugged and (inp.ev_soc is None or inp.ev_soc < inp.thresholds.ev_target_soc)
+        return (
+            self._result is not None
+            and self._result.decision.strategy == "ev_charging"
+        )

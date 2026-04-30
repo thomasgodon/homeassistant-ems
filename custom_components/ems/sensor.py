@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -19,11 +20,8 @@ async def async_setup_entry(
     coordinator: EmsStrategyCoordinator = hass.data[DOMAIN][entry.entry_id]["strategy_coordinator"]
     async_add_entities([
         EmsCurrentStrategySensor(coordinator),
-        EmsEvKwhNeededSensor(coordinator),
-        EmsCheapestWindowStartSensor(coordinator),
-        EmsCheapestWindowEndSensor(coordinator),
-        EmsInverterTargetVerbSensor(coordinator),
-        EmsEvChargeTargetPowerSensor(coordinator),
+        EmsBatteryDischargeCap(coordinator),
+        EmsEvChargePower(coordinator),
     ])
 
 
@@ -52,71 +50,29 @@ class EmsCurrentStrategySensor(_EmsBaseSensor):
         return self._result.decision.strategy
 
 
-class EmsEvKwhNeededSensor(_EmsBaseSensor):
-    _attr_unique_id = "ems_ev_kwh_needed"
-    _attr_name = "EMS EV kWh Needed"
-    _attr_native_unit_of_measurement = "kWh"
+class EmsBatteryDischargeCap(_EmsBaseSensor):
+    _attr_unique_id = "ems_battery_discharge_cap"
+    _attr_name = "EMS Battery Discharge Cap"
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:car-electric"
+    _attr_icon = "mdi:battery-arrow-down"
 
     @property
     def native_value(self) -> float | None:
         if self._result is None:
             return None
-        inp = self._result.inputs
-        if inp.ev_soc is None:
-            return None
-        return max(0.0, (inp.thresholds.ev_target_soc - inp.ev_soc) / 100.0 * inp.ev_capacity_kwh)
+        return self._result.decision.battery_discharge_cap_w
 
 
-class EmsCheapestWindowStartSensor(_EmsBaseSensor):
-    _attr_unique_id = "ems_cheapest_window_start"
-    _attr_name = "EMS Cheapest Window Start"
-    _attr_device_class = "timestamp"
-    _attr_icon = "mdi:clock-start"
-
-    @property
-    def native_value(self):
-        if self.coordinator._state.cached_window is None:
-            return None
-        return self.coordinator._state.cached_window.start
-
-
-class EmsCheapestWindowEndSensor(_EmsBaseSensor):
-    _attr_unique_id = "ems_cheapest_window_end"
-    _attr_name = "EMS Cheapest Window End"
-    _attr_device_class = "timestamp"
-    _attr_icon = "mdi:clock-end"
-
-    @property
-    def native_value(self):
-        if self.coordinator._state.cached_window is None:
-            return None
-        return self.coordinator._state.cached_window.end
-
-
-class EmsInverterTargetVerbSensor(_EmsBaseSensor):
-    _attr_unique_id = "ems_inverter_target_verb"
-    _attr_name = "EMS Inverter Target Verb"
-    _attr_icon = "mdi:lightning-bolt"
-
-    @property
-    def native_value(self) -> str | None:
-        if self._result is None:
-            return None
-        verb = self._result.decision.inverter_verb
-        return verb.value if verb else None
-
-
-class EmsEvChargeTargetPowerSensor(_EmsBaseSensor):
-    _attr_unique_id = "ems_ev_charge_target_power"
-    _attr_name = "EMS EV Charge Target Power"
-    _attr_native_unit_of_measurement = "W"
+class EmsEvChargePower(_EmsBaseSensor):
+    _attr_unique_id = "ems_ev_charge_power"
+    _attr_name = "EMS EV Charge Power"
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:ev-station"
 
     @property
-    def native_value(self) -> float:
+    def native_value(self) -> float | None:
         if self._result is None:
-            return 0.0
+            return None
         return self._result.decision.ev_charge_power_w

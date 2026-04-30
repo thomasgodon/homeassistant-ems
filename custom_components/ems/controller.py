@@ -4,7 +4,7 @@ import logging
 
 from homeassistant.core import HomeAssistant
 
-from .models import Decision, InverterVerb, VerbMapping
+from .models import Decision, VerbMapping
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -13,44 +13,89 @@ class Controller:
     def __init__(self, hass: HomeAssistant, mapping: VerbMapping) -> None:
         self._hass = hass
         self._mapping = mapping
-        self._last_inverter_verb: InverterVerb | None = None
+        self._last_inverter_option: str | None = None
+        self._last_ev_charge_w: float | None = None
+        self._last_battery_discharge_cap: float | None = None
 
     def update_mapping(self, mapping: VerbMapping) -> None:
         self._mapping = mapping
 
     async def write_full(self, decision: Decision, *, suppress_writes: bool = False) -> None:
-        """Called by 10 s and 1 s coords. Idempotent. No-op when EV is idle."""
+        """Called by 10 s and 1 s coordinators. Idempotent."""
         if decision.ev_charge_power_w == 0.0:
             self.reset_write_cache()
+            if not suppress_writes:
+                await self._write_inverter_self_use()
+                await self._write_ev_target(0.0)
             return
 
         if suppress_writes:
             _LOGGER.debug("Startup grace: would write strategy=%s", decision.strategy)
             return
 
-        await self._write_inverter(decision)
+        await self._write_inverter_battery_control()
+        await self._write_battery_discharge_cap(decision.battery_discharge_cap_w)
+        await self._write_ev_target(decision.ev_charge_power_w)
 
     # ── private helpers ───────────────────────────────────────────────────────
 
-    async def _write_inverter(self, decision: Decision) -> None:
-        verb = decision.inverter_verb
-        if verb is None:
-            return
+    async def _write_inverter_self_use(self) -> None:
         option = self._mapping.self_use_option
         if not option:
             return
+        await self._select_inverter_option(option)
 
-        if verb != self._last_inverter_verb:
-            entity = self._mapping.inverter_select_entity
-            if entity:
-                _LOGGER.info("Inverter → %s (%s) via %s", verb.value, option, entity)
-                await self._hass.services.async_call(
-                    entity.split(".", 1)[0],
-                    "select_option",
-                    {"entity_id": entity, "option": option},
-                    blocking=True,
-                )
-                self._last_inverter_verb = verb
+    async def _write_inverter_battery_control(self) -> None:
+        option = self._mapping.battery_control_option
+        if not option:
+            return
+        await self._select_inverter_option(option)
+
+    async def _select_inverter_option(self, option: str) -> None:
+        if option == self._last_inverter_option:
+            return
+        entity = self._mapping.inverter_select_entity
+        if not entity:
+            return
+        _LOGGER.info("Inverter → %s via %s", option, entity)
+        await self._hass.services.async_call(
+            entity.split(".", 1)[0],
+            "select_option",
+            {"entity_id": entity, "option": option},
+            blocking=True,
+        )
+        self._last_inverter_option = option
+
+    async def _write_battery_discharge_cap(self, cap_w: float) -> None:
+        entity = self._mapping.battery_discharge_cap_entity
+        if not entity:
+            return
+        if cap_w == self._last_battery_discharge_cap:
+            return
+        _LOGGER.debug("Battery discharge cap → %.0f W via %s", cap_w, entity)
+        await self._hass.services.async_call(
+            "number",
+            "set_value",
+            {"entity_id": entity, "value": cap_w},
+            blocking=True,
+        )
+        self._last_battery_discharge_cap = cap_w
+
+    async def _write_ev_target(self, watts: float) -> None:
+        entity = self._mapping.ev_charge_target_entity
+        if not entity:
+            return
+        if watts == self._last_ev_charge_w:
+            return
+        await self._hass.services.async_call(
+            "number",
+            "set_value",
+            {"entity_id": entity, "value": watts},
+            blocking=True,
+        )
+        self._last_ev_charge_w = watts
 
     def reset_write_cache(self) -> None:
-        self._last_inverter_verb = None
+        self._last_inverter_option = None
+        self._last_ev_charge_w = None
+        self._last_battery_discharge_cap = None

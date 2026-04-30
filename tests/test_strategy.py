@@ -1,212 +1,269 @@
+"""Tests for strategy.decide() and strategy.recompute().
+
+Grid headroom algorithm:
+  house_non_ev          = max(0, house_load_w - ev_power_w)
+  solar_for_ev          = max(0, pv_w - house_non_ev)
+  battery_discharge_cap = max(0, house_non_ev - pv_w)
+  grid_headroom         = max(0, max_grid_import_w - (grid_import_w - ev_power_w))
+  ev_target_w           = solar_for_ev + grid_headroom
+"""
 from __future__ import annotations
 
-import dataclasses
+import pytest
 
 from custom_components.ems import strategy as strategy_module
-from custom_components.ems.models import Features, InverterVerb
+from custom_components.ems.models import Decision, Thresholds
 
-from .conftest import _DEFAULT_FEATURES, _DEFAULT_THRESHOLDS, InputsBuilder
+# ── fixtures / helpers ────────────────────────────────────────────────────────
 
-
-def _features(**overrides) -> Features:
-    return Features(**{**dataclasses.asdict(_DEFAULT_FEATURES), **overrides})
-
-
-def _thresholds(**overrides):
-    return dataclasses.replace(_DEFAULT_THRESHOLDS, **overrides)
+_THRESHOLDS = Thresholds(
+    max_grid_import_w=4500.0,
+    ev_target_soc=80.0,
+    ev_min_charge_w=1400.0,
+)
 
 
-# ── idle gates ────────────────────────────────────────────────────────────────
-
-def test_ev_not_plugged_is_idle(builder: InputsBuilder) -> None:
-    inp = builder.build(ev_plugged=False, ev_strategy="Solar-only")
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_idle"
-    assert decision.ev_charge_power_w == 0.0
-    assert decision.inverter_verb is None
+def decide(builder, **overrides) -> Decision:
+    return strategy_module.decide(builder.build(**overrides))
 
 
-def test_ev_strategy_off_is_idle(builder: InputsBuilder) -> None:
-    inp = builder.build(ev_plugged=True, ev_soc=50, ev_strategy="Off")
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_idle"
-    assert decision.ev_charge_power_w == 0.0
-
-
-def test_ev_at_target_soc_is_idle(builder: InputsBuilder) -> None:
-    inp = builder.build(ev_plugged=True, ev_soc=80.0, ev_strategy="Solar-only")
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_idle"
-    assert decision.ev_charge_power_w == 0.0
-
-
-def test_ev_switch_off_is_idle(builder: InputsBuilder) -> None:
-    inp = builder.build(
-        ev_plugged=True,
-        ev_soc=50,
-        ev_strategy="Solar-only",
-        pv_w=5000,
-        house_load_w=1000,
-        ev_power_w=0,
-        features=_features(ev_charging=False),
-    )
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_idle"
-    assert decision.ev_charge_power_w == 0.0
-
-
-# ── solar surplus path ────────────────────────────────────────────────────────
-
-def test_solar_surplus_below_minimum_is_idle(builder: InputsBuilder) -> None:
-    """Surplus < ev_min_charge_w (1400) → idle."""
-    inp = builder.build(
-        ev_plugged=True,
-        ev_soc=50,
-        ev_strategy="Solar-only",
-        pv_w=2500,
-        house_load_w=1500,
-        ev_power_w=0,
-    )
-    # surplus = 2500 - max(0, 1500-0) = 1000 < 1400
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_idle"
-    assert decision.ev_charge_power_w == 0.0
-
-
-def test_solar_surplus_above_minimum(builder: InputsBuilder) -> None:
-    """Surplus ≥ ev_min_charge_w → EV gets the surplus."""
-    inp = builder.build(
-        ev_plugged=True,
-        ev_soc=50,
-        ev_strategy="Solar-only",
-        pv_w=5000,
-        house_load_w=1500,
-        ev_power_w=0,
-    )
-    # house_non_ev = 1500; surplus = 5000-1500 = 3500
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_charging_solar"
-    assert decision.ev_charge_power_w == 3500.0
-    assert decision.inverter_verb == InverterVerb.SELF_USE
-
-
-def test_solar_house_non_ev_derived_from_load_minus_ev(builder: InputsBuilder) -> None:
-    """house_non_ev = house_load - ev_power; surplus uses non-EV load."""
-    inp = builder.build(
-        ev_plugged=True,
-        ev_soc=50,
-        ev_strategy="Solar-only",
-        pv_w=4000,
-        house_load_w=3000,   # 2500 of which is EV; non-EV = 500
-        ev_power_w=2500,
-    )
-    # house_non_ev = max(0, 3000-2500) = 500; surplus = 4000-500 = 3500 ≥ 1400
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_charging_solar"
-    assert decision.ev_charge_power_w == 3500.0
-
-
-# ── cheap window path ─────────────────────────────────────────────────────────
-
-def test_cheap_window_full_speed(builder: InputsBuilder) -> None:
-    """in_cheap_window → ev_target = max_grid + pv - house_non_ev."""
-    inp = builder.build(
-        ev_plugged=True,
-        ev_soc=50,
-        ev_strategy="Price-optimised",
-        in_cheap_window=True,
-        pv_w=0,
-        house_load_w=1500,
-        ev_power_w=0,
-    )
-    # ev_target = 4500 + 0 - 1500 = 3000
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_charging_grid"
-    assert decision.ev_charge_power_w == 3000.0
-    assert decision.inverter_verb == InverterVerb.SELF_USE
-
-
-def test_cheap_window_deadline_strategy(builder: InputsBuilder) -> None:
-    """Deadline strategy also uses cheap window when in_cheap_window=True."""
-    inp = builder.build(
-        ev_plugged=True,
-        ev_soc=50,
-        ev_strategy="Deadline",
-        in_cheap_window=True,
-        pv_w=0,
-        house_load_w=1000,
-        ev_power_w=0,
-    )
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_charging_grid"
-
-
-def test_solar_only_strategy_ignores_cheap_window(builder: InputsBuilder) -> None:
-    """Solar-only mode never uses grid, even with in_cheap_window=True."""
-    inp = builder.build(
-        ev_plugged=True,
-        ev_soc=50,
-        ev_strategy="Solar-only",
-        in_cheap_window=True,
-        pv_w=500,
-        house_load_w=1500,
-        ev_power_w=0,
-    )
-    # pv < house → no surplus → idle (Solar-only ignores cheap window)
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_idle"
-    assert decision.ev_charge_power_w == 0.0
-
-
-def test_outside_cheap_window_falls_back_to_solar(builder: InputsBuilder) -> None:
-    """Price-optimised outside window falls through to solar surplus path."""
-    inp = builder.build(
-        ev_plugged=True,
-        ev_soc=50,
-        ev_strategy="Price-optimised",
-        in_cheap_window=False,
-        pv_w=5000,
-        house_load_w=1500,
-        ev_power_w=0,
-    )
-    # no cheap window → solar path; surplus = 3500 ≥ 1400
-    decision = strategy_module.decide(inp)
-    assert decision.strategy == "ev_charging_solar"
-    assert decision.ev_charge_power_w == 3500.0
-
-
-# ── idle when verb is None ────────────────────────────────────────────────────
-
-def test_inverter_not_written_when_idle(builder: InputsBuilder) -> None:
-    """When EV is idle, inverter_verb is None (controller skips write)."""
-    inp = builder.build(ev_plugged=False)
-    decision = strategy_module.decide(inp)
-    assert decision.inverter_verb is None
-
-
-# ── recompute fast path ───────────────────────────────────────────────────────
-
-def test_recompute_matches_decide(builder: InputsBuilder) -> None:
-    """recompute() with same values as decide() must return same ev_charge_power_w."""
-    inp = builder.build(
-        ev_plugged=True,
-        ev_soc=50,
-        ev_strategy="Solar-only",
-        pv_w=5000,
-        house_load_w=1500,
-        ev_power_w=0,
-    )
-    full = strategy_module.decide(inp)
-    fast = strategy_module.recompute(
+def recompute(builder, **overrides) -> Decision:
+    inp = builder.build(**overrides)
+    return strategy_module.recompute(
+        grid_import_w=inp.grid_import_w,
         pv_w=inp.pv_w,
         house_load_w=inp.house_load_w,
         ev_power_w=inp.ev_power_w,
         ev_plugged=inp.ev_plugged,
         ev_soc=inp.ev_soc,
         ev_strategy=inp.ev_strategy,
-        ev_charging_enabled=inp.features.ev_charging,
-        in_cheap_window=inp.in_cheap_window,
         thresholds=inp.thresholds,
     )
-    assert fast.ev_charge_power_w == full.ev_charge_power_w
-    assert fast.strategy == full.strategy
+
+
+# ── idle gates ────────────────────────────────────────────────────────────────
+
+def test_idle_when_ev_not_plugged(builder) -> None:
+    d = decide(builder, ev_plugged=False, ev_strategy="Energy-optimised")
+    assert d.strategy == "ev_idle"
+    assert d.ev_charge_power_w == 0.0
+
+
+def test_idle_when_strategy_off(builder) -> None:
+    d = decide(builder, ev_plugged=True, ev_strategy="Off")
+    assert d.strategy == "ev_idle"
+    assert d.ev_charge_power_w == 0.0
+
+
+def test_idle_when_soc_at_target(builder) -> None:
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=80.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_idle"
+
+
+def test_idle_when_soc_above_target(builder) -> None:
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=95.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_idle"
+
+
+def test_charges_when_soc_below_target(builder) -> None:
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=50.0,
+        grid_import_w=0.0,
+        pv_w=2000.0,
+        house_load_w=500.0,
+        ev_power_w=0.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_charging"
+
+
+def test_charges_when_soc_is_none(builder) -> None:
+    """No SoC configured → no SoC gate → can charge."""
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=None,
+        grid_import_w=0.0,
+        pv_w=2000.0,
+        house_load_w=500.0,
+        ev_power_w=0.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_charging"
+
+
+# ── user spec examples ────────────────────────────────────────────────────────
+
+def test_spec_example_1_pv_surplus_no_battery_drain(builder) -> None:
+    """pv=500, house_non_ev=200 → battery_cap=0, solar_for_ev=300."""
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=50.0,
+        pv_w=500.0,
+        house_load_w=200.0,
+        ev_power_w=0.0,
+        grid_import_w=-300.0,  # currently exporting 300W
+        thresholds=thresholds,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.battery_discharge_cap_w == 0.0
+    # solar_for_ev=300, grid_headroom=4500-(-300-0)=4800 → total 5100
+    assert d.ev_charge_power_w == pytest.approx(5100.0)
+
+
+def test_spec_example_2_no_pv_house_from_battery(builder) -> None:
+    """pv=0, house_non_ev=200 → battery covers 200W for house, EV from grid only."""
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=50.0,
+        pv_w=0.0,
+        house_load_w=200.0,
+        ev_power_w=0.0,
+        grid_import_w=200.0,
+        thresholds=thresholds,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.battery_discharge_cap_w == pytest.approx(200.0)
+    # grid_headroom = 4500 - (200 - 0) = 4300 (grid already importing 200 for house)
+    assert d.ev_charge_power_w == pytest.approx(4300.0)
+
+
+def test_spec_example_3_partial_pv(builder) -> None:
+    """pv=150, house_non_ev=200 → battery covers 50W for house, EV from grid."""
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=50.0,
+        pv_w=150.0,
+        house_load_w=200.0,
+        ev_power_w=0.0,
+        grid_import_w=50.0,  # 50W from grid for house shortfall
+        thresholds=thresholds,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.battery_discharge_cap_w == pytest.approx(50.0)
+    # grid_headroom = 4500 - (50 - 0) = 4450
+    assert d.ev_charge_power_w == pytest.approx(4450.0)
+
+
+# ── grid headroom formula ─────────────────────────────────────────────────────
+
+def test_grid_headroom_reduces_ev_target(builder) -> None:
+    """When grid is already loaded, EV target is reduced accordingly."""
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=50.0,
+        pv_w=0.0,
+        house_load_w=1000.0,
+        ev_power_w=2000.0,
+        grid_import_w=5500.0,  # 5500 - 2000 = 3500 non-EV grid draw
+        thresholds=thresholds,
+    )
+    # grid_headroom = 4500 - (5500 - 2000) = 1000; solar_for_ev = 0
+    assert d.ev_charge_power_w == pytest.approx(1000.0)
+
+
+def test_grid_headroom_clamps_to_zero_goes_idle(builder) -> None:
+    """When non-EV grid draw exceeds limit and no solar surplus → idle."""
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=50.0,
+        pv_w=0.0,
+        house_load_w=5000.0,
+        ev_power_w=1000.0,
+        grid_import_w=5800.0,  # non-EV grid = 4800 > 4500
+        thresholds=thresholds,
+    )
+    assert d.strategy == "ev_idle"
+
+
+# ── minimum charge gate ───────────────────────────────────────────────────────
+
+def test_idle_when_below_minimum(builder) -> None:
+    """If ev_target_w < ev_min_charge_w, stay idle."""
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=50.0,
+        pv_w=100.0,
+        house_load_w=200.0,
+        ev_power_w=0.0,
+        grid_import_w=4400.0,  # non-EV grid=4400, headroom=100; solar_for_ev=0; total=100
+        thresholds=Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=1400.0),
+    )
+    assert d.strategy == "ev_idle"
+
+
+def test_charges_above_minimum(builder) -> None:
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=50.0,
+        pv_w=0.0,
+        house_load_w=500.0,
+        ev_power_w=0.0,
+        grid_import_w=500.0,
+        thresholds=Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=1400.0),
+    )
+    # grid_headroom = 4500 - 500 = 4000 >= 1400
+    assert d.strategy == "ev_charging"
+    assert d.ev_charge_power_w == pytest.approx(4000.0)
+
+
+# ── recompute matches decide ──────────────────────────────────────────────────
+
+def test_recompute_matches_decide(builder) -> None:
+    inp = builder.build(
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        ev_soc=50.0,
+        pv_w=500.0,
+        house_load_w=300.0,
+        ev_power_w=1500.0,
+        grid_import_w=1800.0,
+        thresholds=_THRESHOLDS,
+    )
+    d1 = strategy_module.decide(inp)
+    d2 = strategy_module.recompute(
+        grid_import_w=inp.grid_import_w,
+        pv_w=inp.pv_w,
+        house_load_w=inp.house_load_w,
+        ev_power_w=inp.ev_power_w,
+        ev_plugged=inp.ev_plugged,
+        ev_soc=inp.ev_soc,
+        ev_strategy=inp.ev_strategy,
+        thresholds=inp.thresholds,
+    )
+    assert d1 == d2
