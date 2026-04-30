@@ -178,20 +178,6 @@ The controller's write-cache is cleared on idle so the next active tick re-fires
 
 ## Exposed entities
 
-### Sensors (`sensor.ems_*`)
-
-| Entity | Unit | Description |
-|--------|------|-------------|
-| `sensor.ems_current_strategy` | — | Active label: `ev_charging`, `ev_idle`, `starting_up` |
-| `sensor.ems_battery_discharge_cap` | W | Battery max discharge power currently commanded |
-| `sensor.ems_ev_charge_power` | W | EV charge power currently commanded |
-
-### Binary sensors (`binary_sensor.ems_*`)
-
-| Entity | Description |
-|--------|-------------|
-| `binary_sensor.ems_ev_charging_active` | `true` when EV is actively charging (strategy = `ev_charging`) |
-
 ### Number entities (`number.ems_*`)
 
 | Entity | Default | Unit | Description |

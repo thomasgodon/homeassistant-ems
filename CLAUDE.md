@@ -13,7 +13,7 @@ Any change to integration code or behavior MUST update `README.md` in the same t
 `README.md` must always cover:
 - **Core working**: the two-loop architecture and decision algorithm.
 - **Inputs**: every config-flow field (all 3 steps, required vs optional), every runtime entity read by `coordinator.py::_build_inputs`, every `number.ems_*` threshold.
-- **Outputs**: every HA service `controller.py` calls (when EV charging vs idle), every entity the integration registers (sensor, binary_sensor, number, select).
+- **Outputs**: every HA service `controller.py` calls (when EV charging vs idle), every entity the integration registers (number, select).
 
 When updating: edit the matching README section in the same commit. If a new input or output is added, add a row to the relevant table.
 
