@@ -170,6 +170,12 @@ The controller's write-cache is cleared on idle so the next active tick re-fires
 
 ## Exposed entities
 
+### Binary sensor entities (`binary_sensor.ems_*`)
+
+| Entity | Description |
+|--------|-------------|
+| `binary_sensor.ems_ev_charging` | `on` when EMS is actively charging the EV; `off` otherwise. Never unavailable. |
+
 ### Number entities (`number.ems_*`)
 
 | Entity | Default | Unit | Description |
