@@ -234,7 +234,7 @@ async def test_build_inputs_battery_control_option_from_inverter_options():
         "ev_power": "sensor.ev",
         "inverter_select": "select.inv",
         "inverter_options": {"SELF_USE": "Self Use", "BATTERY_CONTROL": "Bat Ctrl"},
-        "battery_discharge_cap_entity": "number.bat_cap",
+        "active_power_entity": "number.bat_cap",
     })
 
     hass = _make_hass({
@@ -255,5 +255,5 @@ async def test_build_inputs_battery_control_option_from_inverter_options():
         inputs = await coordinator._build_inputs()
 
     assert inputs.mapping.battery_control_option == "Bat Ctrl"
-    assert inputs.mapping.battery_discharge_cap_entity == "number.bat_cap"
+    assert inputs.mapping.active_power_entity == "number.bat_cap"
     assert inputs.mapping.self_use_option == "Self Use"

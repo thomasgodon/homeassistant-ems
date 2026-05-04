@@ -15,7 +15,7 @@ class Controller:
         self._mapping = mapping
         self._last_inverter_option: str | None = None
         self._last_ev_charge_w: float | None = None
-        self._last_battery_discharge_cap: float | None = None
+        self._last_active_power: float | None = None
 
     def update_mapping(self, mapping: VerbMapping) -> None:
         self._mapping = mapping
@@ -34,7 +34,7 @@ class Controller:
             return
 
         await self._write_inverter_battery_control()
-        await self._write_battery_discharge_cap(decision.battery_discharge_cap_w)
+        await self._write_active_power(decision.active_power_w)
         await self._write_ev_target(decision.ev_charge_power_w)
 
     # ── private helpers ───────────────────────────────────────────────────────
@@ -66,20 +66,20 @@ class Controller:
         )
         self._last_inverter_option = option
 
-    async def _write_battery_discharge_cap(self, cap_w: float) -> None:
-        entity = self._mapping.battery_discharge_cap_entity
+    async def _write_active_power(self, active_power_w: float) -> None:
+        entity = self._mapping.active_power_entity
         if not entity:
             return
-        if cap_w == self._last_battery_discharge_cap:
+        if active_power_w == self._last_active_power:
             return
-        _LOGGER.debug("Battery discharge cap → %.0f W via %s", cap_w, entity)
+        _LOGGER.debug("Active power → %.0f W via %s", active_power_w, entity)
         await self._hass.services.async_call(
             "number",
             "set_value",
-            {"entity_id": entity, "value": cap_w},
+            {"entity_id": entity, "value": active_power_w},
             blocking=True,
         )
-        self._last_battery_discharge_cap = cap_w
+        self._last_active_power = active_power_w
 
     async def _write_ev_target(self, watts: float) -> None:
         entity = self._mapping.ev_charge_target_entity
@@ -98,4 +98,4 @@ class Controller:
     def reset_write_cache(self) -> None:
         self._last_inverter_option = None
         self._last_ev_charge_w = None
-        self._last_battery_discharge_cap = None
+        self._last_active_power = None

@@ -11,7 +11,7 @@ _MAPPING = VerbMapping(
     inverter_select_entity="select.inverter",
     self_use_option="Self Use",
     battery_control_option="Battery Control",
-    battery_discharge_cap_entity=None,
+    active_power_entity=None,
     ev_charge_target_entity=None,
 )
 
@@ -19,7 +19,7 @@ _MAPPING_WITH_TARGET = VerbMapping(
     inverter_select_entity="select.inverter",
     self_use_option="Self Use",
     battery_control_option="Battery Control",
-    battery_discharge_cap_entity="number.battery_cap",
+    active_power_entity="number.battery_cap",
     ev_charge_target_entity="number.ev_charger_power",
 )
 
@@ -27,7 +27,7 @@ _MAPPING_NO_INVERTER = VerbMapping(
     inverter_select_entity=None,
     self_use_option=None,
     battery_control_option=None,
-    battery_discharge_cap_entity=None,
+    active_power_entity=None,
     ev_charge_target_entity=None,
 )
 
@@ -35,7 +35,7 @@ _MAPPING_NO_INVERTER = VerbMapping(
 def _make_decision(**overrides) -> Decision:
     defaults = dict(
         strategy="ev_charging",
-        battery_discharge_cap_w=200.0,
+        active_power_w=200.0,
         ev_charge_power_w=3500.0,
     )
     defaults.update(overrides)
@@ -45,7 +45,7 @@ def _make_decision(**overrides) -> Decision:
 def _make_idle() -> Decision:
     return Decision(
         strategy="ev_idle",
-        battery_discharge_cap_w=0.0,
+        active_power_w=0.0,
         ev_charge_power_w=0.0,
     )
 
@@ -97,7 +97,7 @@ async def test_idle_no_inverter_no_select_call(controller) -> None:
 async def test_active_writes_battery_control_and_cap(controller_with_target) -> None:
     """Active decision selects battery_control, writes cap and EV target."""
     ctrl, hass = controller_with_target
-    await ctrl.write_full(_make_decision(battery_discharge_cap_w=150.0, ev_charge_power_w=3000.0))
+    await ctrl.write_full(_make_decision(active_power_w=150.0, ev_charge_power_w=3000.0))
     select_calls = [
         c for c in hass.services.async_call.call_args_list if c[0][1] == "select_option"
     ]
@@ -138,7 +138,7 @@ async def test_idempotent_select_write(controller_with_target) -> None:
 async def test_idempotent_cap_write(controller_with_target) -> None:
     """Same battery discharge cap written twice calls set_value once for cap entity."""
     ctrl, hass = controller_with_target
-    decision = _make_decision(battery_discharge_cap_w=200.0)
+    decision = _make_decision(active_power_w=200.0)
     await ctrl.write_full(decision)
     await ctrl.write_full(decision)
     cap_calls = [

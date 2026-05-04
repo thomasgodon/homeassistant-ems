@@ -4,7 +4,7 @@ from .models import Decision, Inputs, Thresholds
 
 
 def decide(inputs: Inputs) -> Decision:
-    """Compute EV charge target and battery discharge cap. Never raises."""
+    """Compute EV charge target and inverter active power. Never raises."""
     house_non_ev = max(0.0, inputs.house_load_w - inputs.ev_power_w)
     return _make_decision(
         grid_import_w=inputs.grid_import_w,
@@ -72,8 +72,8 @@ def _make_decision(
     # Solar surplus left after covering non-EV house load.
     solar_for_ev = max(0.0, pv_w - house_non_ev)
 
-    # Battery may only discharge enough to cover the house shortfall from PV.
-    battery_discharge_cap_w = max(0.0, house_non_ev - pv_w)
+    # Positive = battery discharges for house shortfall; negative = PV surplus (battery can absorb).
+    active_power_w = house_non_ev - pv_w
 
     ev_target_w = solar_for_ev + grid_headroom
 
@@ -82,7 +82,7 @@ def _make_decision(
 
     return Decision(
         strategy="ev_charging",
-        battery_discharge_cap_w=battery_discharge_cap_w,
+        active_power_w=active_power_w,
         ev_charge_power_w=ev_target_w,
     )
 
@@ -90,6 +90,6 @@ def _make_decision(
 def _idle() -> Decision:
     return Decision(
         strategy="ev_idle",
-        battery_discharge_cap_w=0.0,
+        active_power_w=0.0,
         ev_charge_power_w=0.0,
     )

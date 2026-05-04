@@ -7,7 +7,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 
 from .const import (
-    CONF_BATTERY_DISCHARGE_CAP_ENTITY,
+    CONF_ACTIVE_POWER_ENTITY,
     CONF_EV_CHARGE_TARGET_ENTITY,
     CONF_INVERTER_OPTIONS,
     CONF_INVERTER_SELECT,
@@ -30,7 +30,7 @@ PLATFORMS = [
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    if entry.version >= 5:
+    if entry.version >= 6:
         return True
 
     new_data = {**entry.data}
@@ -55,7 +55,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             dropped,
         )
 
-    hass.config_entries.async_update_entry(entry, data=new_data, version=5)
+    hass.config_entries.async_update_entry(entry, data=new_data, version=6)
     return True
 
 
@@ -69,7 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         inverter_select_entity=data.get(CONF_INVERTER_SELECT),
         self_use_option=inverter_options_raw.get("SELF_USE") or None,
         battery_control_option=inverter_options_raw.get("BATTERY_CONTROL") or None,
-        battery_discharge_cap_entity=data.get(CONF_BATTERY_DISCHARGE_CAP_ENTITY),
+        active_power_entity=data.get(CONF_ACTIVE_POWER_ENTITY),
         ev_charge_target_entity=data.get(CONF_EV_CHARGE_TARGET_ENTITY),
     )
 

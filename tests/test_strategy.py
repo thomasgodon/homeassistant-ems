@@ -1,11 +1,11 @@
 """Tests for strategy.decide() and strategy.recompute().
 
 Grid headroom algorithm:
-  house_non_ev          = max(0, house_load_w - ev_power_w)
-  solar_for_ev          = max(0, pv_w - house_non_ev)
-  battery_discharge_cap = max(0, house_non_ev - pv_w)
-  grid_headroom         = max(0, max_grid_import_w - (grid_import_w - ev_power_w))
-  ev_target_w           = solar_for_ev + grid_headroom
+  house_non_ev  = max(0, house_load_w - ev_power_w)
+  solar_for_ev  = max(0, pv_w - house_non_ev)
+  active_power  = house_non_ev - pv_w   (positive = discharge, negative = surplus PV)
+  grid_headroom = max(0, max_grid_import_w - (grid_import_w - ev_power_w))
+  ev_target_w   = solar_for_ev + grid_headroom
 """
 from __future__ import annotations
 
@@ -110,8 +110,8 @@ def test_charges_when_soc_is_none(builder) -> None:
 
 # ── user spec examples ────────────────────────────────────────────────────────
 
-def test_spec_example_1_pv_surplus_no_battery_drain(builder) -> None:
-    """pv=500, house_non_ev=200 → battery_cap=0, solar_for_ev=300."""
+def test_spec_example_1_pv_surplus_negative_active_power(builder) -> None:
+    """pv=500, house_non_ev=200 → active_power=-300 (surplus, battery absorbs), solar_for_ev=300."""
     thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
     d = decide(
         builder,
@@ -125,7 +125,7 @@ def test_spec_example_1_pv_surplus_no_battery_drain(builder) -> None:
         thresholds=thresholds,
     )
     assert d.strategy == "ev_charging"
-    assert d.battery_discharge_cap_w == 0.0
+    assert d.active_power_w == pytest.approx(-300.0)
     # solar_for_ev=300, grid_headroom=4500-(-300-0)=4800 → total 5100
     assert d.ev_charge_power_w == pytest.approx(5100.0)
 
@@ -145,7 +145,7 @@ def test_spec_example_2_no_pv_house_from_battery(builder) -> None:
         thresholds=thresholds,
     )
     assert d.strategy == "ev_charging"
-    assert d.battery_discharge_cap_w == pytest.approx(200.0)
+    assert d.active_power_w == pytest.approx(200.0)
     # grid_headroom = 4500 - (200 - 0) = 4300 (grid already importing 200 for house)
     assert d.ev_charge_power_w == pytest.approx(4300.0)
 
@@ -165,7 +165,7 @@ def test_spec_example_3_partial_pv(builder) -> None:
         thresholds=thresholds,
     )
     assert d.strategy == "ev_charging"
-    assert d.battery_discharge_cap_w == pytest.approx(50.0)
+    assert d.active_power_w == pytest.approx(50.0)
     # grid_headroom = 4500 - (50 - 0) = 4450
     assert d.ev_charge_power_w == pytest.approx(4450.0)
 

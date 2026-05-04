@@ -10,7 +10,7 @@ class VerbMapping:
     inverter_select_entity: str | None
     self_use_option: str | None
     battery_control_option: str | None
-    battery_discharge_cap_entity: str | None
+    active_power_entity: str | None
     ev_charge_target_entity: str | None
 
 
@@ -41,7 +41,7 @@ StrategyLabel = Literal["ev_charging", "ev_idle", "starting_up"]
 @dataclass(frozen=True, slots=True)
 class Decision:
     strategy: StrategyLabel
-    battery_discharge_cap_w: float  # 0 = no battery discharge for house; positive = cap in W
+    active_power_w: float  # positive = discharge for house; negative = PV surplus; 0 = idle
     ev_charge_power_w: float  # watts; 0 = idle
 
 

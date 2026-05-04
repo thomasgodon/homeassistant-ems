@@ -16,7 +16,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
-    CONF_BATTERY_DISCHARGE_CAP_ENTITY,
+    CONF_ACTIVE_POWER_ENTITY,
     CONF_EV_CHARGE_TARGET_ENTITY,
     CONF_EV_PLUG,
     CONF_EV_POWER,
@@ -40,34 +40,17 @@ _NUMBER_OR_SENSOR = EntitySelectorConfig(domain=[NUMBER_DOMAIN, INPUT_NUMBER_DOM
 
 
 class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 5
+    VERSION = 6
 
     def __init__(self) -> None:
         self._data: dict = {}
 
     async def async_step_user(self, user_input=None):
-        return await self.async_step_required_inputs(user_input)
-
-    async def async_step_required_inputs(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_inverter()
-
-        schema = vol.Schema({
-            vol.Required(CONF_GRID_IMPORT_POWER): EntitySelector(_POWER_SENSOR),
-            vol.Required(CONF_PV_POWER): EntitySelector(_POWER_SENSOR),
-            vol.Required(CONF_HOUSE_LOAD): EntitySelector(_POWER_SENSOR),
-            vol.Required(CONF_EV_POWER): EntitySelector(_POWER_SENSOR),
-            vol.Optional(CONF_MAX_GRID_IMPORT_W): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
-        })
-        return self.async_show_form(
-            step_id="required_inputs",
-            data_schema=schema,
-            description_placeholders={},
-        )
+        return await self.async_step_inverter(user_input)
 
     async def async_step_inverter(self, user_input=None):
         if user_input is not None:
+            self._data[CONF_PV_POWER] = user_input[CONF_PV_POWER]
             inverter_select = user_input.get(CONF_INVERTER_SELECT)
             if inverter_select:
                 self._data[CONF_INVERTER_SELECT] = inverter_select
@@ -75,36 +58,47 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "SELF_USE": user_input.get("inverter_verb_self_use") or None,
                     "BATTERY_CONTROL": user_input.get("inverter_verb_battery_control") or None,
                 }
-            self._data[CONF_BATTERY_DISCHARGE_CAP_ENTITY] = user_input.get(
-                CONF_BATTERY_DISCHARGE_CAP_ENTITY
-            )
-            return await self.async_step_ev_charger()
+            self._data[CONF_ACTIVE_POWER_ENTITY] = user_input.get(CONF_ACTIVE_POWER_ENTITY)
+            return await self.async_step_ev()
 
         schema = vol.Schema({
+            vol.Required(CONF_PV_POWER): EntitySelector(_POWER_SENSOR),
             vol.Optional(CONF_INVERTER_SELECT): EntitySelector(_SELECT_ENTITY),
             vol.Optional("inverter_verb_self_use"): TextSelector(),
             vol.Optional("inverter_verb_battery_control"): TextSelector(),
-            vol.Optional(CONF_BATTERY_DISCHARGE_CAP_ENTITY): EntitySelector(
-                _NUMBER_OR_INPUT_NUMBER
-            ),
+            vol.Optional(CONF_ACTIVE_POWER_ENTITY): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
         })
         return self.async_show_form(step_id="inverter", data_schema=schema)
 
-    async def async_step_ev_charger(self, user_input=None):
+    async def async_step_ev(self, user_input=None):
         if user_input is not None:
+            self._data[CONF_EV_POWER] = user_input[CONF_EV_POWER]
             self._data[CONF_EV_PLUG] = user_input.get(CONF_EV_PLUG)
             self._data[CONF_EV_SOC] = user_input.get(CONF_EV_SOC)
             self._data[CONF_EV_TARGET_SOC] = user_input.get(CONF_EV_TARGET_SOC)
             self._data[CONF_EV_CHARGE_TARGET_ENTITY] = user_input.get(CONF_EV_CHARGE_TARGET_ENTITY)
-            return self.async_create_entry(title="EMS", data=self._data)
+            return await self.async_step_grid()
 
         schema = vol.Schema({
+            vol.Required(CONF_EV_POWER): EntitySelector(_POWER_SENSOR),
             vol.Optional(CONF_EV_PLUG): EntitySelector(_BOOL_ENTITY),
             vol.Optional(CONF_EV_SOC): EntitySelector(_SOC_SENSOR),
             vol.Optional(CONF_EV_TARGET_SOC): EntitySelector(_NUMBER_OR_SENSOR),
             vol.Optional(CONF_EV_CHARGE_TARGET_ENTITY): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
         })
-        return self.async_show_form(step_id="ev_charger", data_schema=schema)
+        return self.async_show_form(step_id="ev", data_schema=schema)
+
+    async def async_step_grid(self, user_input=None):
+        if user_input is not None:
+            self._data.update(user_input)
+            return self.async_create_entry(title="EMS", data=self._data)
+
+        schema = vol.Schema({
+            vol.Required(CONF_GRID_IMPORT_POWER): EntitySelector(_POWER_SENSOR),
+            vol.Required(CONF_HOUSE_LOAD): EntitySelector(_POWER_SENSOR),
+            vol.Optional(CONF_MAX_GRID_IMPORT_W): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
+        })
+        return self.async_show_form(step_id="grid", data_schema=schema)
 
     @staticmethod
     def async_get_options_flow(config_entry):
@@ -119,39 +113,11 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
         self._data: dict = dict(config_entry.data)
 
     async def async_step_init(self, user_input=None):
-        return await self.async_step_required_inputs(user_input)
-
-    async def async_step_required_inputs(self, user_input=None):
-        if user_input is not None:
-            self._data.update(user_input)
-            return await self.async_step_inverter()
-
-        schema = vol.Schema({
-            vol.Required(
-                CONF_GRID_IMPORT_POWER,
-                default=self._data.get(CONF_GRID_IMPORT_POWER),
-            ): EntitySelector(_POWER_SENSOR),
-            vol.Required(
-                CONF_PV_POWER,
-                default=self._data.get(CONF_PV_POWER),
-            ): EntitySelector(_POWER_SENSOR),
-            vol.Required(
-                CONF_HOUSE_LOAD,
-                default=self._data.get(CONF_HOUSE_LOAD),
-            ): EntitySelector(_POWER_SENSOR),
-            vol.Required(
-                CONF_EV_POWER,
-                default=self._data.get(CONF_EV_POWER),
-            ): EntitySelector(_POWER_SENSOR),
-            vol.Optional(
-                CONF_MAX_GRID_IMPORT_W,
-                default=self._data.get(CONF_MAX_GRID_IMPORT_W),
-            ): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
-        })
-        return self.async_show_form(step_id="required_inputs", data_schema=schema)
+        return await self.async_step_inverter(user_input)
 
     async def async_step_inverter(self, user_input=None):
         if user_input is not None:
+            self._data[CONF_PV_POWER] = user_input[CONF_PV_POWER]
             inverter_select = user_input.get(CONF_INVERTER_SELECT)
             if inverter_select:
                 self._data[CONF_INVERTER_SELECT] = inverter_select
@@ -159,13 +125,15 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
                     "SELF_USE": user_input.get("inverter_verb_self_use") or None,
                     "BATTERY_CONTROL": user_input.get("inverter_verb_battery_control") or None,
                 }
-            self._data[CONF_BATTERY_DISCHARGE_CAP_ENTITY] = user_input.get(
-                CONF_BATTERY_DISCHARGE_CAP_ENTITY
-            )
-            return await self.async_step_ev_charger()
+            self._data[CONF_ACTIVE_POWER_ENTITY] = user_input.get(CONF_ACTIVE_POWER_ENTITY)
+            return await self.async_step_ev()
 
         existing_options = self._data.get(CONF_INVERTER_OPTIONS, {})
         schema = vol.Schema({
+            vol.Required(
+                CONF_PV_POWER,
+                default=self._data.get(CONF_PV_POWER),
+            ): EntitySelector(_POWER_SENSOR),
             vol.Optional(
                 CONF_INVERTER_SELECT,
                 default=self._data.get(CONF_INVERTER_SELECT),
@@ -179,22 +147,26 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
                 default=existing_options.get("BATTERY_CONTROL"),
             ): TextSelector(),
             vol.Optional(
-                CONF_BATTERY_DISCHARGE_CAP_ENTITY,
-                default=self._data.get(CONF_BATTERY_DISCHARGE_CAP_ENTITY),
+                CONF_ACTIVE_POWER_ENTITY,
+                default=self._data.get(CONF_ACTIVE_POWER_ENTITY),
             ): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
         })
         return self.async_show_form(step_id="inverter", data_schema=schema)
 
-    async def async_step_ev_charger(self, user_input=None):
+    async def async_step_ev(self, user_input=None):
         if user_input is not None:
+            self._data[CONF_EV_POWER] = user_input[CONF_EV_POWER]
             self._data[CONF_EV_PLUG] = user_input.get(CONF_EV_PLUG)
             self._data[CONF_EV_SOC] = user_input.get(CONF_EV_SOC)
             self._data[CONF_EV_TARGET_SOC] = user_input.get(CONF_EV_TARGET_SOC)
             self._data[CONF_EV_CHARGE_TARGET_ENTITY] = user_input.get(CONF_EV_CHARGE_TARGET_ENTITY)
-            self.hass.config_entries.async_update_entry(self._config_entry, data=self._data)
-            return self.async_create_entry(title="", data={})
+            return await self.async_step_grid()
 
         schema = vol.Schema({
+            vol.Required(
+                CONF_EV_POWER,
+                default=self._data.get(CONF_EV_POWER),
+            ): EntitySelector(_POWER_SENSOR),
             vol.Optional(
                 CONF_EV_PLUG,
                 default=self._data.get(CONF_EV_PLUG),
@@ -212,4 +184,26 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
                 default=self._data.get(CONF_EV_CHARGE_TARGET_ENTITY),
             ): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
         })
-        return self.async_show_form(step_id="ev_charger", data_schema=schema)
+        return self.async_show_form(step_id="ev", data_schema=schema)
+
+    async def async_step_grid(self, user_input=None):
+        if user_input is not None:
+            self._data.update(user_input)
+            self.hass.config_entries.async_update_entry(self._config_entry, data=self._data)
+            return self.async_create_entry(title="", data={})
+
+        schema = vol.Schema({
+            vol.Required(
+                CONF_GRID_IMPORT_POWER,
+                default=self._data.get(CONF_GRID_IMPORT_POWER),
+            ): EntitySelector(_POWER_SENSOR),
+            vol.Required(
+                CONF_HOUSE_LOAD,
+                default=self._data.get(CONF_HOUSE_LOAD),
+            ): EntitySelector(_POWER_SENSOR),
+            vol.Optional(
+                CONF_MAX_GRID_IMPORT_W,
+                default=self._data.get(CONF_MAX_GRID_IMPORT_W),
+            ): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
+        })
+        return self.async_show_form(step_id="grid", data_schema=schema)

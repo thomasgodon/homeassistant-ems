@@ -11,7 +11,7 @@ from homeassistant.util import dt as dt_util
 
 from . import strategy as strategy_module
 from .const import (
-    CONF_BATTERY_DISCHARGE_CAP_ENTITY,
+    CONF_ACTIVE_POWER_ENTITY,
     CONF_EV_CHARGE_TARGET_ENTITY,
     CONF_EV_PLUG,
     CONF_EV_POWER,
@@ -122,7 +122,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             inverter_select_entity=data.get(CONF_INVERTER_SELECT),
             self_use_option=inverter_options_raw.get("SELF_USE") or None,
             battery_control_option=inverter_options_raw.get("BATTERY_CONTROL") or None,
-            battery_discharge_cap_entity=data.get(CONF_BATTERY_DISCHARGE_CAP_ENTITY),
+            active_power_entity=data.get(CONF_ACTIVE_POWER_ENTITY),
             ev_charge_target_entity=data.get(CONF_EV_CHARGE_TARGET_ENTITY),
         )
 
