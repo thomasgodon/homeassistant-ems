@@ -51,7 +51,7 @@ EvChargingState = Literal[
 @dataclass(frozen=True, slots=True)
 class Decision:
     strategy: StrategyLabel
-    active_power_w: float  # positive = discharge for house; negative = PV surplus; 0 = idle
+    active_power_w: float  # negative = drain from inverter; positive = PV surplus into inverter
     ev_charge_power_w: float  # watts; 0 = idle
     charging_state: EvChargingState
 

@@ -192,6 +192,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
         pv_w = _read_float(self.hass, data.get(CONF_PV_POWER), 0.0)
         house_load_w = _read_float(self.hass, data.get(CONF_HOUSE_LOAD), 0.0)
         ev_power_w = _read_float(self.hass, data.get(CONF_EV_POWER), 0.0)
+        grid_import_w = _read_float(self.hass, data.get(CONF_GRID_IMPORT_POWER), 0.0)
 
         prior_inputs = self._state.last_result.inputs
 
@@ -199,6 +200,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
             pv_w=pv_w,
             house_load_w=house_load_w,
             ev_power_w=ev_power_w,
+            grid_import_w=grid_import_w,
             ev_plugged=prior_inputs.ev_plugged,
             ev_soc=prior_inputs.ev_soc,
             ev_strategy=_read_select_state(self.hass, "select.ems_ev_charging_mode", "Off"),

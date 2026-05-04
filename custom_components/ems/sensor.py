@@ -29,6 +29,7 @@ async def async_setup_entry(
         EmsInverterModeSensor(coordinator),
         EmsEvCurrentSensor(coordinator),
         EmsEvChargingStateSensor(coordinator),
+        EmsInverterActivePowerSensor(coordinator),
     ])
 
 
@@ -81,6 +82,31 @@ class EmsInverterModeSensor(CoordinatorEntity[EmsStrategyCoordinator], SensorEnt
     @property
     def available(self) -> bool:
         return self.coordinator.data is not None
+
+
+class EmsInverterActivePowerSensor(CoordinatorEntity[EmsStrategyCoordinator], SensorEntity):
+    _attr_unique_id = "ems_inverter_active_power"
+    _attr_name = "EMS Inverter Active Power"
+    _attr_native_unit_of_measurement = "W"
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: EmsStrategyCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> float:
+        if self.coordinator.data is None:
+            return 0.0
+        return self.coordinator.data.decision.active_power_w
+
+    @property
+    def available(self) -> bool:
+        return True
 
 
 class EmsEvChargingStateSensor(CoordinatorEntity[EmsStrategyCoordinator], SensorEntity):

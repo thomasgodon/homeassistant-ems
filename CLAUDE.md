@@ -41,7 +41,7 @@ The integration is structured around two execution loops managed by `coordinator
 
 **1-second fast loop** (`EmsFastLoopCoordinator`):
 - Always runs once the integration is active
-- Re-reads `pv_w`, `house_load_w`, `ev_power_w` and calls `strategy.recompute()`
+- Re-reads `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w` and calls `strategy.recompute()`
 - Calls `controller.write_full()` — keeps EV target and battery discharge cap enforced within 1 s of load changes
 
 ### Module boundaries
@@ -55,8 +55,8 @@ The integration is structured around two execution loops managed by `coordinator
 
 ### Key abstractions
 
-- **Power balance algorithm**: `ev_target = max(0, max_grid_import_w + pv_w - house_non_ev)`. Derivation: grid_import = house_non_ev + ev_target − pv_w; cap at max_grid_import_w. Works with both signed and positive-only grid sensors.
-- **Battery discharge cap**: strategy emits `battery_discharge_cap_w` = `max(0, house_non_ev - pv_w)`. Controller writes it to `battery_discharge_cap_entity` via `number.set_value`. Ensures battery only covers the house load shortfall, never EV charging.
+- **Power balance algorithm**: `ev_target = max(0, max_grid_import_w − grid_import_w + ev_power_w)`. Closed-loop: non-EV grid draw = `grid_import_w − ev_power_w`; EV gets the remaining headroom up to `max_grid_import_w`. Adding `ev_power_w` back is essential — the EV's current draw is already inside `grid_import_w`, so we're computing the new target, not an increment.
+- **Active power**: strategy emits `active_power_w` = `pv_w - house_non_ev`. Sign convention: **negative = battery discharges (drain from inverter)**; **positive = PV surplus (charging into inverter)**. Controller writes it to `active_power_entity` via `number.set_value` when EV is confirmed charging.
 - **One inverter verb**: `power_control_option` (written only when EV is confirmed charging → controlled battery discharge). EMS never writes to the inverter when `ev_power_w == 0`; the inverter manages its own mode when idle.
 - **EV charge target**: strategy emits `ev_charge_power_w` (float, W). Controller writes it via `number.set_value` to `ev_charge_target_entity` (Step 3). No manual automation needed.
 - **house_non_ev**: derived inline as `max(0.0, house_load_w − ev_power_w)` — never a stored field.
