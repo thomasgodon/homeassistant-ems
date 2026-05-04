@@ -161,7 +161,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         )
 
 
-class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
+class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
     """1 s default. Re-runs strategy with fresh power readings every second."""
 
     def __init__(
@@ -181,12 +181,12 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
             update_interval=timedelta(seconds=1),
         )
 
-    async def _async_update_data(self) -> None:
+    async def _async_update_data(self) -> "LadderResult | None":
         if self._state.last_result is None:
-            return
+            return None
         grace_until = self._state.startup_grace_until
         if grace_until is not None and dt_util.utcnow() < grace_until:
-            return
+            return self._state.last_result
 
         data = self._entry.data
         pv_w = _read_float(self.hass, data.get(CONF_PV_POWER), 0.0)
@@ -207,6 +207,19 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
             thresholds=prior_inputs.thresholds,
         )
         await self._controller.write_full(fast_decision, ev_power_w=ev_power_w)
+
+        now = dt_util.utcnow()
+        fast_inputs = replace(
+            prior_inputs,
+            now=now,
+            pv_w=pv_w,
+            house_load_w=house_load_w,
+            ev_power_w=ev_power_w,
+            grid_import_w=grid_import_w,
+        )
+        result = LadderResult(decision=fast_decision, inputs=fast_inputs, computed_at=now)
+        self._state.last_result = result
+        return result
 
 
 # ── state helpers ─────────────────────────────────────────────────────────────

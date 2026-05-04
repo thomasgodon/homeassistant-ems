@@ -7,7 +7,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import EmsStrategyCoordinator
+from .coordinator import EmsFastLoopCoordinator
 
 _CHARGING_STATE_LABELS: dict[str, str] = {
     "charging": "Charging",
@@ -24,7 +24,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: EmsStrategyCoordinator = hass.data[DOMAIN][entry.entry_id]["strategy_coordinator"]
+    coordinator: EmsFastLoopCoordinator = hass.data[DOMAIN][entry.entry_id]["fast_loop_coordinator"]
     async_add_entities([
         EmsInverterModeSensor(coordinator),
         EmsEvCurrentSensor(coordinator),
@@ -33,7 +33,7 @@ async def async_setup_entry(
     ])
 
 
-class EmsEvCurrentSensor(CoordinatorEntity[EmsStrategyCoordinator], SensorEntity):
+class EmsEvCurrentSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
     _attr_unique_id = "ems_ev_current_w"
     _attr_name = "EMS EV Current"
     _attr_native_unit_of_measurement = "W"
@@ -58,7 +58,7 @@ class EmsEvCurrentSensor(CoordinatorEntity[EmsStrategyCoordinator], SensorEntity
         return True
 
 
-class EmsInverterModeSensor(CoordinatorEntity[EmsStrategyCoordinator], SensorEntity):
+class EmsInverterModeSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
     _attr_unique_id = "ems_inverter_mode"
     _attr_name = "EMS Inverter Mode"
 
@@ -84,7 +84,7 @@ class EmsInverterModeSensor(CoordinatorEntity[EmsStrategyCoordinator], SensorEnt
         return self.coordinator.data is not None
 
 
-class EmsInverterActivePowerSensor(CoordinatorEntity[EmsStrategyCoordinator], SensorEntity):
+class EmsInverterActivePowerSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
     _attr_unique_id = "ems_inverter_active_power"
     _attr_name = "EMS Inverter Active Power"
     _attr_native_unit_of_measurement = "W"
@@ -109,7 +109,7 @@ class EmsInverterActivePowerSensor(CoordinatorEntity[EmsStrategyCoordinator], Se
         return True
 
 
-class EmsEvChargingStateSensor(CoordinatorEntity[EmsStrategyCoordinator], SensorEntity):
+class EmsEvChargingStateSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
     _attr_unique_id = "ems_ev_charging_state"
     _attr_name = "EMS EV Charging State"
     _attr_device_class = SensorDeviceClass.ENUM
