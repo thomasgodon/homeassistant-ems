@@ -18,6 +18,7 @@ CONF_EV_POWER = "ev_power"
 CONF_EV_PLUG = "ev_plug"
 CONF_EV_SOC = "ev_soc"
 CONF_EV_CHARGE_TARGET_ENTITY = "ev_charge_target_entity"
+CONF_EV_MAX_CHARGE_W = "ev_max_charge_w"
 
 # Config entry data keys — thresholds (config scalars, set in config flow)
 CONF_MAX_GRID_IMPORT_W = "max_grid_import_w"

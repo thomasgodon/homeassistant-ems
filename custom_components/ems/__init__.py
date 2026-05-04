@@ -25,7 +25,6 @@ from .models import VerbMapping
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [
-    Platform.BINARY_SENSOR,
     Platform.SELECT,
     Platform.NUMBER,
     Platform.SENSOR,

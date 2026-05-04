@@ -19,6 +19,7 @@ class Thresholds:
     max_grid_import_w: float
     ev_target_soc: float
     ev_min_charge_w: float
+    max_ev_charge_w: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +36,16 @@ class Inputs:
     mapping: VerbMapping
 
 
-StrategyLabel = Literal["ev_charging", "ev_idle", "starting_up"]
+StrategyLabel = Literal["ev_charging", "ev_idle"]
+
+EvChargingState = Literal[
+    "charging",
+    "ev_not_connected",
+    "charging_disabled",
+    "target_soc_reached",
+    "not_enough_power",
+    "starting_up",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,8 +53,7 @@ class Decision:
     strategy: StrategyLabel
     active_power_w: float  # positive = discharge for house; negative = PV surplus; 0 = idle
     ev_charge_power_w: float  # watts; 0 = idle
-    # True: EMS wants to charge (mode=Energy-optimised + plugged + SOC<target)
-    ev_charge_intent: bool
+    charging_state: EvChargingState
 
 
 @dataclass(frozen=True, slots=True)

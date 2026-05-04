@@ -18,6 +18,7 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_ACTIVE_POWER_ENTITY,
     CONF_EV_CHARGE_TARGET_ENTITY,
+    CONF_EV_MAX_CHARGE_W,
     CONF_EV_PLUG,
     CONF_EV_POWER,
     CONF_EV_SOC,
@@ -80,6 +81,7 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_EV_SOC] = user_input.get(CONF_EV_SOC)
             self._data[CONF_EV_TARGET_SOC] = user_input.get(CONF_EV_TARGET_SOC)
             self._data[CONF_EV_CHARGE_TARGET_ENTITY] = user_input.get(CONF_EV_CHARGE_TARGET_ENTITY)
+            self._data[CONF_EV_MAX_CHARGE_W] = user_input.get(CONF_EV_MAX_CHARGE_W)
             return await self.async_step_grid()
 
         schema = vol.Schema({
@@ -88,6 +90,7 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_EV_SOC): EntitySelector(_SOC_SENSOR),
             vol.Optional(CONF_EV_TARGET_SOC): EntitySelector(_NUMBER_OR_SENSOR),
             vol.Optional(CONF_EV_CHARGE_TARGET_ENTITY): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
+            vol.Optional(CONF_EV_MAX_CHARGE_W): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
         })
         return self.async_show_form(step_id="ev", data_schema=schema)
 
@@ -164,6 +167,7 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
             self._data[CONF_EV_SOC] = user_input.get(CONF_EV_SOC)
             self._data[CONF_EV_TARGET_SOC] = user_input.get(CONF_EV_TARGET_SOC)
             self._data[CONF_EV_CHARGE_TARGET_ENTITY] = user_input.get(CONF_EV_CHARGE_TARGET_ENTITY)
+            self._data[CONF_EV_MAX_CHARGE_W] = user_input.get(CONF_EV_MAX_CHARGE_W)
             return await self.async_step_grid()
 
         schema = vol.Schema({
@@ -186,6 +190,10 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
             vol.Optional(
                 CONF_EV_CHARGE_TARGET_ENTITY,
                 default=self._data.get(CONF_EV_CHARGE_TARGET_ENTITY),
+            ): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
+            vol.Optional(
+                CONF_EV_MAX_CHARGE_W,
+                default=self._data.get(CONF_EV_MAX_CHARGE_W),
             ): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
         })
         return self.async_show_form(step_id="ev", data_schema=schema)

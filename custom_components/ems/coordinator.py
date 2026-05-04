@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -14,6 +14,7 @@ from . import strategy as strategy_module
 from .const import (
     CONF_ACTIVE_POWER_ENTITY,
     CONF_EV_CHARGE_TARGET_ENTITY,
+    CONF_EV_MAX_CHARGE_W,
     CONF_EV_PLUG,
     CONF_EV_POWER,
     CONF_EV_SOC,
@@ -98,8 +99,12 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             self._state.startup_grace_until is not None
             and inputs.now < self._state.startup_grace_until
         )
+        if in_grace:
+            decision = replace(decision, charging_state="starting_up")
         try:
-            await self._controller.write_full(decision, suppress_writes=in_grace)
+            await self._controller.write_full(
+                decision, ev_power_w=inputs.ev_power_w, suppress_writes=in_grace
+            )
         except Exception:
             _LOGGER.exception("EMS controller write failed; decision still reported")
 
@@ -131,6 +136,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
                 hass, data.get(CONF_EV_TARGET_SOC), DEFAULT_EV_TARGET_SOC
             ),
             ev_min_charge_w=_read_number(hass, "number.ems_ev_min_charge_w", 1400.0),
+            max_ev_charge_w=_read_float_optional(hass, data.get(CONF_EV_MAX_CHARGE_W)),
         )
 
         mapping = VerbMapping(
@@ -183,7 +189,6 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
             return
 
         data = self._entry.data
-        grid_import_w = _read_float(self.hass, data.get(CONF_GRID_IMPORT_POWER), 0.0)
         pv_w = _read_float(self.hass, data.get(CONF_PV_POWER), 0.0)
         house_load_w = _read_float(self.hass, data.get(CONF_HOUSE_LOAD), 0.0)
         ev_power_w = _read_float(self.hass, data.get(CONF_EV_POWER), 0.0)
@@ -191,7 +196,6 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
         prior_inputs = self._state.last_result.inputs
 
         fast_decision = strategy_module.recompute(
-            grid_import_w=grid_import_w,
             pv_w=pv_w,
             house_load_w=house_load_w,
             ev_power_w=ev_power_w,
@@ -200,7 +204,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator[None]):
             ev_strategy=_read_select_state(self.hass, "select.ems_ev_charging_mode", "Off"),
             thresholds=prior_inputs.thresholds,
         )
-        await self._controller.write_full(fast_decision)
+        await self._controller.write_full(fast_decision, ev_power_w=ev_power_w)
 
 
 # ── state helpers ─────────────────────────────────────────────────────────────
