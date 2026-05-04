@@ -8,6 +8,9 @@ from .models import Decision, VerbMapping
 
 _LOGGER = logging.getLogger(__name__)
 
+_INVERTER_DISABLED = "disabled"
+_INVERTER_POWER_CONTROL = "power_control"
+
 
 class Controller:
     def __init__(self, hass: HomeAssistant, mapping: VerbMapping) -> None:
@@ -25,7 +28,7 @@ class Controller:
         if decision.ev_charge_power_w == 0.0:
             self.reset_write_cache()
             if not suppress_writes:
-                await self._write_inverter_self_use()
+                await self._write_inverter_disabled()
                 await self._write_ev_target(0.0)
             return
 
@@ -33,22 +36,18 @@ class Controller:
             _LOGGER.debug("Startup grace: would write strategy=%s", decision.strategy)
             return
 
-        await self._write_inverter_battery_control()
+        await self._write_inverter_power_control()
         await self._write_active_power(decision.active_power_w)
         await self._write_ev_target(decision.ev_charge_power_w)
 
     # ── private helpers ───────────────────────────────────────────────────────
 
-    async def _write_inverter_self_use(self) -> None:
-        option = self._mapping.self_use_option
-        if not option:
-            return
+    async def _write_inverter_disabled(self) -> None:
+        option = self._mapping.disabled_option or _INVERTER_DISABLED
         await self._select_inverter_option(option)
 
-    async def _write_inverter_battery_control(self) -> None:
-        option = self._mapping.battery_control_option
-        if not option:
-            return
+    async def _write_inverter_power_control(self) -> None:
+        option = self._mapping.power_control_option or _INVERTER_POWER_CONTROL
         await self._select_inverter_option(option)
 
     async def _select_inverter_option(self, option: str) -> None:

@@ -24,7 +24,8 @@ from .const import (
     CONF_EV_TARGET_SOC,
     CONF_GRID_IMPORT_POWER,
     CONF_HOUSE_LOAD,
-    CONF_INVERTER_OPTIONS,
+    CONF_INVERTER_DISABLED_OPTION,
+    CONF_INVERTER_POWER_CONTROL_OPTION,
     CONF_INVERTER_SELECT,
     CONF_MAX_GRID_IMPORT_W,
     CONF_PV_POWER,
@@ -40,7 +41,7 @@ _NUMBER_OR_SENSOR = EntitySelectorConfig(domain=[NUMBER_DOMAIN, INPUT_NUMBER_DOM
 
 
 class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 6
+    VERSION = 8
 
     def __init__(self) -> None:
         self._data: dict = {}
@@ -54,18 +55,20 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             inverter_select = user_input.get(CONF_INVERTER_SELECT)
             if inverter_select:
                 self._data[CONF_INVERTER_SELECT] = inverter_select
-                self._data[CONF_INVERTER_OPTIONS] = {
-                    "SELF_USE": user_input.get("inverter_verb_self_use") or None,
-                    "BATTERY_CONTROL": user_input.get("inverter_verb_battery_control") or None,
-                }
+            self._data[CONF_INVERTER_DISABLED_OPTION] = (
+                user_input.get(CONF_INVERTER_DISABLED_OPTION) or None
+            )
+            self._data[CONF_INVERTER_POWER_CONTROL_OPTION] = (
+                user_input.get(CONF_INVERTER_POWER_CONTROL_OPTION) or None
+            )
             self._data[CONF_ACTIVE_POWER_ENTITY] = user_input.get(CONF_ACTIVE_POWER_ENTITY)
             return await self.async_step_ev()
 
         schema = vol.Schema({
             vol.Required(CONF_PV_POWER): EntitySelector(_POWER_SENSOR),
             vol.Optional(CONF_INVERTER_SELECT): EntitySelector(_SELECT_ENTITY),
-            vol.Optional("inverter_verb_self_use"): TextSelector(),
-            vol.Optional("inverter_verb_battery_control"): TextSelector(),
+            vol.Optional(CONF_INVERTER_DISABLED_OPTION): TextSelector(),
+            vol.Optional(CONF_INVERTER_POWER_CONTROL_OPTION): TextSelector(),
             vol.Optional(CONF_ACTIVE_POWER_ENTITY): EntitySelector(_NUMBER_OR_INPUT_NUMBER),
         })
         return self.async_show_form(step_id="inverter", data_schema=schema)
@@ -121,14 +124,15 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
             inverter_select = user_input.get(CONF_INVERTER_SELECT)
             if inverter_select:
                 self._data[CONF_INVERTER_SELECT] = inverter_select
-                self._data[CONF_INVERTER_OPTIONS] = {
-                    "SELF_USE": user_input.get("inverter_verb_self_use") or None,
-                    "BATTERY_CONTROL": user_input.get("inverter_verb_battery_control") or None,
-                }
+            self._data[CONF_INVERTER_DISABLED_OPTION] = (
+                user_input.get(CONF_INVERTER_DISABLED_OPTION) or None
+            )
+            self._data[CONF_INVERTER_POWER_CONTROL_OPTION] = (
+                user_input.get(CONF_INVERTER_POWER_CONTROL_OPTION) or None
+            )
             self._data[CONF_ACTIVE_POWER_ENTITY] = user_input.get(CONF_ACTIVE_POWER_ENTITY)
             return await self.async_step_ev()
 
-        existing_options = self._data.get(CONF_INVERTER_OPTIONS, {})
         schema = vol.Schema({
             vol.Required(
                 CONF_PV_POWER,
@@ -139,12 +143,12 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
                 default=self._data.get(CONF_INVERTER_SELECT),
             ): EntitySelector(_SELECT_ENTITY),
             vol.Optional(
-                "inverter_verb_self_use",
-                default=existing_options.get("SELF_USE"),
+                CONF_INVERTER_DISABLED_OPTION,
+                default=self._data.get(CONF_INVERTER_DISABLED_OPTION),
             ): TextSelector(),
             vol.Optional(
-                "inverter_verb_battery_control",
-                default=existing_options.get("BATTERY_CONTROL"),
+                CONF_INVERTER_POWER_CONTROL_OPTION,
+                default=self._data.get(CONF_INVERTER_POWER_CONTROL_OPTION),
             ): TextSelector(),
             vol.Optional(
                 CONF_ACTIVE_POWER_ENTITY,

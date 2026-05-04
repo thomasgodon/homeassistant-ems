@@ -35,7 +35,7 @@ class EmsEvChargingBinarySensor(CoordinatorEntity[EmsStrategyCoordinator], Binar
     def is_on(self) -> bool:
         if self.coordinator.data is None:
             return False
-        return self.coordinator.data.decision.strategy == "ev_charging"
+        return self.coordinator.data.decision.ev_charge_intent
 
     @property
     def available(self) -> bool:

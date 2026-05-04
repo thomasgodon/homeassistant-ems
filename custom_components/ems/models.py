@@ -8,8 +8,8 @@ from typing import Literal
 @dataclass(frozen=True, slots=True)
 class VerbMapping:
     inverter_select_entity: str | None
-    self_use_option: str | None
-    battery_control_option: str | None
+    disabled_option: str | None
+    power_control_option: str | None
     active_power_entity: str | None
     ev_charge_target_entity: str | None
 
@@ -43,6 +43,8 @@ class Decision:
     strategy: StrategyLabel
     active_power_w: float  # positive = discharge for house; negative = PV surplus; 0 = idle
     ev_charge_power_w: float  # watts; 0 = idle
+    # True: EMS wants to charge (mode=Energy-optimised + plugged + SOC<target)
+    ev_charge_intent: bool
 
 
 @dataclass(frozen=True, slots=True)

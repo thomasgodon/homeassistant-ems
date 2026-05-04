@@ -9,24 +9,24 @@ from custom_components.ems.models import Decision, VerbMapping
 
 _MAPPING = VerbMapping(
     inverter_select_entity="select.inverter",
-    self_use_option="Self Use",
-    battery_control_option="Battery Control",
+    disabled_option="disabled",
+    power_control_option="power_control",
     active_power_entity=None,
     ev_charge_target_entity=None,
 )
 
 _MAPPING_WITH_TARGET = VerbMapping(
     inverter_select_entity="select.inverter",
-    self_use_option="Self Use",
-    battery_control_option="Battery Control",
+    disabled_option="disabled",
+    power_control_option="power_control",
     active_power_entity="number.battery_cap",
     ev_charge_target_entity="number.ev_charger_power",
 )
 
 _MAPPING_NO_INVERTER = VerbMapping(
     inverter_select_entity=None,
-    self_use_option=None,
-    battery_control_option=None,
+    disabled_option=None,
+    power_control_option=None,
     active_power_entity=None,
     ev_charge_target_entity=None,
 )
@@ -37,6 +37,7 @@ def _make_decision(**overrides) -> Decision:
         strategy="ev_charging",
         active_power_w=200.0,
         ev_charge_power_w=3500.0,
+        ev_charge_intent=True,
     )
     defaults.update(overrides)
     return Decision(**defaults)
@@ -47,6 +48,7 @@ def _make_idle() -> Decision:
         strategy="ev_idle",
         active_power_w=0.0,
         ev_charge_power_w=0.0,
+        ev_charge_intent=False,
     )
 
 
@@ -70,8 +72,8 @@ def controller_with_target():
 
 
 @pytest.mark.asyncio
-async def test_idle_decision_writes_self_use_and_zero(controller_with_target) -> None:
-    """Idle writes self_use to inverter and 0 to EV target."""
+async def test_idle_decision_writes_disabled_and_zero(controller_with_target) -> None:
+    """Idle writes 'disabled' to inverter and 0 to EV target."""
     ctrl, hass = controller_with_target
     await ctrl.write_full(_make_idle())
     select_calls = [
@@ -79,14 +81,14 @@ async def test_idle_decision_writes_self_use_and_zero(controller_with_target) ->
     ]
     number_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_value"]
     assert len(select_calls) == 1
-    assert select_calls[0][0][2]["option"] == "Self Use"
+    assert select_calls[0][0][2]["option"] == "disabled"
     assert len(number_calls) == 1
     assert number_calls[0][0][2]["value"] == 0.0
 
 
 @pytest.mark.asyncio
 async def test_idle_no_inverter_no_select_call(controller) -> None:
-    """Idle with no target entity: only select_option for self_use, no set_value."""
+    """Idle with no target entity: only select_option for disabled, no set_value."""
     ctrl, hass = controller
     await ctrl.write_full(_make_idle())
     number_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_value"]
@@ -94,8 +96,8 @@ async def test_idle_no_inverter_no_select_call(controller) -> None:
 
 
 @pytest.mark.asyncio
-async def test_active_writes_battery_control_and_cap(controller_with_target) -> None:
-    """Active decision selects battery_control, writes cap and EV target."""
+async def test_active_writes_power_control_and_cap(controller_with_target) -> None:
+    """Active decision selects 'power_control', writes cap and EV target."""
     ctrl, hass = controller_with_target
     await ctrl.write_full(_make_decision(active_power_w=150.0, ev_charge_power_w=3000.0))
     select_calls = [
@@ -103,7 +105,7 @@ async def test_active_writes_battery_control_and_cap(controller_with_target) -> 
     ]
     number_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_value"]
     assert len(select_calls) == 1
-    assert select_calls[0][0][2]["option"] == "Battery Control"
+    assert select_calls[0][0][2]["option"] == "power_control"
     # number_calls: cap + EV target
     assert len(number_calls) == 2
     cap_call = next(c for c in number_calls if c[0][2]["entity_id"] == "number.battery_cap")
@@ -184,8 +186,8 @@ async def test_suppress_writes_idle(controller_with_target) -> None:
 
 
 @pytest.mark.asyncio
-async def test_self_use_selected_on_idle_after_active(controller_with_target) -> None:
-    """After an active tick, going idle selects self_use on the inverter."""
+async def test_disabled_selected_on_idle_after_active(controller_with_target) -> None:
+    """After an active tick, going idle selects 'disabled' on the inverter."""
     ctrl, hass = controller_with_target
     await ctrl.write_full(_make_decision())
     hass.services.async_call.reset_mock()
@@ -195,4 +197,4 @@ async def test_self_use_selected_on_idle_after_active(controller_with_target) ->
         c for c in hass.services.async_call.call_args_list if c[0][1] == "select_option"
     ]
     assert len(select_calls) == 1
-    assert select_calls[0][0][2]["option"] == "Self Use"
+    assert select_calls[0][0][2]["option"] == "disabled"

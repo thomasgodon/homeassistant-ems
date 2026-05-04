@@ -9,7 +9,8 @@ CONF_HOUSE_LOAD = "house_load"
 
 # Config entry data keys — inverter (optional)
 CONF_INVERTER_SELECT = "inverter_select"
-CONF_INVERTER_OPTIONS = "inverter_options"
+CONF_INVERTER_DISABLED_OPTION = "inverter_disabled_option"
+CONF_INVERTER_POWER_CONTROL_OPTION = "inverter_power_control_option"
 CONF_ACTIVE_POWER_ENTITY = "active_power_entity"
 
 # Config entry data keys — EV charger (optional)

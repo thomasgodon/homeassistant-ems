@@ -78,18 +78,20 @@ def _make_decision(
     ev_target_w = solar_for_ev + grid_headroom
 
     if ev_target_w < thresholds.ev_min_charge_w:
-        return _idle()
+        return _idle(ev_charge_intent=True)  # EMS wants to charge but power insufficient
 
     return Decision(
         strategy="ev_charging",
         active_power_w=active_power_w,
         ev_charge_power_w=ev_target_w,
+        ev_charge_intent=True,
     )
 
 
-def _idle() -> Decision:
+def _idle(ev_charge_intent: bool = False) -> Decision:
     return Decision(
         strategy="ev_idle",
         active_power_w=0.0,
         ev_charge_power_w=0.0,
+        ev_charge_intent=ev_charge_intent,
     )

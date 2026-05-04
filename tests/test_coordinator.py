@@ -223,8 +223,8 @@ async def test_build_inputs_reads_grid_import():
 
 
 @pytest.mark.asyncio
-async def test_build_inputs_battery_control_option_from_inverter_options():
-    """battery_control_option is extracted from CONF_INVERTER_OPTIONS['BATTERY_CONTROL']."""
+async def test_build_inputs_mapping_from_inverter_select():
+    """VerbMapping is built from inverter_select, option strings, and active_power_entity."""
     from custom_components.ems.coordinator import EmsStrategyCoordinator
 
     entry = _make_entry({
@@ -233,7 +233,8 @@ async def test_build_inputs_battery_control_option_from_inverter_options():
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
         "inverter_select": "select.inv",
-        "inverter_options": {"SELF_USE": "Self Use", "BATTERY_CONTROL": "Bat Ctrl"},
+        "inverter_disabled_option": "disabled",
+        "inverter_power_control_option": "power_control",
         "active_power_entity": "number.bat_cap",
     })
 
@@ -254,6 +255,7 @@ async def test_build_inputs_battery_control_option_from_inverter_options():
     with patch("custom_components.ems.coordinator.dt_util"):
         inputs = await coordinator._build_inputs()
 
-    assert inputs.mapping.battery_control_option == "Bat Ctrl"
+    assert inputs.mapping.inverter_select_entity == "select.inv"
+    assert inputs.mapping.disabled_option == "disabled"
+    assert inputs.mapping.power_control_option == "power_control"
     assert inputs.mapping.active_power_entity == "number.bat_cap"
-    assert inputs.mapping.self_use_option == "Self Use"

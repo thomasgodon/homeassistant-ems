@@ -47,12 +47,14 @@ def test_idle_when_ev_not_plugged(builder) -> None:
     d = decide(builder, ev_plugged=False, ev_strategy="Energy-optimised")
     assert d.strategy == "ev_idle"
     assert d.ev_charge_power_w == 0.0
+    assert d.ev_charge_intent is False
 
 
 def test_idle_when_strategy_off(builder) -> None:
     d = decide(builder, ev_plugged=True, ev_strategy="Off")
     assert d.strategy == "ev_idle"
     assert d.ev_charge_power_w == 0.0
+    assert d.ev_charge_intent is False
 
 
 def test_idle_when_soc_at_target(builder) -> None:
@@ -64,6 +66,7 @@ def test_idle_when_soc_at_target(builder) -> None:
         thresholds=_THRESHOLDS,
     )
     assert d.strategy == "ev_idle"
+    assert d.ev_charge_intent is False
 
 
 def test_idle_when_soc_above_target(builder) -> None:
@@ -75,6 +78,7 @@ def test_idle_when_soc_above_target(builder) -> None:
         thresholds=_THRESHOLDS,
     )
     assert d.strategy == "ev_idle"
+    assert d.ev_charge_intent is False
 
 
 def test_charges_when_soc_below_target(builder) -> None:
@@ -90,6 +94,7 @@ def test_charges_when_soc_below_target(builder) -> None:
         thresholds=_THRESHOLDS,
     )
     assert d.strategy == "ev_charging"
+    assert d.ev_charge_intent is True
 
 
 def test_charges_when_soc_is_none(builder) -> None:
@@ -106,6 +111,7 @@ def test_charges_when_soc_is_none(builder) -> None:
         thresholds=_THRESHOLDS,
     )
     assert d.strategy == "ev_charging"
+    assert d.ev_charge_intent is True
 
 
 # ── user spec examples ────────────────────────────────────────────────────────
@@ -191,7 +197,7 @@ def test_grid_headroom_reduces_ev_target(builder) -> None:
 
 
 def test_grid_headroom_clamps_to_zero_goes_idle(builder) -> None:
-    """When non-EV grid draw exceeds limit and no solar surplus → idle."""
+    """When non-EV grid draw exceeds limit and no solar surplus → idle but intent is True."""
     thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
     d = decide(
         builder,
@@ -205,12 +211,13 @@ def test_grid_headroom_clamps_to_zero_goes_idle(builder) -> None:
         thresholds=thresholds,
     )
     assert d.strategy == "ev_idle"
+    assert d.ev_charge_intent is True
 
 
 # ── minimum charge gate ───────────────────────────────────────────────────────
 
 def test_idle_when_below_minimum(builder) -> None:
-    """If ev_target_w < ev_min_charge_w, stay idle."""
+    """If ev_target_w < ev_min_charge_w: strategy=ev_idle but ev_charge_intent=True."""
     d = decide(
         builder,
         ev_plugged=True,
@@ -223,6 +230,7 @@ def test_idle_when_below_minimum(builder) -> None:
         thresholds=Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=1400.0),
     )
     assert d.strategy == "ev_idle"
+    assert d.ev_charge_intent is True
 
 
 def test_charges_above_minimum(builder) -> None:

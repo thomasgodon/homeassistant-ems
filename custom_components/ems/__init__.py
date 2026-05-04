@@ -9,7 +9,8 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from .const import (
     CONF_ACTIVE_POWER_ENTITY,
     CONF_EV_CHARGE_TARGET_ENTITY,
-    CONF_INVERTER_OPTIONS,
+    CONF_INVERTER_DISABLED_OPTION,
+    CONF_INVERTER_POWER_CONTROL_OPTION,
     CONF_INVERTER_SELECT,
     DOMAIN,
 )
@@ -27,11 +28,12 @@ PLATFORMS = [
     Platform.BINARY_SENSOR,
     Platform.SELECT,
     Platform.NUMBER,
+    Platform.SENSOR,
 ]
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    if entry.version >= 6:
+    if entry.version >= 8:
         return True
 
     new_data = {**entry.data}
@@ -56,7 +58,10 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             dropped,
         )
 
-    hass.config_entries.async_update_entry(entry, data=new_data, version=6)
+    # v6 → v7: inverter option strings are now hardcoded; drop stored options dict
+    new_data.pop("inverter_options", None)
+
+    hass.config_entries.async_update_entry(entry, data=new_data, version=8)
     return True
 
 
@@ -64,12 +69,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     data = entry.data
-    inverter_options_raw: dict = data.get(CONF_INVERTER_OPTIONS, {})
 
     mapping = VerbMapping(
         inverter_select_entity=data.get(CONF_INVERTER_SELECT),
-        self_use_option=inverter_options_raw.get("SELF_USE") or None,
-        battery_control_option=inverter_options_raw.get("BATTERY_CONTROL") or None,
+        disabled_option=data.get(CONF_INVERTER_DISABLED_OPTION) or None,
+        power_control_option=data.get(CONF_INVERTER_POWER_CONTROL_OPTION) or None,
         active_power_entity=data.get(CONF_ACTIVE_POWER_ENTITY),
         ev_charge_target_entity=data.get(CONF_EV_CHARGE_TARGET_ENTITY),
     )
@@ -123,7 +127,7 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
         return {
             "strategy": decision.strategy,
-            "battery_discharge_cap_w": decision.battery_discharge_cap_w,
+            "active_power_w": decision.active_power_w,
             "ev_charge_power_w": decision.ev_charge_power_w,
             "computed_at": inputs.now.isoformat(),
         }

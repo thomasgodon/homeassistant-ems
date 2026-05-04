@@ -13,8 +13,8 @@ from custom_components.ems.models import (
 
 _DEFAULT_MAPPING = VerbMapping(
     inverter_select_entity="select.inverter_mode",
-    self_use_option="Self Use",
-    battery_control_option="Battery Control",
+    disabled_option="disabled",
+    power_control_option="power_control",
     active_power_entity="number.battery_cap",
     ev_charge_target_entity=None,
 )
