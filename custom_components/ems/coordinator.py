@@ -202,6 +202,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
 
         prior_inputs = self._state.last_result.inputs
 
+        ev_strategy = _read_select_state(self.hass, "select.ems_ev_charging_mode", "Off")
         fast_decision = strategy_module.recompute(
             pv_w=pv_w,
             house_load_w=house_load_w,
@@ -209,34 +210,38 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             grid_import_w=grid_import_w,
             ev_plugged=prior_inputs.ev_plugged,
             ev_soc=prior_inputs.ev_soc,
-            ev_strategy=_read_select_state(self.hass, "select.ems_ev_charging_mode", "Off"),
+            ev_strategy=ev_strategy,
             thresholds=prior_inputs.thresholds,
         )
         session_start = self._prev_ev_power_w == 0.0 and ev_power_w > 0.0
         self._prev_ev_power_w = ev_power_w
 
-        ev_alpha = _EV_SMOOTHING_ALPHA.get(
-            _read_select_state(self.hass, "select.ems_ev_smoothing", "Fast"), 0.3
-        )
-
-        if session_start or self._ema_ev_w is None:
-            self._ema_ev_w = fast_decision.ev_charge_power_w
-            self._ema_active_w = fast_decision.active_power_w
+        if ev_strategy == "Off":
+            self._ema_ev_w = None
+            self._ema_active_w = None
         else:
-            self._ema_ev_w = (
-                ev_alpha * fast_decision.ev_charge_power_w
-                + (1.0 - ev_alpha) * self._ema_ev_w
-            )
-            self._ema_active_w = (
-                _ACTIVE_POWER_EMA_ALPHA * fast_decision.active_power_w
-                + (1.0 - _ACTIVE_POWER_EMA_ALPHA) * self._ema_active_w
+            ev_alpha = _EV_SMOOTHING_ALPHA.get(
+                _read_select_state(self.hass, "select.ems_ev_smoothing", "Fast"), 0.3
             )
 
-        fast_decision = replace(
-            fast_decision,
-            ev_charge_power_w=self._ema_ev_w,
-            active_power_w=self._ema_active_w,
-        )
+            if session_start or self._ema_ev_w is None:
+                self._ema_ev_w = fast_decision.ev_charge_power_w
+                self._ema_active_w = fast_decision.active_power_w
+            else:
+                self._ema_ev_w = (
+                    ev_alpha * fast_decision.ev_charge_power_w
+                    + (1.0 - ev_alpha) * self._ema_ev_w
+                )
+                self._ema_active_w = (
+                    _ACTIVE_POWER_EMA_ALPHA * fast_decision.active_power_w
+                    + (1.0 - _ACTIVE_POWER_EMA_ALPHA) * self._ema_active_w
+                )
+
+            fast_decision = replace(
+                fast_decision,
+                ev_charge_power_w=self._ema_ev_w,
+                active_power_w=self._ema_active_w,
+            )
 
         await self._controller.write_full(fast_decision, ev_power_w=ev_power_w)
 

@@ -347,7 +347,13 @@ def _make_fast_coordinator(hass_states: dict | None = None):
 _RECOMPUTE = "custom_components.ems.coordinator.strategy_module.recompute"
 _DT_UTIL = "custom_components.ems.coordinator.dt_util"
 _NOW = datetime(2024, 1, 1, tzinfo=UTC)
-_EV_STATES = {"sensor.pv": 0, "sensor.load": 0, "sensor.ev": 100, "sensor.grid": 0}
+_EV_STATES = {
+    "sensor.pv": 0,
+    "sensor.load": 0,
+    "sensor.ev": 100,
+    "sensor.grid": 0,
+    "select.ems_ev_charging_mode": "Energy-optimised",
+}
 
 
 @pytest.mark.asyncio
@@ -489,3 +495,33 @@ async def test_fast_loop_ema_slow_mode_uses_lower_alpha():
 
     written: Decision = coord._controller.write_full.call_args[0][0]
     assert written.ev_charge_power_w == pytest.approx(0.1 * 2000.0 + 0.9 * 1000.0)
+
+
+@pytest.mark.asyncio
+async def test_fast_loop_off_mode_bypasses_ema_and_resets_state():
+    """When mode is Off, written value is immediately 0 and EMA state is cleared."""
+    off_decision = Decision(
+        strategy="charging_disabled",
+        active_power_w=0.0,
+        ev_charge_power_w=0.0,
+        charging_state="charging_disabled",
+    )
+    off_states = {
+        **_EV_STATES,
+        "select.ems_ev_charging_mode": "Off",
+    }
+
+    coord = _make_fast_coordinator(off_states)
+    coord._state.last_result = _make_ladder_result()
+    coord._ema_ev_w = 500.0
+    coord._ema_active_w = 200.0
+
+    with patch(_RECOMPUTE, return_value=off_decision), patch(_DT_UTIL) as mock_dt:
+        mock_dt.utcnow.return_value = _NOW
+        await coord._async_update_data()
+
+    written: Decision = coord._controller.write_full.call_args[0][0]
+    assert written.ev_charge_power_w == pytest.approx(0.0)
+    assert written.active_power_w == pytest.approx(0.0)
+    assert coord._ema_ev_w is None
+    assert coord._ema_active_w is None
