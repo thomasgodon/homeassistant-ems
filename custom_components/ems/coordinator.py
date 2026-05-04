@@ -43,6 +43,9 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+_EV_EMA_ALPHA: float = 0.3
+_ACTIVE_POWER_EMA_ALPHA: float = 0.3
+
 
 @dataclass
 class EmsState:
@@ -174,6 +177,9 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         self._entry = entry
         self._state = state
         self._controller = controller
+        self._ema_ev_w: float | None = None
+        self._ema_active_w: float | None = None
+        self._prev_ev_power_w: float = 0.0
         super().__init__(
             hass,
             _LOGGER,
@@ -206,6 +212,28 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             ev_strategy=_read_select_state(self.hass, "select.ems_ev_charging_mode", "Off"),
             thresholds=prior_inputs.thresholds,
         )
+        session_start = self._prev_ev_power_w == 0.0 and ev_power_w > 0.0
+        self._prev_ev_power_w = ev_power_w
+
+        if session_start or self._ema_ev_w is None:
+            self._ema_ev_w = fast_decision.ev_charge_power_w
+            self._ema_active_w = fast_decision.active_power_w
+        else:
+            self._ema_ev_w = (
+                _EV_EMA_ALPHA * fast_decision.ev_charge_power_w
+                + (1.0 - _EV_EMA_ALPHA) * self._ema_ev_w
+            )
+            self._ema_active_w = (
+                _ACTIVE_POWER_EMA_ALPHA * fast_decision.active_power_w
+                + (1.0 - _ACTIVE_POWER_EMA_ALPHA) * self._ema_active_w
+            )
+
+        fast_decision = replace(
+            fast_decision,
+            ev_charge_power_w=self._ema_ev_w,
+            active_power_w=self._ema_active_w,
+        )
+
         await self._controller.write_full(fast_decision, ev_power_w=ev_power_w)
 
         now = dt_util.utcnow()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -9,6 +10,13 @@ from custom_components.ems.const import (
     CONF_MAX_GRID_IMPORT_W,
     DEFAULT_EV_TARGET_SOC,
     DEFAULT_MAX_GRID_IMPORT_W,
+)
+from custom_components.ems.models import (
+    Decision,
+    Inputs,
+    LadderResult,
+    Thresholds,
+    VerbMapping,
 )
 
 
@@ -259,3 +267,185 @@ async def test_build_inputs_mapping_from_inverter_select():
     assert inputs.mapping.disabled_option == "disabled"
     assert inputs.mapping.power_control_option == "power_control"
     assert inputs.mapping.active_power_entity == "number.bat_cap"
+
+
+# ---------------------------------------------------------------------------
+# EmsFastLoopCoordinator EMA smoothing
+# ---------------------------------------------------------------------------
+
+def _make_ladder_result(ev_power_w: float = 0.0) -> LadderResult:
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    thresholds = Thresholds(max_grid_import_w=6000, ev_target_soc=80, ev_min_charge_w=1400)
+    mapping = VerbMapping(
+        inverter_select_entity=None,
+        disabled_option=None,
+        power_control_option=None,
+        active_power_entity=None,
+        ev_charge_target_entity=None,
+    )
+    inputs = Inputs(
+        now=now,
+        grid_import_w=0.0,
+        pv_w=0.0,
+        house_load_w=0.0,
+        ev_plugged=True,
+        ev_power_w=ev_power_w,
+        ev_soc=None,
+        ev_strategy="Energy-optimised",
+        thresholds=thresholds,
+        mapping=mapping,
+    )
+    decision = Decision(
+        strategy="ev_idle",
+        active_power_w=0.0,
+        ev_charge_power_w=0.0,
+        charging_state="ev_not_connected",
+    )
+    return LadderResult(decision=decision, inputs=inputs, computed_at=now)
+
+
+def _make_fast_coordinator(hass_states: dict | None = None):
+    from custom_components.ems.coordinator import EmsFastLoopCoordinator
+
+    hass = MagicMock()
+    hass_states = hass_states or {}
+
+    def get_state(entity_id):
+        if entity_id in hass_states:
+            s = MagicMock()
+            s.state = str(hass_states[entity_id])
+            return s
+        return None
+
+    hass.states.get = MagicMock(side_effect=get_state)
+
+    entry = MagicMock()
+    entry.data = {
+        "pv_power": "sensor.pv",
+        "house_load": "sensor.load",
+        "ev_power": "sensor.ev",
+        "grid_import_power": "sensor.grid",
+    }
+
+    state = MagicMock()
+    state.startup_grace_until = None
+
+    controller = MagicMock()
+    controller.write_full = AsyncMock()
+
+    coord = EmsFastLoopCoordinator.__new__(EmsFastLoopCoordinator)
+    coord.hass = hass
+    coord._entry = entry
+    coord._state = state
+    coord._controller = controller
+    coord._ema_ev_w = None
+    coord._ema_active_w = None
+    coord._prev_ev_power_w = 0.0
+    return coord
+
+
+_RECOMPUTE = "custom_components.ems.coordinator.strategy_module.recompute"
+_DT_UTIL = "custom_components.ems.coordinator.dt_util"
+_NOW = datetime(2024, 1, 1, tzinfo=UTC)
+_EV_STATES = {"sensor.pv": 0, "sensor.load": 0, "sensor.ev": 100, "sensor.grid": 0}
+
+
+@pytest.mark.asyncio
+async def test_fast_loop_ema_first_tick_uses_raw_value():
+    """First tick initialises EMA to the raw recompute output (no blending)."""
+    raw_decision = Decision(
+        strategy="ev_charging",
+        active_power_w=500.0,
+        ev_charge_power_w=2000.0,
+        charging_state="charging",
+    )
+    coord = _make_fast_coordinator(_EV_STATES)
+    coord._state.last_result = _make_ladder_result()
+
+    with patch(_RECOMPUTE, return_value=raw_decision), patch(_DT_UTIL) as mock_dt:
+        mock_dt.utcnow.return_value = _NOW
+        await coord._async_update_data()
+
+    written: Decision = coord._controller.write_full.call_args[0][0]
+    assert written.ev_charge_power_w == pytest.approx(2000.0)
+    assert written.active_power_w == pytest.approx(500.0)
+
+
+@pytest.mark.asyncio
+async def test_fast_loop_ema_second_tick_blends():
+    """Second tick blends 30% new + 70% old."""
+    first_decision = Decision(
+        strategy="ev_charging",
+        active_power_w=500.0,
+        ev_charge_power_w=2000.0,
+        charging_state="charging",
+    )
+    second_decision = Decision(
+        strategy="ev_charging",
+        active_power_w=1000.0,
+        ev_charge_power_w=3000.0,
+        charging_state="charging",
+    )
+
+    coord = _make_fast_coordinator(_EV_STATES)
+    coord._state.last_result = _make_ladder_result()
+
+    with patch(_DT_UTIL) as mock_dt:
+        mock_dt.utcnow.return_value = _NOW
+        with patch(_RECOMPUTE, return_value=first_decision):
+            await coord._async_update_data()
+        with patch(_RECOMPUTE, return_value=second_decision):
+            await coord._async_update_data()
+
+    written: Decision = coord._controller.write_full.call_args[0][0]
+    assert written.ev_charge_power_w == pytest.approx(0.3 * 3000.0 + 0.7 * 2000.0)
+    assert written.active_power_w == pytest.approx(0.3 * 1000.0 + 0.7 * 500.0)
+
+
+@pytest.mark.asyncio
+async def test_fast_loop_ema_resets_on_session_start():
+    """After ev_power_w drops to 0, the next non-zero ev_power_w resets EMA to raw target."""
+    charging_decision = Decision(
+        strategy="ev_charging",
+        active_power_w=500.0,
+        ev_charge_power_w=2000.0,
+        charging_state="charging",
+    )
+    new_session_decision = Decision(
+        strategy="ev_charging",
+        active_power_w=800.0,
+        ev_charge_power_w=3500.0,
+        charging_state="charging",
+    )
+
+    coord = _make_fast_coordinator(_EV_STATES)
+    coord._state.last_result = _make_ladder_result()
+
+    with patch(_DT_UTIL) as mock_dt:
+        mock_dt.utcnow.return_value = _NOW
+
+        # Tick 1: ev charging — EMA initialised to raw values
+        with patch(_RECOMPUTE, return_value=charging_decision):
+            await coord._async_update_data()
+
+        # Tick 2: ev_power_w drops to 0 (charger stopped)
+        coord.hass.states.get = MagicMock(side_effect=lambda _: _mock_state("0"))
+        with patch(_RECOMPUTE, return_value=charging_decision):
+            await coord._async_update_data()
+
+        # Tick 3: new charging session (ev_power_w > 0) — EMA must reset immediately
+        coord.hass.states.get = MagicMock(
+            side_effect=lambda eid: _mock_state("150") if "ev" in eid else _mock_state("0")
+        )
+        with patch(_RECOMPUTE, return_value=new_session_decision):
+            await coord._async_update_data()
+
+    written: Decision = coord._controller.write_full.call_args[0][0]
+    assert written.ev_charge_power_w == pytest.approx(3500.0)
+    assert written.active_power_w == pytest.approx(800.0)
+
+
+def _mock_state(value: str) -> MagicMock:
+    s = MagicMock()
+    s.state = value
+    return s
