@@ -449,3 +449,43 @@ def _mock_state(value: str) -> MagicMock:
     s = MagicMock()
     s.state = value
     return s
+
+
+@pytest.mark.asyncio
+async def test_fast_loop_ema_slow_mode_uses_lower_alpha():
+    """Slow smoothing (α=0.1) blends less aggressively than Fast (α=0.3)."""
+    first_decision = Decision(
+        strategy="ev_charging",
+        active_power_w=0.0,
+        ev_charge_power_w=1000.0,
+        charging_state="charging",
+    )
+    second_decision = Decision(
+        strategy="ev_charging",
+        active_power_w=0.0,
+        ev_charge_power_w=2000.0,
+        charging_state="charging",
+    )
+
+    def states_with_smoothing(smoothing_value: str):
+        def get(eid):
+            if "smoothing" in eid:
+                return _mock_state(smoothing_value)
+            if "ev" in eid:
+                return _mock_state("100")
+            return _mock_state("0")
+        return MagicMock(side_effect=get)
+
+    coord = _make_fast_coordinator(_EV_STATES)
+    coord._state.last_result = _make_ladder_result()
+    coord.hass.states.get = states_with_smoothing("Slow")
+
+    with patch(_DT_UTIL) as mock_dt:
+        mock_dt.utcnow.return_value = _NOW
+        with patch(_RECOMPUTE, return_value=first_decision):
+            await coord._async_update_data()
+        with patch(_RECOMPUTE, return_value=second_decision):
+            await coord._async_update_data()
+
+    written: Decision = coord._controller.write_full.call_args[0][0]
+    assert written.ev_charge_power_w == pytest.approx(0.1 * 2000.0 + 0.9 * 1000.0)

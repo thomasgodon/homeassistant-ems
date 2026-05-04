@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-_EV_EMA_ALPHA: float = 0.3
+_EV_SMOOTHING_ALPHA: dict[str, float] = {"Fast": 0.3, "Normal": 0.2, "Slow": 0.1}
 _ACTIVE_POWER_EMA_ALPHA: float = 0.3
 
 
@@ -215,13 +215,17 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         session_start = self._prev_ev_power_w == 0.0 and ev_power_w > 0.0
         self._prev_ev_power_w = ev_power_w
 
+        ev_alpha = _EV_SMOOTHING_ALPHA.get(
+            _read_select_state(self.hass, "select.ems_ev_smoothing", "Fast"), 0.3
+        )
+
         if session_start or self._ema_ev_w is None:
             self._ema_ev_w = fast_decision.ev_charge_power_w
             self._ema_active_w = fast_decision.active_power_w
         else:
             self._ema_ev_w = (
-                _EV_EMA_ALPHA * fast_decision.ev_charge_power_w
-                + (1.0 - _EV_EMA_ALPHA) * self._ema_ev_w
+                ev_alpha * fast_decision.ev_charge_power_w
+                + (1.0 - ev_alpha) * self._ema_ev_w
             )
             self._ema_active_w = (
                 _ACTIVE_POWER_EMA_ALPHA * fast_decision.active_power_w

@@ -143,6 +143,7 @@ The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`, `gri
 | Entity | Options | Description |
 |--------|---------|-------------|
 | `select.ems_ev_charging_mode` | `Energy-optimised`, `Off` | `Energy-optimised`: charge using solar surplus + grid headroom. `Off`: disables EV charging entirely. |
+| `select.ems_ev_smoothing` | `Fast`, `Normal`, `Slow` | Controls the EMA alpha applied to the EV charge target in the 1-second fast loop. `Fast` (α=0.3, ~3 s settling), `Normal` (α=0.2, ~5 s), `Slow` (α=0.1, ~10 s). Active power smoothing is unaffected. Default: `Fast`. |
 
 ---
 
