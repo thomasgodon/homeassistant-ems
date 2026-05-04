@@ -141,4 +141,5 @@ def test_charging_state_options_cover_all_states():
         "Target SoC reached",
         "Not enough power",
         "Starting up",
+        "Outside cheap hours",
     }

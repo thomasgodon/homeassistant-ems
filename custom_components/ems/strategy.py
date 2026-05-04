@@ -14,6 +14,7 @@ def decide(inputs: Inputs) -> Decision:
         ev_plugged=inputs.ev_plugged,
         ev_soc=inputs.ev_soc,
         ev_strategy=inputs.ev_strategy,
+        is_cheap_hour=inputs.is_cheap_hour,
         thresholds=inputs.thresholds,
     )
 
@@ -27,6 +28,7 @@ def recompute(
     ev_plugged: bool,
     ev_soc: float | None,
     ev_strategy: str,
+    is_cheap_hour: bool,
     thresholds: Thresholds,
 ) -> Decision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
@@ -39,6 +41,7 @@ def recompute(
         ev_plugged=ev_plugged,
         ev_soc=ev_soc,
         ev_strategy=ev_strategy,
+        is_cheap_hour=is_cheap_hour,
         thresholds=thresholds,
     )
 
@@ -54,11 +57,14 @@ def _make_decision(
     ev_plugged: bool,
     ev_soc: float | None,
     ev_strategy: str,
+    is_cheap_hour: bool,
     thresholds: Thresholds,
 ) -> Decision:
     # Hard gates — evaluated in priority order
     if ev_strategy == "Off":
         return _idle("charging_disabled")
+    if ev_strategy == "Price-optimised" and not is_cheap_hour:
+        return _idle("outside_cheap_hours")
     if not ev_plugged:
         return _idle("ev_not_connected")
     if ev_soc is not None and ev_soc >= thresholds.ev_target_soc:

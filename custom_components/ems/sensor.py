@@ -16,6 +16,7 @@ _CHARGING_STATE_LABELS: dict[str, str] = {
     "target_soc_reached": "Target SoC reached",
     "not_enough_power": "Not enough power",
     "starting_up": "Starting up",
+    "outside_cheap_hours": "Outside cheap hours",
 }
 
 

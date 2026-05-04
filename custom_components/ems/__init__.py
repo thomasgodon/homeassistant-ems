@@ -32,7 +32,7 @@ PLATFORMS = [
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    if entry.version >= 8:
+    if entry.version >= 9:
         return True
 
     new_data = {**entry.data}
@@ -60,7 +60,10 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # v6 → v7: inverter option strings are now hardcoded; drop stored options dict
     new_data.pop("inverter_options", None)
 
-    hass.config_entries.async_update_entry(entry, data=new_data, version=8)
+    # v8 → v9: add price signal entity (optional, defaults to None)
+    new_data.setdefault("price_signal_entity", None)
+
+    hass.config_entries.async_update_entry(entry, data=new_data, version=9)
     return True
 
 

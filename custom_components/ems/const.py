@@ -23,6 +23,7 @@ CONF_EV_MAX_CHARGE_W = "ev_max_charge_w"
 # Config entry data keys — thresholds (config scalars, set in config flow)
 CONF_MAX_GRID_IMPORT_W = "max_grid_import_w"
 CONF_EV_TARGET_SOC = "ev_target_soc"
+CONF_PRICE_SIGNAL_ENTITY = "price_signal_entity"
 
 # Threshold defaults
 DEFAULT_MAX_GRID_IMPORT_W = 4500.0

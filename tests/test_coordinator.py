@@ -291,7 +291,8 @@ def _make_ladder_result(ev_power_w: float = 0.0) -> LadderResult:
         ev_plugged=True,
         ev_power_w=ev_power_w,
         ev_soc=None,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
+        is_cheap_hour=True,
         thresholds=thresholds,
         mapping=mapping,
     )

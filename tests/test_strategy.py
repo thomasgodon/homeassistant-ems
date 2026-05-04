@@ -36,6 +36,7 @@ def recompute(builder, **overrides) -> Decision:
         ev_plugged=inp.ev_plugged,
         ev_soc=inp.ev_soc,
         ev_strategy=inp.ev_strategy,
+        is_cheap_hour=inp.is_cheap_hour,
         thresholds=inp.thresholds,
     )
 
@@ -43,7 +44,7 @@ def recompute(builder, **overrides) -> Decision:
 # ── idle gates ────────────────────────────────────────────────────────────────
 
 def test_idle_when_ev_not_plugged(builder) -> None:
-    d = decide(builder, ev_plugged=False, ev_strategy="Energy-optimised")
+    d = decide(builder, ev_plugged=False, ev_strategy="Grid-optimised")
     assert d.strategy == "ev_idle"
     assert d.ev_charge_power_w == 0.0
     assert d.charging_state == "ev_not_connected"
@@ -60,7 +61,7 @@ def test_idle_when_soc_at_target(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=80.0,
         thresholds=_THRESHOLDS,
     )
@@ -72,7 +73,7 @@ def test_idle_when_soc_above_target(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=95.0,
         thresholds=_THRESHOLDS,
     )
@@ -84,7 +85,7 @@ def test_charges_when_soc_below_target(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=-1500.0,
         pv_w=2000.0,
@@ -101,7 +102,7 @@ def test_charges_when_soc_is_none(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=None,
         grid_import_w=-1500.0,
         pv_w=2000.0,
@@ -129,7 +130,7 @@ def test_spec_example_1_pv_surplus_positive_active_power(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=-300.0,
         pv_w=500.0,
@@ -149,7 +150,7 @@ def test_spec_example_2_no_pv_house_from_battery(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=200.0,
         pv_w=0.0,
@@ -169,7 +170,7 @@ def test_spec_example_3_partial_pv(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=50.0,
         pv_w=150.0,
@@ -191,7 +192,7 @@ def test_high_grid_import_reduces_ev_target(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=3500.0,
         ev_power_w=0.0,
@@ -207,7 +208,7 @@ def test_grid_import_exceeds_cap_goes_idle(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=6000.0,
         ev_power_w=0.0,
@@ -223,7 +224,7 @@ def test_pv_export_increases_ev_target(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=-2000.0,
         ev_power_w=0.0,
@@ -239,7 +240,7 @@ def test_over_import_reduces_ev_target(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=5000.0,
         ev_power_w=2000.0,
@@ -256,7 +257,7 @@ def test_idle_when_below_minimum(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=3200.0,
         ev_power_w=0.0,
@@ -271,7 +272,7 @@ def test_charges_above_minimum(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=500.0,
         ev_power_w=0.0,
@@ -295,7 +296,7 @@ def test_ev_target_capped_by_max_charger(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=500.0,
         ev_power_w=0.0,
@@ -317,7 +318,7 @@ def test_ev_target_no_cap_when_none(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=500.0,
         ev_power_w=0.0,
@@ -337,7 +338,7 @@ def test_ev_target_cap_does_not_trigger_idle(builder) -> None:
     d = decide(
         builder,
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=500.0,
         ev_power_w=0.0,
@@ -353,7 +354,7 @@ def test_ev_target_cap_does_not_trigger_idle(builder) -> None:
 def test_recompute_matches_decide(builder) -> None:
     inp = builder.build(
         ev_plugged=True,
-        ev_strategy="Energy-optimised",
+        ev_strategy="Grid-optimised",
         ev_soc=50.0,
         grid_import_w=1000.0,
         pv_w=500.0,
@@ -370,6 +371,80 @@ def test_recompute_matches_decide(builder) -> None:
         ev_plugged=inp.ev_plugged,
         ev_soc=inp.ev_soc,
         ev_strategy=inp.ev_strategy,
+        is_cheap_hour=inp.is_cheap_hour,
         thresholds=inp.thresholds,
     )
     assert d1 == d2
+
+
+# ── price-optimised mode ──────────────────────────────────────────────────────
+
+def test_price_optimised_charges_during_cheap_hour(builder) -> None:
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Price-optimised",
+        is_cheap_hour=True,
+        ev_soc=50.0,
+        grid_import_w=-1500.0,
+        pv_w=2000.0,
+        house_load_w=500.0,
+        ev_power_w=0.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.charging_state == "charging"
+
+
+def test_price_optimised_idle_outside_cheap_hour(builder) -> None:
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Price-optimised",
+        is_cheap_hour=False,
+        ev_soc=50.0,
+        grid_import_w=-1500.0,
+        pv_w=2000.0,
+        house_load_w=500.0,
+        ev_power_w=0.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "outside_cheap_hours"
+    assert d.ev_charge_power_w == 0.0
+
+
+def test_price_optimised_outside_cheap_hour_takes_priority_over_power(builder) -> None:
+    """Even with huge PV surplus, outside cheap hours → idle."""
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Price-optimised",
+        is_cheap_hour=False,
+        ev_soc=50.0,
+        grid_import_w=-10000.0,
+        pv_w=15000.0,
+        house_load_w=500.0,
+        ev_power_w=0.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "outside_cheap_hours"
+
+
+def test_price_optimised_matches_grid_optimised_when_cheap(builder) -> None:
+    """Price-optimised with is_cheap_hour=True produces identical result to Grid-optimised."""
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    kwargs = dict(
+        ev_plugged=True,
+        ev_soc=50.0,
+        grid_import_w=1000.0,
+        pv_w=500.0,
+        house_load_w=300.0,
+        ev_power_w=0.0,
+        thresholds=thresholds,
+        is_cheap_hour=True,
+    )
+    d_grid = decide(builder, ev_strategy="Grid-optimised", **kwargs)
+    d_price = decide(builder, ev_strategy="Price-optimised", **kwargs)
+    assert d_grid == d_price

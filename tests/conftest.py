@@ -49,6 +49,7 @@ class InputsBuilder:
             ev_power_w=get("ev_power_w", 0.0),
             ev_soc=get("ev_soc", None),
             ev_strategy=get("ev_strategy", "Off"),
+            is_cheap_hour=get("is_cheap_hour", True),
             thresholds=get("thresholds", _DEFAULT_THRESHOLDS),
             mapping=get("mapping", _DEFAULT_MAPPING),
         )

@@ -25,6 +25,7 @@ from .const import (
     CONF_INVERTER_POWER_CONTROL_OPTION,
     CONF_INVERTER_SELECT,
     CONF_MAX_GRID_IMPORT_W,
+    CONF_PRICE_SIGNAL_ENTITY,
     CONF_PV_POWER,
     DEFAULT_EV_TARGET_SOC,
     DEFAULT_MAX_GRID_IMPORT_W,
@@ -130,6 +131,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         ev_plugged = _read_bool(hass, data.get(CONF_EV_PLUG), True)
         ev_power_w = _read_float(hass, data.get(CONF_EV_POWER), 0.0)
         ev_soc = _read_float_optional(hass, data.get(CONF_EV_SOC))
+        is_cheap_hour = _read_bool(hass, data.get(CONF_PRICE_SIGNAL_ENTITY), True)
 
         thresholds = Thresholds(
             max_grid_import_w=_read_float(
@@ -159,6 +161,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             ev_power_w=ev_power_w,
             ev_soc=ev_soc,
             ev_strategy=ev_strategy,  # type: ignore[arg-type]
+            is_cheap_hour=is_cheap_hour,
             thresholds=thresholds,
             mapping=mapping,
         )
@@ -203,6 +206,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         prior_inputs = self._state.last_result.inputs
 
         ev_strategy = _read_select_state(self.hass, "select.ems_ev_charging_mode", "Off")
+        is_cheap_hour = _read_bool(self.hass, data.get(CONF_PRICE_SIGNAL_ENTITY), True)
         fast_decision = strategy_module.recompute(
             pv_w=pv_w,
             house_load_w=house_load_w,
@@ -211,6 +215,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             ev_plugged=prior_inputs.ev_plugged,
             ev_soc=prior_inputs.ev_soc,
             ev_strategy=ev_strategy,
+            is_cheap_hour=is_cheap_hour,
             thresholds=prior_inputs.thresholds,
         )
         session_start = self._prev_ev_power_w == 0.0 and ev_power_w > 0.0
@@ -253,6 +258,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             house_load_w=house_load_w,
             ev_power_w=ev_power_w,
             grid_import_w=grid_import_w,
+            is_cheap_hour=is_cheap_hour,
         )
         result = LadderResult(decision=fast_decision, inputs=fast_inputs, computed_at=now)
         self._state.last_result = result

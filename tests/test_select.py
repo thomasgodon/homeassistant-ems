@@ -2,6 +2,55 @@ from __future__ import annotations
 
 import pytest
 
+# ── EmsEvChargingMode ─────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_ev_charging_mode_options():
+    from custom_components.ems.select import EmsEvChargingMode
+
+    entity = EmsEvChargingMode()
+    assert entity._attr_options == ["Grid-optimised", "Price-optimised", "Off"]
+
+
+@pytest.mark.asyncio
+async def test_ev_charging_mode_default():
+    from custom_components.ems.select import EmsEvChargingMode
+
+    entity = EmsEvChargingMode()
+    assert entity._attr_current_option == "Off"
+
+
+@pytest.mark.asyncio
+async def test_ev_charging_mode_migrates_energy_optimised_to_grid_optimised():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from custom_components.ems.select import EmsEvChargingMode
+
+    entity = EmsEvChargingMode()
+    last = MagicMock()
+    last.state = "Energy-optimised"
+    entity.async_get_last_state = AsyncMock(return_value=last)
+
+    await entity.async_added_to_hass()
+
+    assert entity._attr_current_option == "Grid-optimised"
+
+
+@pytest.mark.asyncio
+async def test_ev_charging_mode_ignores_invalid_restored_state():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from custom_components.ems.select import EmsEvChargingMode
+
+    entity = EmsEvChargingMode()
+    last = MagicMock()
+    last.state = "unknown"
+    entity.async_get_last_state = AsyncMock(return_value=last)
+
+    await entity.async_added_to_hass()
+
+    assert entity._attr_current_option == "Off"
+
 
 @pytest.mark.asyncio
 async def test_ev_smoothing_default_option():

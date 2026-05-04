@@ -31,7 +31,8 @@ class Inputs:
     ev_plugged: bool
     ev_power_w: float
     ev_soc: float | None
-    ev_strategy: Literal["Energy-optimised", "Off"]
+    ev_strategy: Literal["Grid-optimised", "Price-optimised", "Off"]
+    is_cheap_hour: bool
     thresholds: Thresholds
     mapping: VerbMapping
 
@@ -45,6 +46,7 @@ EvChargingState = Literal[
     "target_soc_reached",
     "not_enough_power",
     "starting_up",
+    "outside_cheap_hours",
 ]
 
 

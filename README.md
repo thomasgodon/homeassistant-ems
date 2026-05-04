@@ -28,12 +28,13 @@ ev_target_w    = max(0, max_grid_import_w − grid_import_w + ev_power_w)
 ev_target_w    = min(ev_target_w, max_ev_charge_w)  ← if max_ev_charge_w is configured
 
 # Hard gates → idle (evaluated in priority order)
-if ev_strategy == "Off":                           → charging_disabled
-if not ev_plugged:                                 → ev_not_connected
-if ev_soc is not None and ev_soc ≥ ev_target_soc: → target_soc_reached
+if ev_strategy == "Off":                                           → charging_disabled
+if ev_strategy == "Price-optimised" and not is_cheap_hour:         → outside_cheap_hours
+if not ev_plugged:                                                 → ev_not_connected
+if ev_soc is not None and ev_soc ≥ ev_target_soc:                 → target_soc_reached
 
 # Below minimum → idle
-elif ev_target_w < ev_min_charge_w:               → not_enough_power
+elif ev_target_w < ev_min_charge_w:                                → not_enough_power
 
 # Charge
 else:
@@ -91,6 +92,7 @@ The **Configure** button (Settings → Devices & Services → EMS → Configure)
 | `ev_target_soc` | `number` / `input_number` / `sensor` | No | SoC at which EV charging stops; reads entity at runtime; falls back to `80` % |
 | `ev_charge_target_entity` | `number` / `input_number` | No | EMS writes the computed charge power (W) to this entity each cycle |
 | `ev_max_charge_w` | `number` / `input_number` | No | Physical maximum output of the EV charger (W); EMS caps the computed EV target to this value at runtime |
+| `price_signal_entity` | binary_sensor / input_boolean | No | Cheap-hour signal for `Price-optimised` mode. EMS charges only when `on`; defaults to `on` (always cheap) when not configured or unavailable. |
 
 ### Step 3 — Grid
 
@@ -116,6 +118,7 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | `ev_power_w` | `ev_power` entity |
 | `ev_soc` | `ev_soc` entity (%) or `None` |
 | `ev_strategy` | `select.ems_ev_charging_mode` |
+| `is_cheap_hour` | `price_signal_entity` (Step 2); `True` when not configured or unavailable |
 | `thresholds` | `max_grid_import_w` from entity (Step 3); `ev_target_soc` from entity (Step 2); `ev_min_charge_w` from `number.ems_ev_min_charge_w`; `max_ev_charge_w` from entity (Step 2) |
 | `mapping` | Inverter select entity + active power entity + EV charge target entity from config |
 
@@ -142,7 +145,7 @@ The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`, `gri
 
 | Entity | Options | Description |
 |--------|---------|-------------|
-| `select.ems_ev_charging_mode` | `Energy-optimised`, `Off` | `Energy-optimised`: charge using solar surplus + grid headroom. `Off`: disables EV charging entirely. |
+| `select.ems_ev_charging_mode` | `Grid-optimised`, `Price-optimised`, `Off` | `Grid-optimised`: charge using solar surplus + grid headroom. `Price-optimised`: same as Grid-optimised but only charges when the `price_signal_entity` is `on` (i.e. a cheap hour). `Off`: disables EV charging entirely. |
 | `select.ems_ev_smoothing` | `Fast`, `Normal`, `Slow` | Controls the EMA alpha applied to the EV charge target in the 1-second fast loop. `Fast` (α=0.3, ~3 s settling), `Normal` (α=0.2, ~5 s), `Slow` (α=0.1, ~10 s). Active power smoothing is unaffected. Default: `Fast`. |
 
 ---
@@ -192,6 +195,7 @@ All writes are idempotent — each path writes only when the value changes from 
 | `Target SoC reached` | EV SoC is at or above the configured target |
 | `Not enough power` | Available grid headroom + PV is below the minimum charge threshold |
 | `Starting up` | EMS is in the 60-second startup grace period; no writes yet |
+| `Outside cheap hours` | Mode is `Price-optimised` and the price signal entity is `off` |
 
 ### Number entities (`number.ems_*`)
 
