@@ -43,7 +43,7 @@ def _compute(
     mapping: VerbMapping,
 ) -> InverterDecision:
     if inverter_strategy == "Off":
-        return InverterDecision(inverter_verb=None, active_power_w=None)
+        return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
 
     house_non_ev = max(0.0, house_load_w - ev_power_w)
 
@@ -52,9 +52,11 @@ def _compute(
         return InverterDecision(
             inverter_verb=mapping.power_control_option,
             active_power_w=max(0.0, pv_w - house_non_ev),
+            status="controlling",
         )
 
     return InverterDecision(
         inverter_verb=mapping.disabled_option,
         active_power_w=None,
+        status="idle",
     )

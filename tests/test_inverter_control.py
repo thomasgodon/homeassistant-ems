@@ -183,3 +183,20 @@ def test_recompute_matches_decide(builder) -> None:
         mapping=inp.mapping,
     )
     assert d1 == d2
+
+
+# ── status field ──────────────────────────────────────────────────────────────
+
+def test_off_mode_status_is_disabled() -> None:
+    d = _decide(inverter_strategy="Off")
+    assert d.status == "disabled"
+
+
+def test_ev_idle_status_is_idle() -> None:
+    d = _decide(ev_power_w=0.0)
+    assert d.status == "idle"
+
+
+def test_ev_charging_status_is_controlling() -> None:
+    d = _decide(ev_power_w=3000.0)
+    assert d.status == "controlling"

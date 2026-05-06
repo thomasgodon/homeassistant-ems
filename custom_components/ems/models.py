@@ -40,6 +40,8 @@ class Inputs:
 
 StrategyLabel = Literal["ev_charging", "ev_idle"]
 
+InverterStatus = Literal["controlling", "idle", "disabled", "starting_up"]
+
 EvChargingState = Literal[
     "charging",
     "ev_not_connected",
@@ -62,6 +64,7 @@ class EvDecision:
 class InverterDecision:
     inverter_verb: str | None  # None = do not write inverter select
     active_power_w: float | None  # None = do not write active power
+    status: InverterStatus = "idle"
 
 
 @dataclass(frozen=True, slots=True)

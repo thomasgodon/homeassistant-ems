@@ -19,6 +19,25 @@ _CHARGING_STATE_LABELS: dict[str, str] = {
     "outside_cheap_hours": "Outside cheap hours",
 }
 
+_INVERTER_STATUS_LABELS: dict[str, str] = {
+    "controlling": "Controlling",
+    "idle": "Idle",
+    "disabled": "Disabled",
+    "starting_up": "Starting up",
+}
+
+_INVERTER_STATUS_REASONS: dict[str, str] = {
+    "idle": (
+        "No EV draw. Inverter set to its disabled option;"
+        " EMS leaves inverter to manage itself."
+    ),
+    "disabled": "Inverter Control Mode is set to Off. EMS does not write to the inverter.",
+    "starting_up": (
+        "Startup grace (60 s). Strategy still computing,"
+        " but writes are suppressed while sensors stabilize."
+    ),
+}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -31,6 +50,7 @@ async def async_setup_entry(
         EmsEvCurrentSensor(coordinator),
         EmsEvChargingStateSensor(coordinator),
         EmsInverterActivePowerSensor(coordinator),
+        EmsInverterStatusSensor(coordinator),
     ])
 
 
@@ -124,6 +144,74 @@ class EmsEvChargingStateSensor(CoordinatorEntity[EmsFastLoopCoordinator], Sensor
         if self.coordinator.data is None:
             return None
         return _CHARGING_STATE_LABELS.get(self.coordinator.data.ev_decision.charging_state)
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None
+
+
+class EmsInverterStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    _attr_unique_id = "ems_inverter_status"
+    _attr_name = "EMS Inverter Status"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(_INVERTER_STATUS_LABELS.values())
+
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data is None:
+            return None
+        return _INVERTER_STATUS_LABELS.get(self.coordinator.data.inverter_decision.status)
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        if self.coordinator.data is None:
+            return None
+        data = self.coordinator.data
+        inv = data.inverter_decision
+        inp = data.inputs
+        pv = inp.pv_w
+        house = inp.house_load_w
+        ev = inp.ev_power_w
+        house_non_ev = max(0.0, house - ev)
+
+        if inv.status == "controlling":
+            ap = inv.active_power_w
+            reason = (
+                f"EV drawing {ev:.0f} W. Inverter set to power-control mode;"
+                " active power clamped ≥ 0 so battery cannot feed the EV."
+            )
+            formula = (
+                f"active_power = max(0, pv_w − house_non_ev)"
+                f" = max(0, {pv:.0f} − {house_non_ev:.0f}) = {ap:.0f} W"
+            )
+        elif inv.status == "starting_up":
+            ap = max(0.0, pv - house_non_ev)
+            reason = _INVERTER_STATUS_REASONS["starting_up"]
+            formula = (
+                f"Would write: max(0, {pv:.0f} − {house_non_ev:.0f})"
+                f" = {ap:.0f} W (suppressed during startup)"
+            )
+        else:
+            ap = None
+            reason = _INVERTER_STATUS_REASONS.get(inv.status, "")
+            formula = "Not writing active_power."
+
+        return {
+            "reason": reason,
+            "formula": formula,
+            "pv_w": pv,
+            "house_load_w": house,
+            "ev_power_w": ev,
+            "house_non_ev_w": house_non_ev,
+            "active_power_w": ap,
+        }
 
     @property
     def available(self) -> bool:

@@ -107,6 +107,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         )
         if in_grace:
             ev_decision = replace(ev_decision, charging_state="starting_up")
+            inverter_decision = replace(inverter_decision, status="starting_up")
         try:
             await self._controller.write_slow(
                 ev_decision, inverter_decision, suppress_writes=in_grace

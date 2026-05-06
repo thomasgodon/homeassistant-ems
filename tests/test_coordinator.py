@@ -589,3 +589,49 @@ async def test_fast_loop_inverter_off_mode_no_active_power_ema():
     written_inv: InverterDecision = coord._controller.write_fast.call_args[0][1]
     assert written_inv.active_power_w is None
     assert coord._ema_active_w is None
+
+
+# ---------------------------------------------------------------------------
+# EmsStrategyCoordinator startup grace — inverter_decision status override
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_strategy_coordinator_sets_inverter_status_starting_up_during_grace():
+    """During startup grace the coordinator overrides inverter_decision.status to 'starting_up'."""
+    from custom_components.ems.coordinator import EmsStrategyCoordinator
+
+    entry = _make_entry({
+        "grid_import_power": "sensor.grid",
+        "pv_power": "sensor.pv",
+        "house_load": "sensor.load",
+        "ev_power": "sensor.ev",
+    })
+
+    hass = _make_hass({
+        "sensor.grid": 0, "sensor.pv": 5000, "sensor.load": 1000, "sensor.ev": 2000,
+        "number.ems_ev_min_charge_w": 1400,
+        "select.ems_ev_charging_mode": "Grid-optimised",
+        "select.ems_inverter_control_mode": "Control Inverter",
+    })
+
+    grace_end = datetime(2024, 1, 1, 0, 1, 0, tzinfo=UTC)
+    now = datetime(2024, 1, 1, 0, 0, 30, tzinfo=UTC)
+
+    state = MagicMock()
+    state.startup_grace_until = grace_end
+    state.last_result = None
+
+    controller = MagicMock()
+    controller.write_slow = AsyncMock()
+
+    coord = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
+    coord.hass = hass
+    coord._entry = entry
+    coord._state = state
+    coord._controller = controller
+
+    with patch("custom_components.ems.coordinator.dt_util") as mock_dt:
+        mock_dt.utcnow.return_value = now
+        result = await coord._async_update_data()
+
+    assert result.inverter_decision.status == "starting_up"

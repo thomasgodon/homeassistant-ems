@@ -3,12 +3,15 @@ from __future__ import annotations
 import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 from custom_components.ems.models import EvDecision, InverterDecision, LadderResult
 from custom_components.ems.sensor import (
     EmsEvChargingStateSensor,
     EmsEvCurrentSensor,
     EmsInverterActivePowerSensor,
     EmsInverterModeSensor,
+    EmsInverterStatusSensor,
 )
 
 
@@ -17,6 +20,9 @@ def _make_coordinator(
     charging_state: str = "not_enough_power",
     ev_power_w: float = 0.0,
     active_power_w: float | None = None,
+    inverter_status: str | None = None,
+    pv_w: float = 6000.0,
+    house_load_w: float = 2000.0,
 ) -> MagicMock:
     coordinator = MagicMock()
     if ev_charge_power_w is None:
@@ -27,14 +33,16 @@ def _make_coordinator(
             ev_charge_power_w=ev_charge_power_w,
             charging_state=charging_state if ev_charge_power_w == 0.0 else "charging",
         )
+        default_status = "controlling" if ev_power_w > 0.0 else "idle"
         inverter_decision = InverterDecision(
             inverter_verb="power_control" if ev_power_w > 0.0 else "disabled",
             active_power_w=active_power_w,
+            status=inverter_status or default_status,
         )
         coordinator.data = LadderResult(
             ev_decision=ev_decision,
             inverter_decision=inverter_decision,
-            inputs=MagicMock(ev_power_w=ev_power_w),
+            inputs=MagicMock(ev_power_w=ev_power_w, pv_w=pv_w, house_load_w=house_load_w),
             computed_at=datetime.datetime(2026, 5, 4, 12, 0, 0, tzinfo=datetime.UTC),
         )
     return coordinator
@@ -188,3 +196,99 @@ def test_active_power_shows_value_when_set():
         _make_coordinator(3500.0, ev_power_w=3500.0, active_power_w=1500.0)
     )
     assert sensor.native_value == 1500.0
+
+
+# ── EmsInverterStatusSensor ───────────────────────────────────────────────────
+
+def test_inverter_status_controlling():
+    sensor = EmsInverterStatusSensor(
+        _make_coordinator(3500.0, ev_power_w=3500.0, active_power_w=4500.0,
+                          inverter_status="controlling", pv_w=6000.0, house_load_w=5500.0)
+    )
+    assert sensor.native_value == "Controlling"
+
+
+def test_inverter_status_idle():
+    sensor = EmsInverterStatusSensor(_make_coordinator(0.0, inverter_status="idle"))
+    assert sensor.native_value == "Idle"
+
+
+def test_inverter_status_disabled():
+    sensor = EmsInverterStatusSensor(_make_coordinator(0.0, inverter_status="disabled"))
+    assert sensor.native_value == "Disabled"
+
+
+def test_inverter_status_starting_up():
+    sensor = EmsInverterStatusSensor(_make_coordinator(0.0, inverter_status="starting_up"))
+    assert sensor.native_value == "Starting up"
+
+
+def test_inverter_status_none_when_no_data():
+    sensor = EmsInverterStatusSensor(_make_coordinator(None))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_inverter_status_available_when_data_present():
+    sensor = EmsInverterStatusSensor(_make_coordinator(0.0))
+    assert sensor.available is True
+
+
+def test_inverter_status_unique_id():
+    sensor = EmsInverterStatusSensor(_make_coordinator(0.0))
+    assert sensor.unique_id == "ems_inverter_status"
+
+
+def test_inverter_status_options_cover_all_states():
+    sensor = EmsInverterStatusSensor(_make_coordinator(0.0))
+    assert set(sensor.options) == {"Controlling", "Idle", "Disabled", "Starting up"}
+
+
+def test_inverter_status_attributes_none_when_no_data():
+    sensor = EmsInverterStatusSensor(_make_coordinator(None))
+    assert sensor.extra_state_attributes is None
+
+
+def test_inverter_status_attributes_controlling():
+    sensor = EmsInverterStatusSensor(
+        _make_coordinator(3500.0, ev_power_w=3500.0, active_power_w=4500.0,
+                          inverter_status="controlling", pv_w=6000.0, house_load_w=5500.0)
+    )
+    attrs = sensor.extra_state_attributes
+    assert attrs["pv_w"] == 6000.0
+    assert attrs["house_load_w"] == 5500.0
+    assert attrs["ev_power_w"] == 3500.0
+    assert attrs["house_non_ev_w"] == max(0.0, 5500.0 - 3500.0)
+    assert attrs["active_power_w"] == 4500.0
+    assert "EV drawing 3500 W" in attrs["reason"]
+    assert "max(0," in attrs["formula"]
+    assert "4500" in attrs["formula"]
+
+
+def test_inverter_status_attributes_idle():
+    sensor = EmsInverterStatusSensor(
+        _make_coordinator(0.0, inverter_status="idle", pv_w=3000.0, house_load_w=1000.0)
+    )
+    attrs = sensor.extra_state_attributes
+    assert attrs["active_power_w"] is None
+    assert attrs["formula"] == "Not writing active_power."
+    assert "No EV draw" in attrs["reason"]
+
+
+def test_inverter_status_attributes_disabled():
+    sensor = EmsInverterStatusSensor(
+        _make_coordinator(0.0, inverter_status="disabled")
+    )
+    attrs = sensor.extra_state_attributes
+    assert attrs["active_power_w"] is None
+    assert "Off" in attrs["reason"]
+
+
+def test_inverter_status_attributes_starting_up():
+    sensor = EmsInverterStatusSensor(
+        _make_coordinator(0.0, inverter_status="starting_up", pv_w=5000.0, house_load_w=1000.0)
+    )
+    attrs = sensor.extra_state_attributes
+    assert "startup" in attrs["formula"].lower() or "suppressed" in attrs["formula"]
+    assert "Startup grace" in attrs["reason"]
+    assert attrs["active_power_w"] == pytest.approx(max(0.0, 5000.0 - max(0.0, 1000.0 - 0.0)))

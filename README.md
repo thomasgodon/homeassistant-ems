@@ -211,6 +211,7 @@ Active power and EV target are cached — a service call is skipped if the value
 | `sensor.ems_inverter_mode` | `power_control`, `disabled`, or `None` | Current inverter verb from the last `InverterDecision`. Reflects what EMS last intended to write. Unavailable until the first strategy cycle completes. |
 | `sensor.ems_ev_current_w` | float (W) | Computed EV charge target EMS is writing to `ev_charge_target_entity`. `0` when idle, off, or before the first strategy cycle. Always available. |
 | `sensor.ems_inverter_active_power` | float (W) | Active power EMS is writing to `active_power_entity`. Positive = PV surplus (charging into inverter); `0` when EV not charging, inverter control is Off, or before the first strategy cycle. Always available. |
+| `sensor.ems_inverter_status` | `Controlling`, `Idle`, `Disabled`, `Starting up` | Explains why and how EMS is (or isn't) controlling the inverter. Attributes: `reason` (human sentence), `formula` (shows the `active_power = max(0, pv_w − house_non_ev)` calculation), plus `pv_w`, `house_load_w`, `ev_power_w`, `house_non_ev_w`, `active_power_w`. Unavailable until the first strategy cycle completes. |
 
 #### `sensor.ems_ev_charging_state` values
 
@@ -223,6 +224,15 @@ Active power and EV target are cached — a service call is skipped if the value
 | `Not enough power` | Available grid headroom + PV is below the minimum charge threshold |
 | `Starting up` | EMS is in the 60-second startup grace period; no writes yet |
 | `Outside cheap hours` | Mode is `Price-optimised` and the price signal entity is `off` |
+
+#### `sensor.ems_inverter_status` values
+
+| Value | Meaning |
+|-------|---------|
+| `Controlling` | EV is drawing power; inverter set to power-control mode, active power written to prevent battery from feeding the EV |
+| `Idle` | No EV draw; inverter set to its `disabled_option` so it manages its own mode |
+| `Disabled` | Inverter Control Mode is `Off`; EMS does not write to the inverter at all |
+| `Starting up` | EMS is in the 60-second startup grace period; strategy computes but writes are suppressed |
 
 ### Number entities (`number.ems_*`)
 
