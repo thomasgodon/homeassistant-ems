@@ -33,6 +33,7 @@ class Inputs:
     ev_soc: float | None
     ev_strategy: Literal["Grid-optimised", "Price-optimised", "Off"]
     is_cheap_hour: bool
+    inverter_strategy: Literal["Control Inverter", "Off"]
     thresholds: Thresholds
     mapping: VerbMapping
 
@@ -51,15 +52,21 @@ EvChargingState = Literal[
 
 
 @dataclass(frozen=True, slots=True)
-class Decision:
+class EvDecision:
     strategy: StrategyLabel
-    active_power_w: float  # negative = drain from inverter; positive = PV surplus into inverter
     ev_charge_power_w: float  # watts; 0 = idle
     charging_state: EvChargingState
 
 
 @dataclass(frozen=True, slots=True)
+class InverterDecision:
+    inverter_verb: str | None  # None = do not write inverter select
+    active_power_w: float | None  # None = do not write active power
+
+
+@dataclass(frozen=True, slots=True)
 class LadderResult:
-    decision: Decision
+    ev_decision: EvDecision
+    inverter_decision: InverterDecision
     inputs: Inputs
     computed_at: datetime

@@ -10,6 +10,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from . import inverter_control as inverter_control_module
 from . import strategy as strategy_module
 from .const import (
     CONF_ACTIVE_POWER_ENTITY,
@@ -55,7 +56,7 @@ class EmsState:
 
 
 class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
-    """10 s default. Builds Inputs → strategy.decide → controller.write_full."""
+    """10 s default. Builds Inputs → strategy.decide + inverter_control.decide → write_slow."""
 
     def __init__(
         self,
@@ -86,7 +87,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         self._entry.async_on_unload(
             async_track_state_change_event(
                 self.hass,
-                "select.ems_ev_charging_mode",
+                ["select.ems_ev_charging_mode", "select.ems_inverter_control_mode"],
                 _on_mode_change,
             )
         )
@@ -97,22 +98,28 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         except Exception as exc:
             raise UpdateFailed(f"EMS input build failed: {exc}") from exc
 
-        decision = strategy_module.decide(inputs)
+        ev_decision = strategy_module.decide(inputs)
+        inverter_decision = inverter_control_module.decide(inputs)
 
         in_grace = (
             self._state.startup_grace_until is not None
             and inputs.now < self._state.startup_grace_until
         )
         if in_grace:
-            decision = replace(decision, charging_state="starting_up")
+            ev_decision = replace(ev_decision, charging_state="starting_up")
         try:
-            await self._controller.write_full(
-                decision, ev_power_w=inputs.ev_power_w, suppress_writes=in_grace
+            await self._controller.write_slow(
+                ev_decision, inverter_decision, suppress_writes=in_grace
             )
         except Exception:
             _LOGGER.exception("EMS controller write failed; decision still reported")
 
-        result = LadderResult(decision=decision, inputs=inputs, computed_at=inputs.now)
+        result = LadderResult(
+            ev_decision=ev_decision,
+            inverter_decision=inverter_decision,
+            inputs=inputs,
+            computed_at=inputs.now,
+        )
         self._state.last_result = result
         return result
 
@@ -123,6 +130,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         now = dt_util.utcnow()
 
         ev_strategy = _read_select_state(hass, "select.ems_ev_charging_mode", "Off")
+        inverter_strategy = _read_select_state(hass, "select.ems_inverter_control_mode", "Off")
 
         grid_import_w = _read_float(hass, data.get(CONF_GRID_IMPORT_POWER), 0.0)
         pv_w = _read_float(hass, data.get(CONF_PV_POWER), 0.0)
@@ -162,13 +170,14 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             ev_soc=ev_soc,
             ev_strategy=ev_strategy,  # type: ignore[arg-type]
             is_cheap_hour=is_cheap_hour,
+            inverter_strategy=inverter_strategy,  # type: ignore[arg-type]
             thresholds=thresholds,
             mapping=mapping,
         )
 
 
 class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
-    """1 s default. Re-runs strategy with fresh power readings every second."""
+    """1 s default. Re-runs strategy + inverter_control with fresh power readings every second."""
 
     def __init__(
         self,
@@ -190,7 +199,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             update_interval=timedelta(seconds=1),
         )
 
-    async def _async_update_data(self) -> "LadderResult | None":
+    async def _async_update_data(self) -> LadderResult | None:
         if self._state.last_result is None:
             return None
         grace_until = self._state.startup_grace_until
@@ -206,8 +215,10 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         prior_inputs = self._state.last_result.inputs
 
         ev_strategy = _read_select_state(self.hass, "select.ems_ev_charging_mode", "Off")
+        inverter_strategy = _read_select_state(self.hass, "select.ems_inverter_control_mode", "Off")
         is_cheap_hour = _read_bool(self.hass, data.get(CONF_PRICE_SIGNAL_ENTITY), True)
-        fast_decision = strategy_module.recompute(
+
+        ev_fast = strategy_module.recompute(
             pv_w=pv_w,
             house_load_w=house_load_w,
             ev_power_w=ev_power_w,
@@ -218,6 +229,14 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             is_cheap_hour=is_cheap_hour,
             thresholds=prior_inputs.thresholds,
         )
+        inverter_fast = inverter_control_module.recompute(
+            pv_w=pv_w,
+            house_load_w=house_load_w,
+            ev_power_w=ev_power_w,
+            inverter_strategy=inverter_strategy,
+            mapping=prior_inputs.mapping,
+        )
+
         session_start = self._prev_ev_power_w == 0.0 and ev_power_w > 0.0
         self._prev_ev_power_w = ev_power_w
 
@@ -229,26 +248,30 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
                 _read_select_state(self.hass, "select.ems_ev_smoothing", "Fast"), 0.3
             )
 
+            if inverter_fast.active_power_w is None:
+                self._ema_active_w = None
+
             if session_start or self._ema_ev_w is None:
-                self._ema_ev_w = fast_decision.ev_charge_power_w
-                self._ema_active_w = fast_decision.active_power_w
+                self._ema_ev_w = ev_fast.ev_charge_power_w
             else:
                 self._ema_ev_w = (
-                    ev_alpha * fast_decision.ev_charge_power_w
+                    ev_alpha * ev_fast.ev_charge_power_w
                     + (1.0 - ev_alpha) * self._ema_ev_w
                 )
-                self._ema_active_w = (
-                    _ACTIVE_POWER_EMA_ALPHA * fast_decision.active_power_w
-                    + (1.0 - _ACTIVE_POWER_EMA_ALPHA) * self._ema_active_w
-                )
 
-            fast_decision = replace(
-                fast_decision,
-                ev_charge_power_w=self._ema_ev_w,
-                active_power_w=self._ema_active_w,
-            )
+            ev_fast = replace(ev_fast, ev_charge_power_w=self._ema_ev_w)
 
-        await self._controller.write_full(fast_decision, ev_power_w=ev_power_w)
+            if inverter_fast.active_power_w is not None:
+                if session_start or self._ema_active_w is None:
+                    self._ema_active_w = inverter_fast.active_power_w
+                else:
+                    self._ema_active_w = (
+                        _ACTIVE_POWER_EMA_ALPHA * inverter_fast.active_power_w
+                        + (1.0 - _ACTIVE_POWER_EMA_ALPHA) * self._ema_active_w
+                    )
+                inverter_fast = replace(inverter_fast, active_power_w=self._ema_active_w)
+
+        await self._controller.write_fast(ev_fast, inverter_fast)
 
         now = dt_util.utcnow()
         fast_inputs = replace(
@@ -260,7 +283,12 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             grid_import_w=grid_import_w,
             is_cheap_hour=is_cheap_hour,
         )
-        result = LadderResult(decision=fast_decision, inputs=fast_inputs, computed_at=now)
+        result = LadderResult(
+            ev_decision=ev_fast,
+            inverter_decision=inverter_fast,
+            inputs=fast_inputs,
+            computed_at=now,
+        )
         self._state.last_result = result
         return result
 

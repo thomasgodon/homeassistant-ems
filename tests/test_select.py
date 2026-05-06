@@ -106,3 +106,68 @@ async def test_ev_smoothing_ignores_invalid_restored_state():
     await entity.async_added_to_hass()
 
     assert entity._attr_current_option == "Fast"
+
+
+# ── EmsInverterControlMode ────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_inverter_control_mode_options():
+    from custom_components.ems.select import EmsInverterControlMode
+
+    entity = EmsInverterControlMode()
+    assert entity._attr_options == ["Control Inverter", "Off"]
+
+
+@pytest.mark.asyncio
+async def test_inverter_control_mode_default_is_off():
+    from custom_components.ems.select import EmsInverterControlMode
+
+    entity = EmsInverterControlMode()
+    assert entity._attr_current_option == "Off"
+
+
+@pytest.mark.asyncio
+async def test_inverter_control_mode_restores_state():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from custom_components.ems.select import EmsInverterControlMode
+
+    entity = EmsInverterControlMode()
+    last = MagicMock()
+    last.state = "Control Inverter"
+    entity.async_get_last_state = AsyncMock(return_value=last)
+
+    await entity.async_added_to_hass()
+
+    assert entity._attr_current_option == "Control Inverter"
+
+
+@pytest.mark.asyncio
+async def test_inverter_control_mode_ignores_invalid_restored_state():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from custom_components.ems.select import EmsInverterControlMode
+
+    entity = EmsInverterControlMode()
+    last = MagicMock()
+    last.state = "unknown"
+    entity.async_get_last_state = AsyncMock(return_value=last)
+
+    await entity.async_added_to_hass()
+
+    assert entity._attr_current_option == "Off"
+
+
+@pytest.mark.asyncio
+async def test_inverter_control_mode_select_option():
+    from unittest.mock import MagicMock
+
+    from custom_components.ems.select import EmsInverterControlMode
+
+    entity = EmsInverterControlMode()
+    entity.async_write_ha_state = MagicMock()
+
+    await entity.async_select_option("Control Inverter")
+
+    assert entity._attr_current_option == "Control Inverter"
+    entity.async_write_ha_state.assert_called_once()

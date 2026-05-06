@@ -4,54 +4,59 @@ import logging
 
 from homeassistant.core import HomeAssistant
 
-from .models import Decision, VerbMapping
+from .models import EvDecision, InverterDecision, VerbMapping
 
 _LOGGER = logging.getLogger(__name__)
-
-_INVERTER_POWER_CONTROL = "power_control"
 
 
 class Controller:
     def __init__(self, hass: HomeAssistant, mapping: VerbMapping) -> None:
         self._hass = hass
         self._mapping = mapping
-        self._last_inverter_option: str | None = None
         self._last_ev_charge_w: float | None = None
         self._last_active_power: float | None = None
 
     def update_mapping(self, mapping: VerbMapping) -> None:
         self._mapping = mapping
 
-    async def write_full(
-        self, decision: Decision, *, ev_power_w: float = 0.0, suppress_writes: bool = False
+    async def write_slow(
+        self,
+        ev_decision: EvDecision,
+        inverter_decision: InverterDecision,
+        *,
+        suppress_writes: bool = False,
     ) -> None:
-        """Called by 10 s and 1 s coordinators. Idempotent.
+        """Called by the 10 s strategy loop. Writes the inverter verb on every call.
 
-        Inverter is only touched when ev_power_w > 0 (EV confirmed drawing); left alone otherwise.
+        The verb is always asserted (no idempotency cache) so user manual overrides
+        are corrected within one slow-loop cycle.
         """
         if suppress_writes:
             _LOGGER.debug(
-                "Startup grace: would write strategy=%s ev_power=%.0fW",
-                decision.strategy,
-                ev_power_w,
+                "Startup grace: would write strategy=%s",
+                ev_decision.strategy,
             )
             return
 
-        if ev_power_w > 0.0:
-            await self._write_inverter_power_control()
-            await self._write_active_power(decision.active_power_w)
+        if inverter_decision.inverter_verb is not None:
+            await self._select_inverter_option(inverter_decision.inverter_verb)
+        if inverter_decision.active_power_w is not None:
+            await self._write_active_power(inverter_decision.active_power_w)
+        await self._write_ev_target(ev_decision.ev_charge_power_w)
 
-        await self._write_ev_target(decision.ev_charge_power_w)
+    async def write_fast(
+        self,
+        ev_decision: EvDecision,
+        inverter_decision: InverterDecision,
+    ) -> None:
+        """Called by the 1 s fast loop. Never writes the inverter verb."""
+        if inverter_decision.active_power_w is not None:
+            await self._write_active_power(inverter_decision.active_power_w)
+        await self._write_ev_target(ev_decision.ev_charge_power_w)
 
     # ── private helpers ───────────────────────────────────────────────────────
 
-    async def _write_inverter_power_control(self) -> None:
-        option = self._mapping.power_control_option or _INVERTER_POWER_CONTROL
-        await self._select_inverter_option(option)
-
     async def _select_inverter_option(self, option: str) -> None:
-        if option == self._last_inverter_option:
-            return
         entity = self._mapping.inverter_select_entity
         if not entity:
             return
@@ -62,7 +67,6 @@ class Controller:
             {"entity_id": entity, "option": option},
             blocking=True,
         )
-        self._last_inverter_option = option
 
     async def _write_active_power(self, active_power_w: float) -> None:
         entity = self._mapping.active_power_entity
@@ -94,6 +98,5 @@ class Controller:
         self._last_ev_charge_w = watts
 
     def reset_write_cache(self) -> None:
-        self._last_inverter_option = None
         self._last_ev_charge_w = None
         self._last_active_power = None

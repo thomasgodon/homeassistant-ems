@@ -17,6 +17,7 @@ async def async_setup_entry(
     async_add_entities([
         EmsEvChargingMode(),
         EmsEvSmoothing(),
+        EmsInverterControlMode(),
     ])
 
 
@@ -48,6 +49,27 @@ class EmsEvSmoothing(SelectEntity, RestoreEntity):
     _attr_options = ["Fast", "Normal", "Slow"]
     _attr_current_option = "Fast"
     _attr_icon = "mdi:chart-bell-curve"
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    async def async_added_to_hass(self) -> None:
+        if (last := await self.async_get_last_state()) is not None:
+            if last.state in self._attr_options:
+                self._attr_current_option = last.state
+
+    async def async_select_option(self, option: str) -> None:
+        self._attr_current_option = option
+        self.async_write_ha_state()
+
+
+class EmsInverterControlMode(SelectEntity, RestoreEntity):
+    _attr_unique_id = "ems_inverter_control_mode"
+    _attr_name = "EMS Inverter Control Mode"
+    _attr_options = ["Control Inverter", "Off"]
+    _attr_current_option = "Off"
+    _attr_icon = "mdi:solar-power-variant"
 
     @property
     def device_info(self):

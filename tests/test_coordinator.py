@@ -12,8 +12,9 @@ from custom_components.ems.const import (
     DEFAULT_MAX_GRID_IMPORT_W,
 )
 from custom_components.ems.models import (
-    Decision,
+    EvDecision,
     Inputs,
+    InverterDecision,
     LadderResult,
     Thresholds,
     VerbMapping,
@@ -67,6 +68,7 @@ async def test_build_inputs_reads_max_grid_import_from_entity():
         "input_number.ev_target_soc": 75,
         "number.ems_ev_min_charge_w": 1400,
         "select.ems_ev_charging_mode": "Off",
+        "select.ems_inverter_control_mode": "Off",
     })
 
     state = MagicMock()
@@ -93,13 +95,13 @@ async def test_build_inputs_uses_defaults_when_keys_absent():
         "pv_power": "sensor.pv",
         "house_load": "sensor.load",
         "ev_power": "sensor.ev",
-        # all entity-id keys absent
     })
 
     hass = _make_hass({
         "sensor.grid": 0, "sensor.pv": 0, "sensor.load": 0, "sensor.ev": 0,
         "number.ems_ev_min_charge_w": 1400,
         "select.ems_ev_charging_mode": "Off",
+        "select.ems_inverter_control_mode": "Off",
     })
 
     state = MagicMock()
@@ -135,6 +137,7 @@ async def test_build_inputs_uses_defaults_when_entity_unavailable():
             "sensor.grid": "0", "sensor.pv": "0", "sensor.load": "0", "sensor.ev": "0",
             "number.ems_ev_min_charge_w": "1400",
             "select.ems_ev_charging_mode": "Off",
+            "select.ems_inverter_control_mode": "Off",
         }
         if entity_id in base_map:
             s = MagicMock()
@@ -179,6 +182,7 @@ async def test_build_inputs_ev_min_charge_w_from_number_entity():
         "sensor.grid": 0, "sensor.pv": 0, "sensor.load": 0, "sensor.ev": 0,
         "number.ems_ev_min_charge_w": 2000,
         "select.ems_ev_charging_mode": "Off",
+        "select.ems_inverter_control_mode": "Off",
     })
 
     state = MagicMock()
@@ -214,6 +218,7 @@ async def test_build_inputs_reads_grid_import():
         "sensor.ev": 0,
         "number.ems_ev_min_charge_w": 1400,
         "select.ems_ev_charging_mode": "Off",
+        "select.ems_inverter_control_mode": "Off",
     })
 
     state = MagicMock()
@@ -250,6 +255,7 @@ async def test_build_inputs_mapping_from_inverter_select():
         "sensor.grid": 0, "sensor.pv": 0, "sensor.load": 0, "sensor.ev": 0,
         "number.ems_ev_min_charge_w": 1400,
         "select.ems_ev_charging_mode": "Off",
+        "select.ems_inverter_control_mode": "Off",
     })
 
     state = MagicMock()
@@ -267,6 +273,39 @@ async def test_build_inputs_mapping_from_inverter_select():
     assert inputs.mapping.disabled_option == "disabled"
     assert inputs.mapping.power_control_option == "power_control"
     assert inputs.mapping.active_power_entity == "number.bat_cap"
+
+
+@pytest.mark.asyncio
+async def test_build_inputs_reads_inverter_strategy():
+    """inverter_strategy is read from select.ems_inverter_control_mode."""
+    from custom_components.ems.coordinator import EmsStrategyCoordinator
+
+    entry = _make_entry({
+        "grid_import_power": "sensor.grid",
+        "pv_power": "sensor.pv",
+        "house_load": "sensor.load",
+        "ev_power": "sensor.ev",
+    })
+
+    hass = _make_hass({
+        "sensor.grid": 0, "sensor.pv": 0, "sensor.load": 0, "sensor.ev": 0,
+        "number.ems_ev_min_charge_w": 1400,
+        "select.ems_ev_charging_mode": "Off",
+        "select.ems_inverter_control_mode": "Control Inverter",
+    })
+
+    state = MagicMock()
+    state.startup_grace_until = None
+
+    coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
+    coordinator.hass = hass
+    coordinator._entry = entry
+    coordinator._state = state
+
+    with patch("custom_components.ems.coordinator.dt_util"):
+        inputs = await coordinator._build_inputs()
+
+    assert inputs.inverter_strategy == "Control Inverter"
 
 
 # ---------------------------------------------------------------------------
@@ -293,16 +332,19 @@ def _make_ladder_result(ev_power_w: float = 0.0) -> LadderResult:
         ev_soc=None,
         ev_strategy="Grid-optimised",
         is_cheap_hour=True,
+        inverter_strategy="Control Inverter",
         thresholds=thresholds,
         mapping=mapping,
     )
-    decision = Decision(
+    ev_decision = EvDecision(
         strategy="ev_idle",
-        active_power_w=0.0,
         ev_charge_power_w=0.0,
         charging_state="ev_not_connected",
     )
-    return LadderResult(decision=decision, inputs=inputs, computed_at=now)
+    inverter_decision = InverterDecision(inverter_verb=None, active_power_w=None)
+    return LadderResult(
+        ev_decision=ev_decision, inverter_decision=inverter_decision, inputs=inputs, computed_at=now
+    )
 
 
 def _make_fast_coordinator(hass_states: dict | None = None):
@@ -332,7 +374,7 @@ def _make_fast_coordinator(hass_states: dict | None = None):
     state.startup_grace_until = None
 
     controller = MagicMock()
-    controller.write_full = AsyncMock()
+    controller.write_fast = AsyncMock()
 
     coord = EmsFastLoopCoordinator.__new__(EmsFastLoopCoordinator)
     coord.hass = hass
@@ -345,85 +387,80 @@ def _make_fast_coordinator(hass_states: dict | None = None):
     return coord
 
 
-_RECOMPUTE = "custom_components.ems.coordinator.strategy_module.recompute"
+_RECOMPUTE_EV = "custom_components.ems.coordinator.strategy_module.recompute"
+_RECOMPUTE_INV = "custom_components.ems.coordinator.inverter_control_module.recompute"
 _DT_UTIL = "custom_components.ems.coordinator.dt_util"
 _NOW = datetime(2024, 1, 1, tzinfo=UTC)
+
+# States where EV is charging and inverter control is active
 _EV_STATES = {
     "sensor.pv": 0,
     "sensor.load": 0,
     "sensor.ev": 100,
     "sensor.grid": 0,
-    "select.ems_ev_charging_mode": "Energy-optimised",
+    "select.ems_ev_charging_mode": "Grid-optimised",
+    "select.ems_inverter_control_mode": "Control Inverter",
 }
+
+_EV_DECISION_CHARGING = EvDecision(
+    strategy="ev_charging",
+    ev_charge_power_w=2000.0,
+    charging_state="charging",
+)
+_INV_DECISION_ACTIVE = InverterDecision(inverter_verb="power_control", active_power_w=500.0)
+
+
+def _ev_charging(ev_charge_power_w: float = 2000.0) -> EvDecision:
+    return EvDecision(strategy="ev_charging", ev_charge_power_w=ev_charge_power_w, charging_state="charging")  # noqa: E501
 
 
 @pytest.mark.asyncio
 async def test_fast_loop_ema_first_tick_uses_raw_value():
     """First tick initialises EMA to the raw recompute output (no blending)."""
-    raw_decision = Decision(
-        strategy="ev_charging",
-        active_power_w=500.0,
-        ev_charge_power_w=2000.0,
-        charging_state="charging",
-    )
     coord = _make_fast_coordinator(_EV_STATES)
     coord._state.last_result = _make_ladder_result()
 
-    with patch(_RECOMPUTE, return_value=raw_decision), patch(_DT_UTIL) as mock_dt:
+    with patch(_RECOMPUTE_EV, return_value=_EV_DECISION_CHARGING), \
+         patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE), \
+         patch(_DT_UTIL) as mock_dt:
         mock_dt.utcnow.return_value = _NOW
         await coord._async_update_data()
 
-    written: Decision = coord._controller.write_full.call_args[0][0]
-    assert written.ev_charge_power_w == pytest.approx(2000.0)
-    assert written.active_power_w == pytest.approx(500.0)
+    written_ev: EvDecision = coord._controller.write_fast.call_args[0][0]
+    written_inv: InverterDecision = coord._controller.write_fast.call_args[0][1]
+    assert written_ev.ev_charge_power_w == pytest.approx(2000.0)
+    assert written_inv.active_power_w == pytest.approx(500.0)
 
 
 @pytest.mark.asyncio
 async def test_fast_loop_ema_second_tick_blends():
     """Second tick blends 30% new + 70% old."""
-    first_decision = Decision(
-        strategy="ev_charging",
-        active_power_w=500.0,
-        ev_charge_power_w=2000.0,
-        charging_state="charging",
-    )
-    second_decision = Decision(
-        strategy="ev_charging",
-        active_power_w=1000.0,
-        ev_charge_power_w=3000.0,
-        charging_state="charging",
-    )
+    second_ev = _ev_charging(3000.0)
+    second_inv = InverterDecision(inverter_verb="power_control", active_power_w=1000.0)
 
     coord = _make_fast_coordinator(_EV_STATES)
     coord._state.last_result = _make_ladder_result()
 
     with patch(_DT_UTIL) as mock_dt:
         mock_dt.utcnow.return_value = _NOW
-        with patch(_RECOMPUTE, return_value=first_decision):
+        with patch(_RECOMPUTE_EV, return_value=_EV_DECISION_CHARGING), \
+             patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE):
             await coord._async_update_data()
-        with patch(_RECOMPUTE, return_value=second_decision):
+        with patch(_RECOMPUTE_EV, return_value=second_ev), \
+             patch(_RECOMPUTE_INV, return_value=second_inv):
             await coord._async_update_data()
 
-    written: Decision = coord._controller.write_full.call_args[0][0]
-    assert written.ev_charge_power_w == pytest.approx(0.3 * 3000.0 + 0.7 * 2000.0)
-    assert written.active_power_w == pytest.approx(0.3 * 1000.0 + 0.7 * 500.0)
+    written_ev: EvDecision = coord._controller.write_fast.call_args[0][0]
+    written_inv: InverterDecision = coord._controller.write_fast.call_args[0][1]
+    assert written_ev.ev_charge_power_w == pytest.approx(0.3 * 3000.0 + 0.7 * 2000.0)
+    assert written_inv.active_power_w == pytest.approx(0.3 * 1000.0 + 0.7 * 500.0)
 
 
 @pytest.mark.asyncio
 async def test_fast_loop_ema_resets_on_session_start():
     """After ev_power_w drops to 0, the next non-zero ev_power_w resets EMA to raw target."""
-    charging_decision = Decision(
-        strategy="ev_charging",
-        active_power_w=500.0,
-        ev_charge_power_w=2000.0,
-        charging_state="charging",
-    )
-    new_session_decision = Decision(
-        strategy="ev_charging",
-        active_power_w=800.0,
-        ev_charge_power_w=3500.0,
-        charging_state="charging",
-    )
+    new_session_ev = _ev_charging(3500.0)
+    new_session_inv = InverterDecision(inverter_verb="power_control", active_power_w=800.0)
 
     coord = _make_fast_coordinator(_EV_STATES)
     coord._state.last_result = _make_ladder_result()
@@ -432,24 +469,29 @@ async def test_fast_loop_ema_resets_on_session_start():
         mock_dt.utcnow.return_value = _NOW
 
         # Tick 1: ev charging — EMA initialised to raw values
-        with patch(_RECOMPUTE, return_value=charging_decision):
+        with patch(_RECOMPUTE_EV, return_value=_EV_DECISION_CHARGING), \
+             patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE):
             await coord._async_update_data()
 
         # Tick 2: ev_power_w drops to 0 (charger stopped)
         coord.hass.states.get = MagicMock(side_effect=lambda _: _mock_state("0"))
-        with patch(_RECOMPUTE, return_value=charging_decision):
+        _inv_disabled = InverterDecision(inverter_verb="disabled", active_power_w=None)
+        with patch(_RECOMPUTE_EV, return_value=_EV_DECISION_CHARGING), \
+             patch(_RECOMPUTE_INV, return_value=_inv_disabled):
             await coord._async_update_data()
 
         # Tick 3: new charging session (ev_power_w > 0) — EMA must reset immediately
         coord.hass.states.get = MagicMock(
             side_effect=lambda eid: _mock_state("150") if "ev" in eid else _mock_state("0")
         )
-        with patch(_RECOMPUTE, return_value=new_session_decision):
+        with patch(_RECOMPUTE_EV, return_value=new_session_ev), \
+             patch(_RECOMPUTE_INV, return_value=new_session_inv):
             await coord._async_update_data()
 
-    written: Decision = coord._controller.write_full.call_args[0][0]
-    assert written.ev_charge_power_w == pytest.approx(3500.0)
-    assert written.active_power_w == pytest.approx(800.0)
+    written_ev: EvDecision = coord._controller.write_fast.call_args[0][0]
+    written_inv: InverterDecision = coord._controller.write_fast.call_args[0][1]
+    assert written_ev.ev_charge_power_w == pytest.approx(3500.0)
+    assert written_inv.active_power_w == pytest.approx(800.0)
 
 
 def _mock_state(value: str) -> MagicMock:
@@ -461,18 +503,9 @@ def _mock_state(value: str) -> MagicMock:
 @pytest.mark.asyncio
 async def test_fast_loop_ema_slow_mode_uses_lower_alpha():
     """Slow smoothing (α=0.1) blends less aggressively than Fast (α=0.3)."""
-    first_decision = Decision(
-        strategy="ev_charging",
-        active_power_w=0.0,
-        ev_charge_power_w=1000.0,
-        charging_state="charging",
-    )
-    second_decision = Decision(
-        strategy="ev_charging",
-        active_power_w=0.0,
-        ev_charge_power_w=2000.0,
-        charging_state="charging",
-    )
+    first_ev = _ev_charging(1000.0)
+    second_ev = _ev_charging(2000.0)
+    inv = InverterDecision(inverter_verb="power_control", active_power_w=0.0)
 
     def states_with_smoothing(smoothing_value: str):
         def get(eid):
@@ -480,6 +513,10 @@ async def test_fast_loop_ema_slow_mode_uses_lower_alpha():
                 return _mock_state(smoothing_value)
             if "ev" in eid:
                 return _mock_state("100")
+            if "inverter_control" in eid:
+                return _mock_state("Control Inverter")
+            if "charging_mode" in eid:
+                return _mock_state("Grid-optimised")
             return _mock_state("0")
         return MagicMock(side_effect=get)
 
@@ -489,24 +526,23 @@ async def test_fast_loop_ema_slow_mode_uses_lower_alpha():
 
     with patch(_DT_UTIL) as mock_dt:
         mock_dt.utcnow.return_value = _NOW
-        with patch(_RECOMPUTE, return_value=first_decision):
+        with patch(_RECOMPUTE_EV, return_value=first_ev), patch(_RECOMPUTE_INV, return_value=inv):
             await coord._async_update_data()
-        with patch(_RECOMPUTE, return_value=second_decision):
+        with patch(_RECOMPUTE_EV, return_value=second_ev), patch(_RECOMPUTE_INV, return_value=inv):
             await coord._async_update_data()
 
-    written: Decision = coord._controller.write_full.call_args[0][0]
-    assert written.ev_charge_power_w == pytest.approx(0.1 * 2000.0 + 0.9 * 1000.0)
+    written_ev: EvDecision = coord._controller.write_fast.call_args[0][0]
+    assert written_ev.ev_charge_power_w == pytest.approx(0.1 * 2000.0 + 0.9 * 1000.0)
 
 
 @pytest.mark.asyncio
 async def test_fast_loop_off_mode_bypasses_ema_and_resets_state():
-    """When mode is Off, written value is immediately 0 and EMA state is cleared."""
-    off_decision = Decision(
-        strategy="charging_disabled",
-        active_power_w=0.0,
-        ev_charge_power_w=0.0,
-        charging_state="charging_disabled",
+    """When ev mode is Off, written ev target is 0 and EMA state is cleared."""
+    off_ev = EvDecision(
+        strategy="ev_idle", ev_charge_power_w=0.0, charging_state="charging_disabled"
     )
+    off_inv = InverterDecision(inverter_verb=None, active_power_w=None)
+
     off_states = {
         **_EV_STATES,
         "select.ems_ev_charging_mode": "Off",
@@ -517,12 +553,39 @@ async def test_fast_loop_off_mode_bypasses_ema_and_resets_state():
     coord._ema_ev_w = 500.0
     coord._ema_active_w = 200.0
 
-    with patch(_RECOMPUTE, return_value=off_decision), patch(_DT_UTIL) as mock_dt:
+    with patch(_RECOMPUTE_EV, return_value=off_ev), \
+         patch(_RECOMPUTE_INV, return_value=off_inv), \
+         patch(_DT_UTIL) as mock_dt:
         mock_dt.utcnow.return_value = _NOW
         await coord._async_update_data()
 
-    written: Decision = coord._controller.write_full.call_args[0][0]
-    assert written.ev_charge_power_w == pytest.approx(0.0)
-    assert written.active_power_w == pytest.approx(0.0)
+    written_ev: EvDecision = coord._controller.write_fast.call_args[0][0]
+    assert written_ev.ev_charge_power_w == pytest.approx(0.0)
     assert coord._ema_ev_w is None
+    assert coord._ema_active_w is None
+
+
+@pytest.mark.asyncio
+async def test_fast_loop_inverter_off_mode_no_active_power_ema():
+    """When inverter_strategy=Off, active_power EMA state is cleared and active_power is None."""
+    ev = EvDecision(strategy="ev_charging", ev_charge_power_w=2000.0, charging_state="charging")
+    inv_off = InverterDecision(inverter_verb=None, active_power_w=None)
+
+    states = {
+        **_EV_STATES,
+        "select.ems_inverter_control_mode": "Off",
+    }
+
+    coord = _make_fast_coordinator(states)
+    coord._state.last_result = _make_ladder_result()
+    coord._ema_active_w = 500.0
+
+    with patch(_RECOMPUTE_EV, return_value=ev), \
+         patch(_RECOMPUTE_INV, return_value=inv_off), \
+         patch(_DT_UTIL) as mock_dt:
+        mock_dt.utcnow.return_value = _NOW
+        await coord._async_update_data()
+
+    written_inv: InverterDecision = coord._controller.write_fast.call_args[0][1]
+    assert written_inv.active_power_w is None
     assert coord._ema_active_w is None

@@ -8,22 +8,25 @@ Works with any inverter that exposes a `select` entity for operating modes and a
 
 ## How it works
 
-Two execution loops share a single `EmsState` object:
+Two execution loops share a single `EmsState` object. Each loop runs two independent algorithms:
+
+- **EV algorithm** (`strategy.py`) — computes the EV charge target.
+- **Inverter control algorithm** (`inverter_control.py`) — computes the inverter verb and active power.
 
 ### 10-second strategy loop (`EmsStrategyCoordinator`)
 1. `_build_inputs()` — reads all configured HA entities into a frozen `Inputs` dataclass.
-2. `strategy.decide(inputs)` — pure function; returns a `Decision` (EV target watts, inverter active power).
-3. Writes are skipped for 60 seconds after startup to avoid flapping on `unavailable` sensors.
-4. `controller.write_full()` — idempotent: switches inverter to `power_control` mode and writes active power cap only when `ev_power_w > 0` (EV confirmed drawing); always writes the computed EV charge target; **leaves the inverter untouched when `ev_power_w == 0`**.
+2. `strategy.decide(inputs)` — pure function; returns an `EvDecision` (EV target watts and charging state).
+3. `inverter_control.decide(inputs)` — pure function; returns an `InverterDecision` (inverter verb and active power).
+4. Writes are skipped for 60 seconds after startup to avoid flapping on `unavailable` sensors.
+5. `controller.write_slow()` — writes the inverter verb **every cycle** (overriding any manual user change within 10 s), writes active power if the EV is charging, and always writes the EV charge target.
 
 ### 1-second fast loop (`EmsFastLoopCoordinator`)
-Always runs once the integration is active. Re-reads `pv_w`, `house_load_w`, `ev_power_w`, and `grid_import_w`, runs the same `strategy.recompute()` formula, and calls `controller.write_full()`. This keeps the grid import cap enforced within one second when loads change suddenly (e.g. a kettle comes on).
+Always runs once the integration is active. Re-reads `pv_w`, `house_load_w`, `ev_power_w`, and `grid_import_w`, then runs `strategy.recompute()` and `inverter_control.recompute()`. Calls `controller.write_fast()` — which writes active power and EV target but **never writes the inverter verb** (verb enforcement is the slow loop's job).
 
-### Decision algorithm — power balance
+### EV algorithm — power balance
 
 ```
 house_non_ev   = max(0, house_load_w − ev_power_w)
-active_power_w = pv_w − house_non_ev   ← negative: battery discharges for house; positive: PV surplus (charging into inverter)
 ev_target_w    = max(0, max_grid_import_w − grid_import_w + ev_power_w)
 ev_target_w    = min(ev_target_w, max_ev_charge_w)  ← if max_ev_charge_w is configured
 
@@ -38,21 +41,27 @@ elif ev_target_w < ev_min_charge_w:                                → not_enoug
 
 # Charge
 else:
-    → ev_charging (ev_target_w, active_power_w)
+    → ev_charging (ev_target_w)
 ```
 
-Closed-loop formula: `non_ev_grid_draw = grid_import_w − ev_power_w`; the EV target gets the remaining headroom up to `max_grid_import_w`. Adding `ev_power_w` back is essential — the EV's current draw is already inside the measured `grid_import_w`, so we're computing the new target, not an increment. This reacts to the actual measured grid import, so sensor offsets, untracked loads, and other discrepancies are automatically corrected.
+Closed-loop formula: `non_ev_grid_draw = grid_import_w − ev_power_w`; the EV target gets the remaining headroom up to `max_grid_import_w`. Adding `ev_power_w` back is essential — the EV's current draw is already inside the measured `grid_import_w`, so we're computing the new target, not an increment.
 
-`active_power_w` is written to the inverter's active power entity each cycle. Negative means the battery is discharging (draining from the inverter to cover house load shortfall); positive means PV has surplus and power is flowing into the inverter (e.g. battery charging, preventing grid export).
+### Inverter control algorithm
 
-#### Worked examples
+Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS never touches the inverter select entity or active power entity — the user has full manual control. When set to **`Control Inverter`**:
 
-| Situation | active_power_w | ev_target_w |
-|-----------|---------------|-------------|
-| grid_import=−300W (exporting), pv=500W, house_non_ev=200W, ev=0, max=4500W | +300 W (PV surplus, charging into inverter) | 4800 W |
-| grid_import=200W, pv=0W, house_non_ev=200W, ev=0, max=4500W | −200 W (battery discharges for house) | 4300 W |
-| grid_import=50W, pv=150W, house_non_ev=200W, ev=0, max=4500W | −50 W (battery discharges for shortfall) | 4450 W |
-| grid_import=3700W (under-using headroom), ev=2000W, max=4500W | (depends on pv/house) | 2800 W (increases to use 800W headroom) |
+```
+house_non_ev = max(0, house_load_w − ev_power_w)
+
+if ev_power_w > 0:          # EV is confirmed drawing
+    verb          = power_control_option
+    active_power  = max(0, pv_w − house_non_ev)   ← battery never discharges to EV
+else:
+    verb          = disabled_option
+    active_power  = (not written)
+```
+
+**Battery protection:** clamping `active_power` to ≥ 0 when the EV is charging ensures the battery can charge from PV surplus but never discharges to feed the EV. EV power always comes from PV or the grid.
 
 ---
 
@@ -78,9 +87,9 @@ The **Configure** button (Settings → Devices & Services → EMS → Configure)
 |------------|------|----------|-------------|
 | `pv_power` | `sensor` | **Yes** | Current PV generation (W) |
 | `inverter_select` | select entity | No | HA select entity that controls inverter operating mode |
-| `inverter_disabled_option` | text | No | Option string written to the inverter select when EV is idle (default: `"disabled"`) |
-| `inverter_power_control_option` | text | No | Option string written to the inverter select when EV is charging (default: `"power_control"`) |
-| `active_power_entity` | `number` / `input_number` | No | EMS writes computed active power (W) to this entity each cycle; negative = battery discharging (drain), positive = PV surplus (charging into inverter) |
+| `inverter_disabled_option` | text | No | Option string written to the inverter select when EV is idle (e.g. `"Self Use"`) |
+| `inverter_power_control_option` | text | No | Option string written to the inverter select when EV is charging (e.g. `"Power Control"`) |
+| `active_power_entity` | `number` / `input_number` | No | EMS writes computed active power (W) to this entity when EV is charging; positive = PV surplus (charging into inverter), 0 = no battery discharge |
 
 ### Step 2 — EV Charger
 
@@ -118,11 +127,12 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | `ev_power_w` | `ev_power` entity |
 | `ev_soc` | `ev_soc` entity (%) or `None` |
 | `ev_strategy` | `select.ems_ev_charging_mode` |
+| `inverter_strategy` | `select.ems_inverter_control_mode` |
 | `is_cheap_hour` | `price_signal_entity` (Step 2); `True` when not configured or unavailable |
 | `thresholds` | `max_grid_import_w` from entity (Step 3); `ev_target_soc` from entity (Step 2); `ev_min_charge_w` from `number.ems_ev_min_charge_w`; `max_ev_charge_w` from entity (Step 2) |
 | `mapping` | Inverter select entity + active power entity + EV charge target entity from config |
 
-The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`; remaining fields are reused from the last 10 s result.
+The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`, `ev_strategy`, `inverter_strategy`; remaining fields are reused from the last 10 s result.
 
 ---
 
@@ -146,44 +156,61 @@ The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`, `gri
 | Entity | Options | Description |
 |--------|---------|-------------|
 | `select.ems_ev_charging_mode` | `Grid-optimised`, `Price-optimised`, `Off` | `Grid-optimised`: charge using solar surplus + grid headroom. `Price-optimised`: same as Grid-optimised but only charges when the `price_signal_entity` is `on` (i.e. a cheap hour). `Off`: disables EV charging entirely. |
-| `select.ems_ev_smoothing` | `Fast`, `Normal`, `Slow` | Controls the EMA alpha applied to the EV charge target in the 1-second fast loop. `Fast` (α=0.3, ~3 s settling), `Normal` (α=0.2, ~5 s), `Slow` (α=0.1, ~10 s). Active power smoothing is unaffected. Default: `Fast`. |
+| `select.ems_ev_smoothing` | `Fast`, `Normal`, `Slow` | Controls the EMA alpha applied to the EV charge target in the 1-second fast loop. `Fast` (α=0.3, ~3 s settling), `Normal` (α=0.2, ~5 s), `Slow` (α=0.1, ~10 s). Default: `Fast`. |
+
+---
+
+## Inverter control mode
+
+| Entity | Options | Default | Description |
+|--------|---------|---------|-------------|
+| `select.ems_inverter_control_mode` | `Control Inverter`, `Off` | `Off` | `Control Inverter`: EMS asserts the correct inverter verb every 10-second slow loop cycle (overrides any manual selection within 10 s). When the EV is charging the verb is `inverter_power_control_option` and active power is written every 1 s; otherwise the verb is `inverter_disabled_option` and active power is not written. `Off`: EMS never writes to the inverter select entity or active power entity — the user has full manual control. EV charge target writes are unaffected by this setting. |
 
 ---
 
 ## Outputs (writes to your hardware)
 
-`controller.py` is the only module that calls HA services. All writes are idempotent — the last written value is cached and a call is skipped if the value has not changed.
+`controller.py` is the only module that calls HA services.
 
-### When EV is confirmed charging (`ev_power_w > 0`)
+### Slow loop (10 s) — `controller.write_slow()`
 
-| Service | Entity | Value |
-|---------|--------|-------|
-| `select.select_option` | Inverter select entity (Step 1) | `"power_control"` |
-| `number.set_value` | Active power entity (Step 1) | Computed active power (W); negative = discharge, positive = PV surplus (charging into inverter) |
-| `number.set_value` | EV charge target entity (Step 2) | Computed EV target watts |
+| Service | Entity | Condition | Value |
+|---------|--------|-----------|-------|
+| `select.select_option` | Inverter select entity (Step 1) | `inverter_control_mode = Control Inverter` AND `inverter_verb is not None` | `power_control_option` (EV drawing) or `disabled_option` (EV idle) |
+| `number.set_value` | Active power entity (Step 1) | `inverter_control_mode = Control Inverter` AND EV is drawing | `max(0, pv_w − house_non_ev)` W — always ≥ 0 |
+| `number.set_value` | EV charge target entity (Step 2) | Always | Computed EV target watts (0 when idle) |
 
-### When EV is not drawing power (`ev_power_w = 0`)
+The inverter verb is written on **every slow loop cycle** — no idempotency cache. This ensures user manual overrides are corrected within 10 seconds.
 
-| Service | Entity | Value |
-|---------|--------|-------|
-| `number.set_value` | EV charge target entity (Step 2) | Computed EV target watts (or 0 when strategy is idle) |
+### Fast loop (1 s) — `controller.write_fast()`
 
-The inverter is **not touched** when the EV is not drawing — it manages its own mode. EMS only writes to the inverter when `ev_power_w > 0`. The EV charge target is always written so the charger knows what power to draw when it starts.
+| Service | Entity | Condition | Value |
+|---------|--------|-----------|-------|
+| `number.set_value` | Active power entity (Step 1) | `inverter_control_mode = Control Inverter` AND EV is drawing | Smoothed `max(0, pv_w − house_non_ev)` W |
+| `number.set_value` | EV charge target entity (Step 2) | Always | Smoothed EV target watts (0 when idle) |
 
-All writes are idempotent — each path writes only when the value changes from the last written value. Writes are skipped during the 60-second startup grace period.
+Active power and EV target are cached — a service call is skipped if the value has not changed from the last written value. Writes are skipped during the 60-second startup grace period.
 
 ---
 
 ## Exposed entities
 
+### Select entities
+
+| Entity | Options | Default | Description |
+|--------|---------|---------|-------------|
+| `select.ems_ev_charging_mode` | `Grid-optimised`, `Price-optimised`, `Off` | `Off` | EV charging strategy |
+| `select.ems_ev_smoothing` | `Fast`, `Normal`, `Slow` | `Fast` | EMA smoothing speed for EV charge target in the 1 s loop |
+| `select.ems_inverter_control_mode` | `Control Inverter`, `Off` | `Off` | Whether EMS controls the inverter select entity |
+
 ### Sensor entities (`sensor.ems_*`)
 
 | Entity | Values | Description |
 |--------|--------|-------------|
-| `sensor.ems_ev_charging_state` | see below | Human-readable EV charging state. Updated every 10 seconds. Unavailable until the first strategy cycle completes. |
-| `sensor.ems_inverter_mode` | `power_control`, or last written value | Last inverter option EMS wrote. `power_control` when EV is actively charging; value is unchanged when EV stops (EMS leaves the inverter alone). Unavailable until the first strategy cycle completes. |
+| `sensor.ems_ev_charging_state` | see below | Human-readable EV charging state. Updated every second. Unavailable until the first strategy cycle completes. |
+| `sensor.ems_inverter_mode` | `power_control`, `disabled`, or `None` | Current inverter verb from the last `InverterDecision`. Reflects what EMS last intended to write. Unavailable until the first strategy cycle completes. |
 | `sensor.ems_ev_current_w` | float (W) | Computed EV charge target EMS is writing to `ev_charge_target_entity`. `0` when idle, off, or before the first strategy cycle. Always available. |
-| `sensor.ems_inverter_active_power` | float (W) | Active power EMS is writing to `active_power_entity`. Negative = battery discharging (drain); positive = PV surplus (charging into inverter); `0` when idle or before the first strategy cycle. Always available. |
+| `sensor.ems_inverter_active_power` | float (W) | Active power EMS is writing to `active_power_entity`. Positive = PV surplus (charging into inverter); `0` when EV not charging, inverter control is Off, or before the first strategy cycle. Always available. |
 
 #### `sensor.ems_ev_charging_state` values
 
@@ -209,6 +236,9 @@ All writes are idempotent — each path writes only when the value changes from 
 
 ```powershell
 pytest tests/                  # Run all tests (80% coverage gate)
+pytest tests/test_inverter_control.py `
+  --cov=custom_components.ems.inverter_control `
+  --cov-branch --cov-fail-under=100  # 100% coverage for pure module
 pytest tests/test_strategy.py `
   --cov=custom_components.ems.strategy `
   --cov-branch --cov-fail-under=100  # 100% coverage for pure module

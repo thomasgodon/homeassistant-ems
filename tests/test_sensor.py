@@ -3,10 +3,11 @@ from __future__ import annotations
 import datetime
 from unittest.mock import MagicMock
 
-from custom_components.ems.models import Decision, LadderResult
+from custom_components.ems.models import EvDecision, InverterDecision, LadderResult
 from custom_components.ems.sensor import (
     EmsEvChargingStateSensor,
     EmsEvCurrentSensor,
+    EmsInverterActivePowerSensor,
     EmsInverterModeSensor,
 )
 
@@ -15,24 +16,31 @@ def _make_coordinator(
     ev_charge_power_w: float | None,
     charging_state: str = "not_enough_power",
     ev_power_w: float = 0.0,
+    active_power_w: float | None = None,
 ) -> MagicMock:
     coordinator = MagicMock()
     if ev_charge_power_w is None:
         coordinator.data = None
     else:
-        decision = Decision(
+        ev_decision = EvDecision(
             strategy="ev_charging" if ev_charge_power_w > 0.0 else "ev_idle",
-            active_power_w=0.0,
             ev_charge_power_w=ev_charge_power_w,
             charging_state=charging_state if ev_charge_power_w == 0.0 else "charging",
         )
+        inverter_decision = InverterDecision(
+            inverter_verb="power_control" if ev_power_w > 0.0 else "disabled",
+            active_power_w=active_power_w,
+        )
         coordinator.data = LadderResult(
-            decision=decision,
+            ev_decision=ev_decision,
+            inverter_decision=inverter_decision,
             inputs=MagicMock(ev_power_w=ev_power_w),
             computed_at=datetime.datetime(2026, 5, 4, 12, 0, 0, tzinfo=datetime.UTC),
         )
     return coordinator
 
+
+# ── EmsInverterModeSensor ─────────────────────────────────────────────────────
 
 def test_shows_disabled_when_idle():
     sensor = EmsInverterModeSensor(_make_coordinator(0.0))
@@ -45,8 +53,25 @@ def test_shows_power_control_when_charging():
 
 
 def test_shows_disabled_when_ev_not_yet_drawing():
-    # Strategy wants to charge but EV hasn't started drawing — inverter not yet written
+    # Strategy wants to charge but EV hasn't started drawing — inverter still disabled
     sensor = EmsInverterModeSensor(_make_coordinator(3500.0, ev_power_w=0.0))
+    assert sensor.native_value == "disabled"
+
+
+def test_inverter_mode_shows_none_verb_as_disabled():
+    """When inverter_verb is None (Off mode), sensor falls back to 'disabled'."""
+    coordinator = MagicMock()
+    ev_decision = EvDecision(
+        strategy="ev_idle", ev_charge_power_w=0.0, charging_state="charging_disabled"
+    )
+    inverter_decision = InverterDecision(inverter_verb=None, active_power_w=None)
+    coordinator.data = LadderResult(
+        ev_decision=ev_decision,
+        inverter_decision=inverter_decision,
+        inputs=MagicMock(),
+        computed_at=datetime.datetime(2026, 5, 4, 12, 0, 0, tzinfo=datetime.UTC),
+    )
+    sensor = EmsInverterModeSensor(coordinator)
     assert sensor.native_value == "disabled"
 
 
@@ -143,3 +168,23 @@ def test_charging_state_options_cover_all_states():
         "Starting up",
         "Outside cheap hours",
     }
+
+
+# ── EmsInverterActivePowerSensor ──────────────────────────────────────────────
+
+def test_active_power_shows_zero_when_no_data():
+    sensor = EmsInverterActivePowerSensor(_make_coordinator(None))
+    assert sensor.native_value == 0.0
+
+
+def test_active_power_shows_zero_when_none():
+    """active_power_w=None (not writing) shows 0 in the sensor."""
+    sensor = EmsInverterActivePowerSensor(_make_coordinator(0.0, active_power_w=None))
+    assert sensor.native_value == 0.0
+
+
+def test_active_power_shows_value_when_set():
+    sensor = EmsInverterActivePowerSensor(
+        _make_coordinator(3500.0, ev_power_w=3500.0, active_power_w=1500.0)
+    )
+    assert sensor.native_value == 1500.0

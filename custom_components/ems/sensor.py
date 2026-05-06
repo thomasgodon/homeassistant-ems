@@ -41,7 +41,7 @@ class EmsEvCurrentSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, coordinator: EmsStrategyCoordinator) -> None:
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
         super().__init__(coordinator)
 
     @property
@@ -52,7 +52,7 @@ class EmsEvCurrentSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity
     def native_value(self) -> float:
         if self.coordinator.data is None:
             return 0.0
-        return self.coordinator.data.decision.ev_charge_power_w
+        return self.coordinator.data.ev_decision.ev_charge_power_w
 
     @property
     def available(self) -> bool:
@@ -63,7 +63,7 @@ class EmsInverterModeSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEnt
     _attr_unique_id = "ems_inverter_mode"
     _attr_name = "EMS Inverter Mode"
 
-    def __init__(self, coordinator: EmsStrategyCoordinator) -> None:
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
         super().__init__(coordinator)
 
     @property
@@ -74,11 +74,7 @@ class EmsInverterModeSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEnt
     def native_value(self) -> str | None:
         if self.coordinator.data is None:
             return None
-        return (
-            "power_control"
-            if self.coordinator.data.inputs.ev_power_w > 0.0
-            else "disabled"
-        )
+        return self.coordinator.data.inverter_decision.inverter_verb or "disabled"
 
     @property
     def available(self) -> bool:
@@ -92,7 +88,7 @@ class EmsInverterActivePowerSensor(CoordinatorEntity[EmsFastLoopCoordinator], Se
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, coordinator: EmsStrategyCoordinator) -> None:
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
         super().__init__(coordinator)
 
     @property
@@ -103,7 +99,7 @@ class EmsInverterActivePowerSensor(CoordinatorEntity[EmsFastLoopCoordinator], Se
     def native_value(self) -> float:
         if self.coordinator.data is None:
             return 0.0
-        return self.coordinator.data.decision.active_power_w
+        return self.coordinator.data.inverter_decision.active_power_w or 0.0
 
     @property
     def available(self) -> bool:
@@ -116,7 +112,7 @@ class EmsEvChargingStateSensor(CoordinatorEntity[EmsFastLoopCoordinator], Sensor
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = list(_CHARGING_STATE_LABELS.values())
 
-    def __init__(self, coordinator: EmsStrategyCoordinator) -> None:
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
         super().__init__(coordinator)
 
     @property
@@ -127,7 +123,7 @@ class EmsEvChargingStateSensor(CoordinatorEntity[EmsFastLoopCoordinator], Sensor
     def native_value(self) -> str | None:
         if self.coordinator.data is None:
             return None
-        return _CHARGING_STATE_LABELS.get(self.coordinator.data.decision.charging_state)
+        return _CHARGING_STATE_LABELS.get(self.coordinator.data.ev_decision.charging_state)
 
     @property
     def available(self) -> bool:

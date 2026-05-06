@@ -2,7 +2,6 @@
 
 Grid headroom algorithm (power balance):
   house_non_ev  = max(0, house_load_w - ev_power_w)
-  active_power  = pv_w - house_non_ev   (negative = discharge, positive = PV surplus into inverter)
   ev_target_w   = max(0, max_grid_import_w - grid_import_w + ev_power_w)
   ev_target_w   = min(ev_target_w, max_ev_charge_w)  if max_ev_charge_w is set
 """
@@ -11,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from custom_components.ems import strategy as strategy_module
-from custom_components.ems.models import Decision, Thresholds
+from custom_components.ems.models import EvDecision, Thresholds
 
 # ── fixtures / helpers ────────────────────────────────────────────────────────
 
@@ -22,11 +21,11 @@ _THRESHOLDS = Thresholds(
 )
 
 
-def decide(builder, **overrides) -> Decision:
+def decide(builder, **overrides) -> EvDecision:
     return strategy_module.decide(builder.build(**overrides))
 
 
-def recompute(builder, **overrides) -> Decision:
+def recompute(builder, **overrides) -> EvDecision:
     inp = builder.build(**overrides)
     return strategy_module.recompute(
         pv_w=inp.pv_w,
@@ -120,68 +119,6 @@ def test_charging_disabled_takes_priority_over_not_plugged(builder) -> None:
     """Mode=Off is checked before plug status."""
     d = decide(builder, ev_plugged=False, ev_strategy="Off")
     assert d.charging_state == "charging_disabled"
-
-
-# ── user spec examples ────────────────────────────────────────────────────────
-
-def test_spec_example_1_pv_surplus_positive_active_power(builder) -> None:
-    """pv=500, house_non_ev=200 → active_power=+300 (surplus, battery charges into inverter)."""
-    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
-    d = decide(
-        builder,
-        ev_plugged=True,
-        ev_strategy="Grid-optimised",
-        ev_soc=50.0,
-        grid_import_w=-300.0,
-        pv_w=500.0,
-        house_load_w=200.0,
-        ev_power_w=0.0,
-        thresholds=thresholds,
-    )
-    assert d.strategy == "ev_charging"
-    assert d.active_power_w == pytest.approx(300.0)
-    # ev_target = max(0, 4500 - (-300) + 0) = 4800
-    assert d.ev_charge_power_w == pytest.approx(4800.0)
-
-
-def test_spec_example_2_no_pv_house_from_battery(builder) -> None:
-    """pv=0, house_non_ev=200 → battery discharges 200W for house (drain), EV from grid only."""
-    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
-    d = decide(
-        builder,
-        ev_plugged=True,
-        ev_strategy="Grid-optimised",
-        ev_soc=50.0,
-        grid_import_w=200.0,
-        pv_w=0.0,
-        house_load_w=200.0,
-        ev_power_w=0.0,
-        thresholds=thresholds,
-    )
-    assert d.strategy == "ev_charging"
-    assert d.active_power_w == pytest.approx(-200.0)
-    # ev_target = max(0, 4500 - 200 + 0) = 4300
-    assert d.ev_charge_power_w == pytest.approx(4300.0)
-
-
-def test_spec_example_3_partial_pv(builder) -> None:
-    """pv=150, house_non_ev=200 → battery discharges 50W for shortfall (drain), EV from grid."""
-    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
-    d = decide(
-        builder,
-        ev_plugged=True,
-        ev_strategy="Grid-optimised",
-        ev_soc=50.0,
-        grid_import_w=50.0,
-        pv_w=150.0,
-        house_load_w=200.0,
-        ev_power_w=0.0,
-        thresholds=thresholds,
-    )
-    assert d.strategy == "ev_charging"
-    assert d.active_power_w == pytest.approx(-50.0)
-    # ev_target = max(0, 4500 - 50 + 0) = 4450
-    assert d.ev_charge_power_w == pytest.approx(4450.0)
 
 
 # ── power balance formula ─────────────────────────────────────────────────────

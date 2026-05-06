@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.ems.controller import Controller
-from custom_components.ems.models import Decision, VerbMapping
+from custom_components.ems.models import EvDecision, InverterDecision, VerbMapping
 
 _MAPPING = VerbMapping(
     inverter_select_entity="select.inverter",
@@ -40,24 +40,26 @@ _MAPPING_NO_INVERTER = VerbMapping(
 )
 
 
-def _make_decision(**overrides) -> Decision:
-    defaults = dict(
-        strategy="ev_charging",
-        active_power_w=200.0,
-        ev_charge_power_w=3500.0,
-        charging_state="charging",
+def _ev_charging(ev_charge_power_w: float = 3500.0) -> EvDecision:
+    return EvDecision(
+        strategy="ev_charging", ev_charge_power_w=ev_charge_power_w, charging_state="charging"
     )
-    defaults.update(overrides)
-    return Decision(**defaults)
 
 
-def _make_idle() -> Decision:
-    return Decision(
-        strategy="ev_idle",
-        active_power_w=0.0,
-        ev_charge_power_w=0.0,
-        charging_state="not_enough_power",
-    )
+def _ev_idle() -> EvDecision:
+    return EvDecision(strategy="ev_idle", ev_charge_power_w=0.0, charging_state="not_enough_power")
+
+
+def _inv_power_control(active_power_w: float = 200.0) -> InverterDecision:
+    return InverterDecision(inverter_verb="power_control", active_power_w=active_power_w)
+
+
+def _inv_disabled() -> InverterDecision:
+    return InverterDecision(inverter_verb="disabled", active_power_w=None)
+
+
+def _inv_off() -> InverterDecision:
+    return InverterDecision(inverter_verb=None, active_power_w=None)
 
 
 def _make_hass():
@@ -79,78 +81,91 @@ def controller_with_target():
     return Controller(hass, _MAPPING_WITH_TARGET), hass
 
 
+# ── write_slow: verb ──────────────────────────────────────────────────────────
+
 @pytest.mark.asyncio
-async def test_idle_decision_no_inverter_write_and_zero_ev_target(controller_with_target) -> None:
-    """Idle (ev_power=0) does not touch the inverter; writes EV target=0."""
+async def test_write_slow_power_control_writes_verb(controller_with_target) -> None:
     ctrl, hass = controller_with_target
-    await ctrl.write_full(_make_idle(), ev_power_w=0.0)
-    select_calls = [
-        c for c in hass.services.async_call.call_args_list if c[0][1] == "select_option"
-    ]
-    number_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_value"]
-    assert len(select_calls) == 0
-    assert len(number_calls) == 1
-    assert number_calls[0][0][2]["value"] == 0.0
-
-
-@pytest.mark.asyncio
-async def test_idle_no_inverter_no_select_call(controller) -> None:
-    """Idle with no target entity: no service calls at all."""
-    ctrl, hass = controller
-    await ctrl.write_full(_make_idle(), ev_power_w=0.0)
-    hass.services.async_call.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_active_writes_power_control_and_cap(controller_with_target) -> None:
-    """Active decision with ev_power_w>0 selects 'power_control', writes cap and EV target."""
-    ctrl, hass = controller_with_target
-    await ctrl.write_full(
-        _make_decision(active_power_w=150.0, ev_charge_power_w=3000.0), ev_power_w=3000.0
-    )
-    select_calls = [
-        c for c in hass.services.async_call.call_args_list if c[0][1] == "select_option"
-    ]
-    number_calls = [c for c in hass.services.async_call.call_args_list if c[0][1] == "set_value"]
+    await ctrl.write_slow(_ev_charging(), _inv_power_control())
+    calls = hass.services.async_call.call_args_list
+    select_calls = [c for c in calls if c[0][1] == "select_option"]
     assert len(select_calls) == 1
     assert select_calls[0][0][2]["option"] == "power_control"
-    # number_calls: cap + EV target
-    assert len(number_calls) == 2
-    cap_call = next(c for c in number_calls if c[0][2]["entity_id"] == "number.battery_cap")
-    ev_call = next(c for c in number_calls if c[0][2]["entity_id"] == "number.ev_charger_power")
-    assert cap_call[0][2]["value"] == 150.0
-    assert ev_call[0][2]["value"] == 3000.0
 
 
 @pytest.mark.asyncio
-async def test_no_inverter_configured_no_writes() -> None:
-    """When mapping has no inverter entities, no service calls are made."""
+async def test_write_slow_disabled_writes_verb(controller_with_target) -> None:
+    ctrl, hass = controller_with_target
+    await ctrl.write_slow(_ev_idle(), _inv_disabled())
+    calls = hass.services.async_call.call_args_list
+    select_calls = [c for c in calls if c[0][1] == "select_option"]
+    assert len(select_calls) == 1
+    assert select_calls[0][0][2]["option"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_write_slow_off_mode_no_verb_write(controller_with_target) -> None:
+    """inverter_verb=None (Off mode) → no select_option call."""
+    ctrl, hass = controller_with_target
+    await ctrl.write_slow(_ev_idle(), _inv_off())
+    calls = hass.services.async_call.call_args_list
+    select_calls = [c for c in calls if c[0][1] == "select_option"]
+    assert len(select_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_write_slow_writes_verb_every_call() -> None:
+    """Verb is always written by write_slow — no idempotency cache for the select."""
+    hass = _make_hass()
+    ctrl = Controller(hass, _MAPPING_WITH_TARGET)
+    await ctrl.write_slow(_ev_idle(), _inv_disabled())
+    await ctrl.write_slow(_ev_idle(), _inv_disabled())
+    calls = hass.services.async_call.call_args_list
+    select_calls = [c for c in calls if c[0][1] == "select_option"]
+    assert len(select_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_write_slow_no_inverter_entity_no_select_call() -> None:
     hass = _make_hass()
     ctrl = Controller(hass, _MAPPING_NO_INVERTER)
-    await ctrl.write_full(_make_decision(), ev_power_w=3500.0)
-    hass.services.async_call.assert_not_called()
+    await ctrl.write_slow(_ev_idle(), _inv_disabled())
+    calls = hass.services.async_call.call_args_list
+    select_calls = [c for c in calls if c[0][1] == "select_option"]
+    assert len(select_calls) == 0
 
+
+# ── write_slow: active_power ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_idempotent_select_write(controller_with_target) -> None:
-    """Two consecutive identical active ticks write the select once."""
+async def test_write_slow_writes_active_power_when_not_none(controller_with_target) -> None:
     ctrl, hass = controller_with_target
-    decision = _make_decision()
-    await ctrl.write_full(decision, ev_power_w=3500.0)
-    await ctrl.write_full(decision, ev_power_w=3500.0)
-    select_calls = [
-        c for c in hass.services.async_call.call_args_list if c[0][1] == "select_option"
+    await ctrl.write_slow(_ev_charging(), _inv_power_control(active_power_w=150.0))
+    cap_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.battery_cap"
     ]
-    assert len(select_calls) == 1
+    assert len(cap_calls) == 1
+    assert cap_calls[0][0][2]["value"] == 150.0
 
 
 @pytest.mark.asyncio
-async def test_idempotent_cap_write(controller_with_target) -> None:
-    """Same battery discharge cap written twice calls set_value once for cap entity."""
+async def test_write_slow_skips_active_power_when_none(controller_with_target) -> None:
     ctrl, hass = controller_with_target
-    decision = _make_decision(active_power_w=200.0)
-    await ctrl.write_full(decision, ev_power_w=3500.0)
-    await ctrl.write_full(decision, ev_power_w=3500.0)
+    await ctrl.write_slow(_ev_idle(), _inv_disabled())
+    cap_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.battery_cap"
+    ]
+    assert len(cap_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_write_slow_active_power_idempotent(controller_with_target) -> None:
+    """Same active_power value twice → single service call."""
+    ctrl, hass = controller_with_target
+    await ctrl.write_slow(_ev_charging(), _inv_power_control(active_power_w=200.0))
+    await ctrl.write_slow(_ev_charging(), _inv_power_control(active_power_w=200.0))
     cap_calls = [
         c for c in hass.services.async_call.call_args_list
         if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.battery_cap"
@@ -158,14 +173,106 @@ async def test_idempotent_cap_write(controller_with_target) -> None:
     assert len(cap_calls) == 1
 
 
+# ── write_slow: EV target ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_write_slow_always_writes_ev_target(controller_with_target) -> None:
+    ctrl, hass = controller_with_target
+    await ctrl.write_slow(_ev_charging(ev_charge_power_w=3000.0), _inv_power_control())
+    ev_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.ev_charger_power"
+    ]
+    assert len(ev_calls) == 1
+    assert ev_calls[0][0][2]["value"] == 3000.0
+
+
+@pytest.mark.asyncio
+async def test_write_slow_writes_ev_target_even_with_off_mode(controller_with_target) -> None:
+    ctrl, hass = controller_with_target
+    await ctrl.write_slow(_ev_idle(), _inv_off())
+    ev_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.ev_charger_power"
+    ]
+    assert len(ev_calls) == 1
+    assert ev_calls[0][0][2]["value"] == 0.0
+
+
+# ── write_slow: suppress_writes ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_suppress_writes_no_calls(controller_with_target) -> None:
+    ctrl, hass = controller_with_target
+    await ctrl.write_slow(_ev_charging(), _inv_power_control(), suppress_writes=True)
+    hass.services.async_call.assert_not_called()
+
+
+# ── write_fast: never writes verb ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_write_fast_never_writes_verb(controller_with_target) -> None:
+    ctrl, hass = controller_with_target
+    await ctrl.write_fast(_ev_charging(), _inv_power_control())
+    calls = hass.services.async_call.call_args_list
+    select_calls = [c for c in calls if c[0][1] == "select_option"]
+    assert len(select_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_write_fast_writes_active_power_when_not_none(controller_with_target) -> None:
+    ctrl, hass = controller_with_target
+    await ctrl.write_fast(_ev_charging(), _inv_power_control(active_power_w=300.0))
+    cap_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.battery_cap"
+    ]
+    assert len(cap_calls) == 1
+    assert cap_calls[0][0][2]["value"] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_write_fast_skips_active_power_when_none(controller_with_target) -> None:
+    ctrl, hass = controller_with_target
+    await ctrl.write_fast(_ev_idle(), _inv_disabled())
+    cap_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.battery_cap"
+    ]
+    assert len(cap_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_write_fast_writes_ev_target(controller_with_target) -> None:
+    ctrl, hass = controller_with_target
+    await ctrl.write_fast(_ev_charging(ev_charge_power_w=2500.0), _inv_power_control())
+    ev_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.ev_charger_power"
+    ]
+    assert len(ev_calls) == 1
+    assert ev_calls[0][0][2]["value"] == 2500.0
+
+
+@pytest.mark.asyncio
+async def test_write_fast_active_power_idempotent(controller_with_target) -> None:
+    ctrl, hass = controller_with_target
+    await ctrl.write_fast(_ev_charging(), _inv_power_control(active_power_w=100.0))
+    await ctrl.write_fast(_ev_charging(), _inv_power_control(active_power_w=100.0))
+    cap_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.battery_cap"
+    ]
+    assert len(cap_calls) == 1
+
+
+# ── domain splitting ──────────────────────────────────────────────────────────
+
 @pytest.mark.asyncio
 async def test_input_number_domain_used_for_ev_target() -> None:
-    """When ev_charge_target_entity is input_number.*, service domain is input_number."""
     hass = _make_hass()
     ctrl = Controller(hass, _MAPPING_INPUT_NUMBER)
-    await ctrl.write_full(
-        _make_decision(active_power_w=100.0, ev_charge_power_w=2000.0), ev_power_w=2000.0
-    )
+    await ctrl.write_fast(_ev_charging(ev_charge_power_w=2000.0), _inv_power_control())
     ev_calls = [
         c for c in hass.services.async_call.call_args_list
         if c[0][2].get("entity_id") == "input_number.ev_charger_current"
@@ -176,115 +283,10 @@ async def test_input_number_domain_used_for_ev_target() -> None:
 
 
 @pytest.mark.asyncio
-async def test_idle_idempotent_no_repeat_writes(controller_with_target) -> None:
-    """Two consecutive idle ticks write EV target only once (idempotent on idle)."""
-    ctrl, hass = controller_with_target
-    await ctrl.write_full(_make_idle(), ev_power_w=0.0)
-    ev_calls_first = [
-        c for c in hass.services.async_call.call_args_list
-        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.ev_charger_power"
-    ]
-    assert len(ev_calls_first) == 1
-    assert ev_calls_first[0][0][2]["value"] == 0.0
-
-    hass.services.async_call.reset_mock()
-    await ctrl.write_full(_make_idle(), ev_power_w=0.0)
-    ev_calls_second = [
-        c for c in hass.services.async_call.call_args_list
-        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.ev_charger_power"
-    ]
-    assert len(ev_calls_second) == 0
-
-
-@pytest.mark.asyncio
-async def test_idle_then_active_writes_ev_target(controller_with_target) -> None:
-    """After an idle write (0 W cached), the next active tick writes the EV target."""
-    ctrl, hass = controller_with_target
-    await ctrl.write_full(_make_decision(ev_charge_power_w=3500.0), ev_power_w=3500.0)
-    hass.services.async_call.reset_mock()
-
-    await ctrl.write_full(_make_idle(), ev_power_w=0.0)
-    hass.services.async_call.reset_mock()
-
-    await ctrl.write_full(_make_decision(ev_charge_power_w=3500.0), ev_power_w=3500.0)
-    ev_calls = [
-        c for c in hass.services.async_call.call_args_list
-        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.ev_charger_power"
-    ]
-    assert len(ev_calls) == 1
-    assert ev_calls[0][0][2]["value"] == 3500.0
-
-
-@pytest.mark.asyncio
-async def test_suppress_writes_active(controller_with_target) -> None:
-    """Startup grace suppresses all writes even if EV would charge."""
-    ctrl, hass = controller_with_target
-    await ctrl.write_full(_make_decision(), ev_power_w=3500.0, suppress_writes=True)
-    hass.services.async_call.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_suppress_writes_idle(controller_with_target) -> None:
-    """Startup grace suppresses writes on idle too."""
-    ctrl, hass = controller_with_target
-    await ctrl.write_full(_make_idle(), ev_power_w=0.0, suppress_writes=True)
-    hass.services.async_call.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_idle_after_active_leaves_inverter_untouched(controller_with_target) -> None:
-    """After an active tick, going idle does NOT write to the inverter."""
-    ctrl, hass = controller_with_target
-    await ctrl.write_full(_make_decision(), ev_power_w=3500.0)
-    hass.services.async_call.reset_mock()
-
-    await ctrl.write_full(_make_idle(), ev_power_w=0.0)
-    select_calls = [
-        c for c in hass.services.async_call.call_args_list if c[0][1] == "select_option"
-    ]
-    assert len(select_calls) == 0
-
-
-# ── inverter confirmation via ev_power_w ──────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_strategy_charge_with_zero_ev_power_no_inverter_write(controller_with_target) -> None:
-    """Strategy says charge but ev_power_w=0 → inverter untouched, EV target written."""
-    ctrl, hass = controller_with_target
-    await ctrl.write_full(_make_decision(ev_charge_power_w=3000.0), ev_power_w=0.0)
-    select_calls = [
-        c for c in hass.services.async_call.call_args_list if c[0][1] == "select_option"
-    ]
-    assert len(select_calls) == 0
-    ev_calls = [
-        c for c in hass.services.async_call.call_args_list
-        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.ev_charger_power"
-    ]
-    assert len(ev_calls) == 1
-    assert ev_calls[0][0][2]["value"] == 3000.0
-
-
-@pytest.mark.asyncio
-async def test_ev_power_above_zero_triggers_power_control(controller_with_target) -> None:
-    """When ev_power_w > 0, inverter switches to power_control."""
-    ctrl, hass = controller_with_target
-    await ctrl.write_full(_make_decision(ev_charge_power_w=3000.0), ev_power_w=3000.0)
-    select_calls = [
-        c for c in hass.services.async_call.call_args_list if c[0][1] == "select_option"
-    ]
-    assert len(select_calls) == 1
-    assert select_calls[0][0][2]["option"] == "power_control"
-
-
-@pytest.mark.asyncio
-async def test_inverter_stays_power_control_after_ev_stops(controller_with_target) -> None:
-    """After confirmed charging, ev_power_w dropping to 0 leaves the inverter untouched."""
-    ctrl, hass = controller_with_target
-    await ctrl.write_full(_make_decision(ev_charge_power_w=3000.0), ev_power_w=3000.0)
-    hass.services.async_call.reset_mock()
-
-    await ctrl.write_full(_make_decision(ev_charge_power_w=3000.0), ev_power_w=0.0)
-    select_calls = [
-        c for c in hass.services.async_call.call_args_list if c[0][1] == "select_option"
-    ]
+async def test_no_inverter_configured_no_verb_write() -> None:
+    hass = _make_hass()
+    ctrl = Controller(hass, _MAPPING_NO_INVERTER)
+    await ctrl.write_slow(_ev_charging(), _inv_power_control())
+    calls = hass.services.async_call.call_args_list
+    select_calls = [c for c in calls if c[0][1] == "select_option"]
     assert len(select_calls) == 0
