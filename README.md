@@ -32,8 +32,8 @@ ev_target_w    = min(ev_target_w, max_ev_charge_w)  ← if max_ev_charge_w is co
 
 # Hard gates → idle (evaluated in priority order)
 if ev_strategy == "Off":                                           → charging_disabled
-if ev_strategy == "Price-optimised" and not is_cheap_hour:         → outside_cheap_hours
 if not ev_plugged:                                                 → ev_not_connected
+if ev_strategy == "Price-optimised" and not is_cheap_hour:         → outside_cheap_hours
 if ev_soc is not None and ev_soc ≥ ev_target_soc:                 → target_soc_reached
 
 # Below minimum → idle

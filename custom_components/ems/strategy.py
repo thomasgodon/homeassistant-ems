@@ -60,10 +60,10 @@ def _make_decision(
     # Hard gates — evaluated in priority order
     if ev_strategy == "Off":
         return _idle("charging_disabled")
-    if ev_strategy == "Price-optimised" and not is_cheap_hour:
-        return _idle("outside_cheap_hours")
     if not ev_plugged:
         return _idle("ev_not_connected")
+    if ev_strategy == "Price-optimised" and not is_cheap_hour:
+        return _idle("outside_cheap_hours")
     if ev_soc is not None and ev_soc >= thresholds.ev_target_soc:
         return _idle("target_soc_reached")
 
