@@ -54,13 +54,15 @@ Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS nev
 ```
 house_non_ev = max(0, house_load_w − ev_power_w)
 
-if ev_power_w > 0:          # EV is confirmed drawing
+if ev_decision.strategy == "ev_charging":   # EV strategy commands charging
     verb          = power_control_option
     active_power  = max(0, pv_w − house_non_ev)   ← battery never discharges to EV
 else:
     verb          = disabled_option
     active_power  = (not written)
 ```
+
+The gate is the **commanded** EV state (`ev_decision.strategy`), not the **measured** `ev_power_w`. Gating on measured draw would create a start-of-session deadlock: the inverter would stay in `disabled_option` until the EV began drawing, but the EV cannot safely draw until the inverter is already in `power_control`. By keying on the command, the inverter switches mode as soon as the strategy decides to charge — before the wallbox ramps up.
 
 **Battery protection:** clamping `active_power` to ≥ 0 when the EV is charging ensures the battery can charge from PV surplus but never discharges to feed the EV. EV power always comes from PV or the grid.
 
@@ -165,7 +167,7 @@ The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`, `gri
 
 | Entity | Options | Default | Description |
 |--------|---------|---------|-------------|
-| `select.ems_inverter_control_mode` | `Control Inverter`, `Off` | `Off` | `Control Inverter`: EMS asserts the correct inverter verb every 10-second slow loop cycle (overrides any manual selection within 10 s). When the EV is charging the verb is `inverter_power_control_option` and active power is written every 1 s; otherwise the verb is `inverter_disabled_option` and active power is not written. `Off`: EMS never writes to the inverter select entity or active power entity — the user has full manual control. EV charge target writes are unaffected by this setting. |
+| `select.ems_inverter_control_mode` | `Control Inverter`, `Off` | `Off` | `Control Inverter`: EMS asserts the correct inverter verb every 10-second slow loop cycle (overrides any manual selection within 10 s). When the EV strategy commands charging the verb is `inverter_power_control_option` and active power is written every 1 s; otherwise the verb is `inverter_disabled_option` and active power is not written. The switch happens as soon as charging is commanded — before the EV begins drawing — to avoid inverter mode lag at session start. `Off`: EMS never writes to the inverter select entity or active power entity — the user has full manual control. EV charge target writes are unaffected by this setting. |
 
 ---
 
@@ -177,8 +179,8 @@ The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`, `gri
 
 | Service | Entity | Condition | Value |
 |---------|--------|-----------|-------|
-| `select.select_option` | Inverter select entity (Step 1) | `inverter_control_mode = Control Inverter` AND `inverter_verb is not None` | `power_control_option` (EV drawing) or `disabled_option` (EV idle) |
-| `number.set_value` | Active power entity (Step 1) | `inverter_control_mode = Control Inverter` AND EV is drawing | `max(0, pv_w − house_non_ev)` W — always ≥ 0 |
+| `select.select_option` | Inverter select entity (Step 1) | `inverter_control_mode = Control Inverter` AND `inverter_verb is not None` | `power_control_option` (EV commanded charging) or `disabled_option` (EV idle) |
+| `number.set_value` | Active power entity (Step 1) | `inverter_control_mode = Control Inverter` AND EV commanded charging | `max(0, pv_w − house_non_ev)` W — always ≥ 0 |
 | `number.set_value` | EV charge target entity (Step 2) | Always | Computed EV target watts (0 when idle) |
 
 The inverter verb is written on **every slow loop cycle** — no idempotency cache. This ensures user manual overrides are corrected within 10 seconds.
@@ -187,7 +189,7 @@ The inverter verb is written on **every slow loop cycle** — no idempotency cac
 
 | Service | Entity | Condition | Value |
 |---------|--------|-----------|-------|
-| `number.set_value` | Active power entity (Step 1) | `inverter_control_mode = Control Inverter` AND EV is drawing | Smoothed `max(0, pv_w − house_non_ev)` W |
+| `number.set_value` | Active power entity (Step 1) | `inverter_control_mode = Control Inverter` AND EV commanded charging | Smoothed `max(0, pv_w − house_non_ev)` W |
 | `number.set_value` | EV charge target entity (Step 2) | Always | Smoothed EV target watts (0 when idle) |
 
 Active power and EV target are cached — a service call is skipped if the value has not changed from the last written value. Writes are skipped during the 60-second startup grace period.
@@ -230,7 +232,7 @@ Active power and EV target are cached — a service call is skipped if the value
 
 | Value | Meaning |
 |-------|---------|
-| `Controlling` | EV is drawing power; inverter set to power-control mode, active power written to prevent battery from feeding the EV |
+| `Controlling` | EV charging commanded; inverter set to power-control mode, active power written to prevent battery from feeding the EV |
 | `Idle` | No EV draw; inverter set to its `disabled_option` so it manages its own mode |
 | `Disabled` | Inverter Control Mode is `Off`; EMS does not write to the inverter at all |
 | `Starting up` | EMS is in the 60-second startup grace period; strategy computes but writes are suppressed |

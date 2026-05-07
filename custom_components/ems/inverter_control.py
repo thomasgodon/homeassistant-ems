@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from .models import Inputs, InverterDecision, VerbMapping
+from .models import EvDecision, Inputs, InverterDecision, VerbMapping
 
 
-def decide(inputs: Inputs) -> InverterDecision:
+def decide(inputs: Inputs, ev_decision: EvDecision) -> InverterDecision:
     """Compute inverter verb and active power target. Never raises."""
     return _compute(
         pv_w=inputs.pv_w,
@@ -11,6 +11,7 @@ def decide(inputs: Inputs) -> InverterDecision:
         ev_power_w=inputs.ev_power_w,
         inverter_strategy=inputs.inverter_strategy,
         mapping=inputs.mapping,
+        ev_charging_commanded=ev_decision.strategy == "ev_charging",
     )
 
 
@@ -21,6 +22,7 @@ def recompute(
     ev_power_w: float,
     inverter_strategy: str,
     mapping: VerbMapping,
+    ev_charging_commanded: bool,
 ) -> InverterDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
     return _compute(
@@ -29,6 +31,7 @@ def recompute(
         ev_power_w=ev_power_w,
         inverter_strategy=inverter_strategy,
         mapping=mapping,
+        ev_charging_commanded=ev_charging_commanded,
     )
 
 
@@ -41,13 +44,14 @@ def _compute(
     ev_power_w: float,
     inverter_strategy: str,
     mapping: VerbMapping,
+    ev_charging_commanded: bool,
 ) -> InverterDecision:
     if inverter_strategy == "Off":
         return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
 
     house_non_ev = max(0.0, house_load_w - ev_power_w)
 
-    if ev_power_w > 0.0:
+    if ev_charging_commanded:
         # Battery must not discharge to feed the EV: clamp active_power to >= 0.
         return InverterDecision(
             inverter_verb=mapping.power_control_option,

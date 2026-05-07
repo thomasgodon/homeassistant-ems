@@ -2,16 +2,19 @@
 
 Inverter control algorithm:
   Off → inverter_verb=None, active_power_w=None (hands-off)
-  Control Inverter + ev_power_w == 0 → verb=disabled_option, active_power_w=None
-  Control Inverter + ev_power_w > 0  → verb=power_control_option,
-                                        active_power_w=max(0, pv_w - house_non_ev)
+  Control Inverter + ev_charging_commanded=False → verb=disabled_option, active_power_w=None
+  Control Inverter + ev_charging_commanded=True  → verb=power_control_option,
+                                                    active_power_w=max(0, pv_w - house_non_ev)
+
+The gate is ev_charging_commanded (strategy output), NOT measured ev_power_w, to avoid a
+start-of-session deadlock where the inverter would never switch before the EV begins drawing.
 """
 from __future__ import annotations
 
 import pytest
 
 from custom_components.ems import inverter_control as inverter_control_module
-from custom_components.ems.models import InverterDecision, VerbMapping
+from custom_components.ems.models import EvDecision, InverterDecision, VerbMapping
 
 _MAPPING = VerbMapping(
     inverter_select_entity="select.inverter",
@@ -37,6 +40,7 @@ def _decide(
     ev_power_w: float = 0.0,
     inverter_strategy: str = "Control Inverter",
     mapping: VerbMapping = _MAPPING,
+    ev_charging_commanded: bool = False,
 ) -> InverterDecision:
     return inverter_control_module.recompute(
         pv_w=pv_w,
@@ -44,6 +48,7 @@ def _decide(
         ev_power_w=ev_power_w,
         inverter_strategy=inverter_strategy,
         mapping=mapping,
+        ev_charging_commanded=ev_charging_commanded,
     )
 
 
@@ -94,7 +99,7 @@ def test_ev_idle_uses_disabled_option_from_mapping() -> None:
 # ── Control Inverter, EV charging: power_control + clamped active_power ───────
 
 def test_ev_charging_verb_is_power_control() -> None:
-    d = _decide(ev_power_w=3000.0)
+    d = _decide(ev_charging_commanded=True)
     assert d.inverter_verb == "power_control"
 
 
@@ -106,47 +111,47 @@ def test_ev_charging_uses_power_control_option_from_mapping() -> None:
         active_power_entity=None,
         ev_charge_target_entity=None,
     )
-    d = _decide(ev_power_w=3000.0, mapping=mapping)
+    d = _decide(ev_charging_commanded=True, mapping=mapping)
     assert d.inverter_verb == "Power Control"
 
 
 def test_pv_surplus_produces_positive_active_power() -> None:
     """pv=5000, house_non_ev=1000 → active_power=4000 (PV surplus, battery charges)."""
-    d = _decide(pv_w=5000.0, house_load_w=1000.0, ev_power_w=3000.0)
+    d = _decide(pv_w=5000.0, house_load_w=1000.0, ev_power_w=3000.0, ev_charging_commanded=True)
     # house_non_ev = max(0, 1000 - 3000) = 0; active_power = 5000 - 0 = 5000
     assert d.active_power_w == pytest.approx(5000.0)
 
 
 def test_house_non_ev_subtracted_from_pv() -> None:
     """pv=3000, house=2000, ev=500 → house_non_ev=1500, active_power=1500."""
-    d = _decide(pv_w=3000.0, house_load_w=2000.0, ev_power_w=500.0)
+    d = _decide(pv_w=3000.0, house_load_w=2000.0, ev_power_w=500.0, ev_charging_commanded=True)
     # house_non_ev = max(0, 2000 - 500) = 1500; active_power = 3000 - 1500 = 1500
     assert d.active_power_w == pytest.approx(1500.0)
 
 
 def test_battery_not_discharged_when_pv_below_house(builder) -> None:
     """When pv < house_non_ev, active_power is clamped to 0 (battery never discharges for EV)."""
-    d = _decide(pv_w=500.0, house_load_w=2000.0, ev_power_w=3000.0)
+    d = _decide(pv_w=500.0, house_load_w=2000.0, ev_power_w=3000.0, ev_charging_commanded=True)
     # house_non_ev = max(0, 2000 - 3000) = 0; active_power = 500 - 0 = 500 → still positive
     assert d.active_power_w == pytest.approx(500.0)
 
 
 def test_battery_not_discharged_when_no_pv_and_house_load() -> None:
     """pv=0, house=1500, ev=500 → house_non_ev=1000, active_power=max(0, 0-1000)=0."""
-    d = _decide(pv_w=0.0, house_load_w=1500.0, ev_power_w=500.0)
+    d = _decide(pv_w=0.0, house_load_w=1500.0, ev_power_w=500.0, ev_charging_commanded=True)
     # house_non_ev = max(0, 1500 - 500) = 1000; pv - house_non_ev = -1000 → clamped to 0
     assert d.active_power_w == pytest.approx(0.0)
 
 
 def test_active_power_zero_when_pv_equals_house_non_ev() -> None:
     """pv=1000, house=1500, ev=500 → house_non_ev=1000, active_power=0."""
-    d = _decide(pv_w=1000.0, house_load_w=1500.0, ev_power_w=500.0)
+    d = _decide(pv_w=1000.0, house_load_w=1500.0, ev_power_w=500.0, ev_charging_commanded=True)
     assert d.active_power_w == pytest.approx(0.0)
 
 
 def test_house_non_ev_cannot_be_negative() -> None:
     """EV draws more than total house load → house_non_ev=0."""
-    d = _decide(pv_w=2000.0, house_load_w=500.0, ev_power_w=3000.0)
+    d = _decide(pv_w=2000.0, house_load_w=500.0, ev_power_w=3000.0, ev_charging_commanded=True)
     # house_non_ev = max(0, 500 - 3000) = 0; active_power = 2000 - 0 = 2000
     assert d.active_power_w == pytest.approx(2000.0)
 
@@ -155,7 +160,7 @@ def test_house_non_ev_cannot_be_negative() -> None:
 
 def test_none_power_control_option_passed_as_verb() -> None:
     """When mapping.power_control_option is None, verb is None (maps to the configured option)."""
-    d = _decide(ev_power_w=3000.0, mapping=_MAPPING_NO_OPTIONS)
+    d = _decide(ev_charging_commanded=True, mapping=_MAPPING_NO_OPTIONS)
     assert d.inverter_verb is None
 
 
@@ -174,13 +179,17 @@ def test_recompute_matches_decide(builder) -> None:
         ev_power_w=2000.0,
         inverter_strategy="Control Inverter",
     )
-    d1 = inverter_control_module.decide(inp)
+    ev_decision = EvDecision(
+        strategy="ev_charging", ev_charge_power_w=2000.0, charging_state="charging"
+    )
+    d1 = inverter_control_module.decide(inp, ev_decision)
     d2 = inverter_control_module.recompute(
         pv_w=inp.pv_w,
         house_load_w=inp.house_load_w,
         ev_power_w=inp.ev_power_w,
         inverter_strategy=inp.inverter_strategy,
         mapping=inp.mapping,
+        ev_charging_commanded=True,
     )
     assert d1 == d2
 
@@ -198,5 +207,29 @@ def test_ev_idle_status_is_idle() -> None:
 
 
 def test_ev_charging_status_is_controlling() -> None:
-    d = _decide(ev_power_w=3000.0)
+    d = _decide(ev_charging_commanded=True)
     assert d.status == "controlling"
+
+
+# ── Regression: commanded vs measured gating ──────────────────────────────────
+
+def test_commanded_charging_with_zero_ev_power_uses_power_control() -> None:
+    """Strategy commands charging but EV not yet drawing → inverter must switch immediately.
+
+    This was the bug: ev_power_w=0 caused disabled_option even when EV charging was commanded,
+    creating a deadlock where the inverter never switched before the wallbox started drawing.
+    """
+    d = _decide(ev_charging_commanded=True, ev_power_w=0.0)
+    assert d.inverter_verb == "power_control"
+    assert d.status == "controlling"
+
+
+def test_uncommanded_with_residual_ev_power_uses_disabled() -> None:
+    """Phantom/residual EV draw must not pin the inverter to power_control.
+
+    When the strategy is not commanding charging (e.g. mode Off, SoC reached),
+    the inverter must revert to disabled_option regardless of measured ev_power_w.
+    """
+    d = _decide(ev_charging_commanded=False, ev_power_w=500.0)
+    assert d.inverter_verb == "disabled"
+    assert d.status == "idle"
