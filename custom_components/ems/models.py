@@ -36,6 +36,7 @@ class Inputs:
     inverter_strategy: Literal["Control Inverter", "Off"]
     thresholds: Thresholds
     mapping: VerbMapping
+    last_ev_target_w: float | None = None
 
 
 StrategyLabel = Literal["ev_charging", "ev_idle"]

@@ -53,6 +53,7 @@ class InputsBuilder:
             inverter_strategy=get("inverter_strategy", "Off"),
             thresholds=get("thresholds", _DEFAULT_THRESHOLDS),
             mapping=get("mapping", _DEFAULT_MAPPING),
+            last_ev_target_w=get("last_ev_target_w", None),
         )
 
 

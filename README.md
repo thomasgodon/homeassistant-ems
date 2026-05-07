@@ -27,7 +27,8 @@ Always runs once the integration is active. Re-reads `pv_w`, `house_load_w`, `ev
 
 ```
 house_non_ev   = max(0, house_load_w − ev_power_w)
-ev_target_w    = max(0, max_grid_import_w − grid_import_w + ev_power_w)
+feedback_w     = last_ev_target_w  ← last value commanded to wallbox (ev_power_w on cold start)
+ev_target_w    = max(0, max_grid_import_w − grid_import_w + feedback_w)
 ev_target_w    = min(ev_target_w, max_ev_charge_w)  ← if max_ev_charge_w is configured
 
 # Hard gates → idle (evaluated in priority order)
@@ -44,7 +45,7 @@ else:
     → ev_charging (ev_target_w)
 ```
 
-Closed-loop formula: `non_ev_grid_draw = grid_import_w − ev_power_w`; the EV target gets the remaining headroom up to `max_grid_import_w`. Adding `ev_power_w` back is essential — the EV's current draw is already inside the measured `grid_import_w`, so we're computing the new target, not an increment.
+Integrating closed-loop: using the last commanded target (`last_ev_target_w`) as feedback makes the formula a pure integrator on grid error — it keeps nudging the EV target up until `grid_import_w = max_grid_import_w`, regardless of wallbox current quantisation or ramp lag. With measured `ev_power_w` as feedback (old formula), the integrator stalled when the wallbox quantised to a whole-amp step just below the threshold needed to raise the import to the cap.
 
 ### Inverter control algorithm
 

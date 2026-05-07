@@ -161,6 +161,12 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             ev_charge_target_entity=data.get(CONF_EV_CHARGE_TARGET_ENTITY),
         )
 
+        last_ev_target_w = (
+            self._state.last_result.ev_decision.ev_charge_power_w
+            if self._state.last_result is not None
+            else None
+        )
+
         return Inputs(
             now=now,
             grid_import_w=grid_import_w,
@@ -174,6 +180,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             inverter_strategy=inverter_strategy,  # type: ignore[arg-type]
             thresholds=thresholds,
             mapping=mapping,
+            last_ev_target_w=last_ev_target_w,
         )
 
 
@@ -229,6 +236,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             ev_strategy=ev_strategy,
             is_cheap_hour=is_cheap_hour,
             thresholds=prior_inputs.thresholds,
+            last_ev_target_w=self._ema_ev_w,
         )
         inverter_fast = inverter_control_module.recompute(
             pv_w=pv_w,

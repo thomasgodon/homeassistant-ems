@@ -10,6 +10,7 @@ def decide(inputs: Inputs) -> EvDecision:
         house_non_ev=house_non_ev,
         grid_import_w=inputs.grid_import_w,
         ev_power_w=inputs.ev_power_w,
+        last_ev_target_w=inputs.last_ev_target_w,
         ev_plugged=inputs.ev_plugged,
         ev_soc=inputs.ev_soc,
         ev_strategy=inputs.ev_strategy,
@@ -29,6 +30,7 @@ def recompute(
     ev_strategy: str,
     is_cheap_hour: bool,
     thresholds: Thresholds,
+    last_ev_target_w: float | None = None,
 ) -> EvDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
     house_non_ev = max(0.0, house_load_w - ev_power_w)
@@ -36,6 +38,7 @@ def recompute(
         house_non_ev=house_non_ev,
         grid_import_w=grid_import_w,
         ev_power_w=ev_power_w,
+        last_ev_target_w=last_ev_target_w,
         ev_plugged=ev_plugged,
         ev_soc=ev_soc,
         ev_strategy=ev_strategy,
@@ -51,6 +54,7 @@ def _make_decision(
     house_non_ev: float,
     grid_import_w: float,
     ev_power_w: float,
+    last_ev_target_w: float | None,
     ev_plugged: bool,
     ev_soc: float | None,
     ev_strategy: str,
@@ -67,8 +71,11 @@ def _make_decision(
     if ev_soc is not None and ev_soc >= thresholds.ev_target_soc:
         return _idle("target_soc_reached")
 
-    # Closed-loop: non-EV grid draw = grid_import_w − ev_power_w; EV gets the remaining headroom.
-    ev_target_w = max(0.0, thresholds.max_grid_import_w - grid_import_w + ev_power_w)
+    # Integrating closed-loop: use last commanded target as feedback so the
+    # integrator drives total grid import to max_grid_import_w regardless of
+    # wallbox quantisation or ramp lag. Falls back to ev_power_w on cold start.
+    feedback_w = last_ev_target_w if last_ev_target_w is not None else ev_power_w
+    ev_target_w = max(0.0, thresholds.max_grid_import_w - grid_import_w + feedback_w)
 
     if thresholds.max_ev_charge_w is not None:
         ev_target_w = min(ev_target_w, thresholds.max_ev_charge_w)

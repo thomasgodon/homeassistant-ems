@@ -55,7 +55,7 @@ The integration is structured around two execution loops managed by `coordinator
 
 ### Key abstractions
 
-- **Power balance algorithm**: `ev_target = max(0, max_grid_import_w − grid_import_w + ev_power_w)`. Closed-loop: non-EV grid draw = `grid_import_w − ev_power_w`; EV gets the remaining headroom up to `max_grid_import_w`. Adding `ev_power_w` back is essential — the EV's current draw is already inside `grid_import_w`, so we're computing the new target, not an increment.
+- **Power balance algorithm**: `ev_target = max(0, max_grid_import_w − grid_import_w + last_ev_target_w)`. Integrating closed-loop: `last_ev_target_w` is the EMA-smoothed value written to the wallbox on the previous cycle. Using the commanded target (not the measured EV draw) makes the loop a pure integrator on grid error, driving `grid_import → max_grid_import_w` regardless of wallbox quantisation or ramp lag. On cold start (`last_ev_target_w = None`), falls back to `ev_power_w`.
 - **Active power**: strategy emits `active_power_w` = `pv_w - house_non_ev`. Sign convention: **negative = battery discharges (drain from inverter)**; **positive = PV surplus (charging into inverter)**. Controller writes it to `active_power_entity` via `number.set_value` when EV is confirmed charging.
 - **One inverter verb**: `power_control_option` (written only when EV is confirmed charging → controlled battery discharge). EMS never writes to the inverter when `ev_power_w == 0`; the inverter manages its own mode when idle.
 - **EV charge target**: strategy emits `ev_charge_power_w` (float, W). Controller writes it via `number.set_value` to `ev_charge_target_entity` (Step 3). No manual automation needed.
@@ -67,7 +67,7 @@ The integration is structured around two execution loops managed by `coordinator
 3. EV charger (optional) — plug/SoC/target-SoC/charge-target/max-charge entity selectors; EMS reads entity states at runtime; writes computed watts to `ev_charge_target_entity`
 
 ### EV charging mode
-`select.ems_ev_charging_mode` — options: `Energy-optimised`, `Off`. `Off` forces `ev_charge_power_w = 0` and EMS writes 0 to the EV target entity.
+`select.ems_ev_charging_mode` — options: `Grid-optimised`, `Price-optimised`, `Off`. `Off` forces `ev_charge_power_w = 0` and EMS writes 0 to the EV target entity.
 
 ### Target environment
 - Home Assistant 2024.11+
