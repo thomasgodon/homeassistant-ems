@@ -115,32 +115,32 @@ def test_ev_charging_uses_power_control_option_from_mapping() -> None:
     assert d.inverter_verb == "Power Control"
 
 
-def test_pv_surplus_produces_positive_active_power() -> None:
-    """pv=5000, house_non_ev=1000 → active_power=4000 (PV surplus, battery charges)."""
+def test_pv_surplus_clamped_to_zero() -> None:
+    """pv=5000, house_non_ev=0 → surplus clamped to 0 (battery must not charge while EV charges)."""
     d = _decide(pv_w=5000.0, house_load_w=1000.0, ev_power_w=3000.0, ev_charging_commanded=True)
-    # house_non_ev = max(0, 1000 - 3000) = 0; active_power = 5000 - 0 = 5000
-    assert d.active_power_w == pytest.approx(5000.0)
+    # house_non_ev = max(0, 1000 - 3000) = 0; pv - house_non_ev = 5000 → clamped to 0
+    assert d.active_power_w == pytest.approx(0.0)
 
 
 def test_house_non_ev_subtracted_from_pv() -> None:
-    """pv=3000, house=2000, ev=500 → house_non_ev=1500, active_power=1500."""
+    """pv=3000, house=2000, ev=500 → house_non_ev=1500, surplus=1500 → clamped to 0."""
     d = _decide(pv_w=3000.0, house_load_w=2000.0, ev_power_w=500.0, ev_charging_commanded=True)
-    # house_non_ev = max(0, 2000 - 500) = 1500; active_power = 3000 - 1500 = 1500
-    assert d.active_power_w == pytest.approx(1500.0)
-
-
-def test_battery_not_discharged_when_pv_below_house(builder) -> None:
-    """When pv < house_non_ev, active_power is clamped to 0 (battery never discharges for EV)."""
-    d = _decide(pv_w=500.0, house_load_w=2000.0, ev_power_w=3000.0, ev_charging_commanded=True)
-    # house_non_ev = max(0, 2000 - 3000) = 0; active_power = 500 - 0 = 500 → still positive
-    assert d.active_power_w == pytest.approx(500.0)
-
-
-def test_battery_not_discharged_when_no_pv_and_house_load() -> None:
-    """pv=0, house=1500, ev=500 → house_non_ev=1000, active_power=max(0, 0-1000)=0."""
-    d = _decide(pv_w=0.0, house_load_w=1500.0, ev_power_w=500.0, ev_charging_commanded=True)
-    # house_non_ev = max(0, 1500 - 500) = 1000; pv - house_non_ev = -1000 → clamped to 0
+    # house_non_ev = max(0, 2000 - 500) = 1500; pv - house_non_ev = 1500 → clamped to 0
     assert d.active_power_w == pytest.approx(0.0)
+
+
+def test_pv_surplus_after_ev_clamped_to_zero() -> None:
+    """pv=500, house=2000, ev=3000 → house_non_ev=0; surplus 500 W clamped to 0."""
+    d = _decide(pv_w=500.0, house_load_w=2000.0, ev_power_w=3000.0, ev_charging_commanded=True)
+    # house_non_ev = max(0, 2000 - 3000) = 0; pv - house_non_ev = 500 → clamped to 0
+    assert d.active_power_w == pytest.approx(0.0)
+
+
+def test_inverter_drains_negative_when_pv_below_house_non_ev() -> None:
+    """pv=0, house=1500, ev=500 → house_non_ev=1000; deficit → active_power=-1000 (drain)."""
+    d = _decide(pv_w=0.0, house_load_w=1500.0, ev_power_w=500.0, ev_charging_commanded=True)
+    # house_non_ev = max(0, 1500 - 500) = 1000; pv - house_non_ev = -1000 → negative drain
+    assert d.active_power_w == pytest.approx(-1000.0)
 
 
 def test_active_power_zero_when_pv_equals_house_non_ev() -> None:
@@ -150,10 +150,10 @@ def test_active_power_zero_when_pv_equals_house_non_ev() -> None:
 
 
 def test_house_non_ev_cannot_be_negative() -> None:
-    """EV draws more than total house load → house_non_ev=0."""
+    """EV draws more than total house load → house_non_ev=0; PV surplus clamped to 0."""
     d = _decide(pv_w=2000.0, house_load_w=500.0, ev_power_w=3000.0, ev_charging_commanded=True)
-    # house_non_ev = max(0, 500 - 3000) = 0; active_power = 2000 - 0 = 2000
-    assert d.active_power_w == pytest.approx(2000.0)
+    # house_non_ev = max(0, 500 - 3000) = 0; pv - house_non_ev = 2000 → clamped to 0
+    assert d.active_power_w == pytest.approx(0.0)
 
 
 # ── None verb/options fallthrough ─────────────────────────────────────────────

@@ -52,10 +52,11 @@ def _compute(
     house_non_ev = max(0.0, house_load_w - ev_power_w)
 
     if ev_charging_commanded:
-        # Battery must not discharge to feed the EV: clamp active_power to >= 0.
+        # Battery must not be charged while EV is charging: clamp active_power to <= 0.
+        # Negative = inverter drains to AC (PV/battery feeds house+EV); 0 = idle.
         return InverterDecision(
             inverter_verb=mapping.power_control_option,
-            active_power_w=max(0.0, pv_w - house_non_ev),
+            active_power_w=min(0.0, pv_w - house_non_ev),
             status="controlling",
         )
 

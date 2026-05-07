@@ -56,7 +56,7 @@ house_non_ev = max(0, house_load_w − ev_power_w)
 
 if ev_decision.strategy == "ev_charging":   # EV strategy commands charging
     verb          = power_control_option
-    active_power  = max(0, pv_w − house_non_ev)   ← battery never discharges to EV
+    active_power  = min(0, pv_w − house_non_ev)   ← battery never charges while EV charges
 else:
     verb          = disabled_option
     active_power  = (not written)
@@ -64,7 +64,7 @@ else:
 
 The gate is the **commanded** EV state (`ev_decision.strategy`), not the **measured** `ev_power_w`. Gating on measured draw would create a start-of-session deadlock: the inverter would stay in `disabled_option` until the EV began drawing, but the EV cannot safely draw until the inverter is already in `power_control`. By keying on the command, the inverter switches mode as soon as the strategy decides to charge — before the wallbox ramps up.
 
-**Battery protection:** clamping `active_power` to ≥ 0 when the EV is charging ensures the battery can charge from PV surplus but never discharges to feed the EV. EV power always comes from PV or the grid.
+**Battery protection:** clamping `active_power` to ≤ 0 while the EV is charging ensures the battery is never charged from AC; PV surplus is freed to feed the EV. Negative = inverter drains (PV/battery → AC); 0 = idle. Positive values (intentional battery charging) are reserved for a later feature.
 
 ---
 
@@ -92,7 +92,7 @@ The **Configure** button (Settings → Devices & Services → EMS → Configure)
 | `inverter_select` | select entity | No | HA select entity that controls inverter operating mode |
 | `inverter_disabled_option` | text | No | Option string written to the inverter select when EV is idle (e.g. `"Self Use"`) |
 | `inverter_power_control_option` | text | No | Option string written to the inverter select when EV is charging (e.g. `"Power Control"`) |
-| `active_power_entity` | `number` / `input_number` | No | EMS writes computed active power (W) to this entity when EV is charging; positive = PV surplus (charging into inverter), 0 = no battery discharge |
+| `active_power_entity` | `number` / `input_number` | No | EMS writes computed active power (W) to this entity when EV is charging; negative = inverter drains (PV/battery → AC), 0 = idle. Charging (positive) is reserved for a later feature. |
 
 ### Step 2 — EV Charger
 
@@ -180,7 +180,7 @@ The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`, `gri
 | Service | Entity | Condition | Value |
 |---------|--------|-----------|-------|
 | `select.select_option` | Inverter select entity (Step 1) | `inverter_control_mode = Control Inverter` AND `inverter_verb is not None` | `power_control_option` (EV commanded charging) or `disabled_option` (EV idle) |
-| `number.set_value` | Active power entity (Step 1) | `inverter_control_mode = Control Inverter` AND EV commanded charging | `max(0, pv_w − house_non_ev)` W — always ≥ 0 |
+| `number.set_value` | Active power entity (Step 1) | `inverter_control_mode = Control Inverter` AND EV commanded charging | `min(0, pv_w − house_non_ev)` W — always ≤ 0 |
 | `number.set_value` | EV charge target entity (Step 2) | Always | Computed EV target watts (0 when idle) |
 
 The inverter verb is written on **every slow loop cycle** — no idempotency cache. This ensures user manual overrides are corrected within 10 seconds.
@@ -189,7 +189,7 @@ The inverter verb is written on **every slow loop cycle** — no idempotency cac
 
 | Service | Entity | Condition | Value |
 |---------|--------|-----------|-------|
-| `number.set_value` | Active power entity (Step 1) | `inverter_control_mode = Control Inverter` AND EV commanded charging | Smoothed `max(0, pv_w − house_non_ev)` W |
+| `number.set_value` | Active power entity (Step 1) | `inverter_control_mode = Control Inverter` AND EV commanded charging | Smoothed `min(0, pv_w − house_non_ev)` W |
 | `number.set_value` | EV charge target entity (Step 2) | Always | Smoothed EV target watts (0 when idle) |
 
 Active power and EV target are cached — a service call is skipped if the value has not changed from the last written value. Writes are skipped during the 60-second startup grace period.
@@ -213,8 +213,8 @@ Active power and EV target are cached — a service call is skipped if the value
 | `sensor.ems_ev_charging_state` | see below | Human-readable EV charging state. Updated every second. Unavailable until the first strategy cycle completes. |
 | `sensor.ems_inverter_mode` | `power_control`, `disabled`, or `None` | Current inverter verb from the last `InverterDecision`. Reflects what EMS last intended to write. Unavailable until the first strategy cycle completes. |
 | `sensor.ems_ev_current_w` | float (W) | Computed EV charge target EMS is writing to `ev_charge_target_entity`. `0` when idle, off, or before the first strategy cycle. Always available. |
-| `sensor.ems_inverter_active_power` | float (W) | Active power EMS is writing to `active_power_entity`. Positive = PV surplus (charging into inverter); `0` when EV not charging, inverter control is Off, or before the first strategy cycle. Always available. |
-| `sensor.ems_inverter_status` | `Controlling`, `Idle`, `Disabled`, `Starting up` | Explains why and how EMS is (or isn't) controlling the inverter. Attributes: `reason` (human sentence), `formula` (shows the `active_power = max(0, pv_w − house_non_ev)` calculation), plus `pv_w`, `house_load_w`, `ev_power_w`, `house_non_ev_w`, `active_power_w`. Unavailable until the first strategy cycle completes. |
+| `sensor.ems_inverter_active_power` | float (W) | Active power EMS is writing to `active_power_entity`. Negative = inverter drains (PV/battery → AC); `0` when EV not charging, inverter control is Off, or before the first strategy cycle. Always available. |
+| `sensor.ems_inverter_status` | `Controlling`, `Idle`, `Disabled`, `Starting up` | Explains why and how EMS is (or isn't) controlling the inverter. Attributes: `reason` (human sentence), `formula` (shows the `active_power = min(0, pv_w − house_non_ev)` calculation), plus `pv_w`, `house_load_w`, `ev_power_w`, `house_non_ev_w`, `active_power_w`. Unavailable until the first strategy cycle completes. |
 
 #### `sensor.ems_ev_charging_state` values
 

@@ -261,7 +261,7 @@ def test_inverter_status_attributes_controlling():
     assert attrs["house_non_ev_w"] == max(0.0, 5500.0 - 3500.0)
     assert attrs["active_power_w"] == 4500.0
     assert "EV drawing 3500 W" in attrs["reason"]
-    assert "max(0," in attrs["formula"]
+    assert "min(0," in attrs["formula"]
     assert "4500" in attrs["formula"]
 
 
@@ -291,4 +291,4 @@ def test_inverter_status_attributes_starting_up():
     attrs = sensor.extra_state_attributes
     assert "startup" in attrs["formula"].lower() or "suppressed" in attrs["formula"]
     assert "Startup grace" in attrs["reason"]
-    assert attrs["active_power_w"] == pytest.approx(max(0.0, 5000.0 - max(0.0, 1000.0 - 0.0)))
+    assert attrs["active_power_w"] == pytest.approx(min(0.0, 5000.0 - max(0.0, 1000.0 - 0.0)))

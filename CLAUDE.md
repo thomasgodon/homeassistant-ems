@@ -35,7 +35,7 @@ The integration is structured around two execution loops managed by `coordinator
 
 **10-second strategy loop** (`EmsStrategyCoordinator`):
 1. `_build_inputs()` freezes all mapped HA entity states into a frozen `Inputs` dataclass
-2. `strategy.decide(inputs)` — pure function, returns a `Decision` (EV target watts, battery discharge cap)
+2. `strategy.decide(inputs)` — pure function, returns an `EvDecision` (EV target watts)
 3. Skips writes during startup grace (first 60 s) to avoid flapping on `unavailable` sensors
 4. `controller.write_full(decision, ev_power_w)` — idempotent: switches inverter to `power_control` + writes active power cap only when `ev_power_w > 0` (EV confirmed drawing); always writes EV target; **leaves inverter untouched when `ev_power_w == 0`** (no revert to any mode)
 
@@ -48,15 +48,15 @@ The integration is structured around two execution loops managed by `coordinator
 
 | Module | Rule |
 |--------|------|
-| `models.py` | Zero HA imports — frozen dataclasses only (`Inputs`, `Decision`, `VerbMapping`) |
-| `strategy.py` | Pure functions `decide(inputs) → Decision` and `recompute(...) → Decision`; no I/O, no HA |
+| `models.py` | Zero HA imports — frozen dataclasses only (`Inputs`, `EvDecision`, `InverterDecision`, `VerbMapping`) |
+| `strategy.py` | Pure functions `decide(inputs) → EvDecision` and `recompute(...) → EvDecision`; no I/O, no HA |
 | `controller.py` | The **only** module that calls HA services |
 | `coordinator.py` | Wires the loops; reads HA state; calls strategy and controller |
 
 ### Key abstractions
 
 - **Power balance algorithm**: `ev_target = max(0, max_grid_import_w − grid_import_w + last_ev_target_w)`. Integrating closed-loop: `last_ev_target_w` is the EMA-smoothed value written to the wallbox on the previous cycle. Using the commanded target (not the measured EV draw) makes the loop a pure integrator on grid error, driving `grid_import → max_grid_import_w` regardless of wallbox quantisation or ramp lag. On cold start (`last_ev_target_w = None`), falls back to `ev_power_w`.
-- **Active power**: strategy emits `active_power_w` = `pv_w - house_non_ev`. Sign convention: **negative = battery discharges (drain from inverter)**; **positive = PV surplus (charging into inverter)**. Controller writes it to `active_power_entity` via `number.set_value` when EV is confirmed charging.
+- **Active power**: `inverter_control.py` emits `active_power_w = min(0, pv_w − house_non_ev)`. Sign convention: **negative = inverter drains (PV/battery feeds AC)**; **positive = battery charges from AC** (planned feature, not yet written). Currently clamped to ≤ 0. Controller writes it to `active_power_entity` via `number.set_value` when EV is commanded charging.
 - **One inverter verb**: `power_control_option` (written only when EV is confirmed charging → controlled battery discharge). EMS never writes to the inverter when `ev_power_w == 0`; the inverter manages its own mode when idle.
 - **EV charge target**: strategy emits `ev_charge_power_w` (float, W). Controller writes it via `number.set_value` to `ev_charge_target_entity` (Step 3). No manual automation needed.
 - **house_non_ev**: derived inline as `max(0.0, house_load_w − ev_power_w)` — never a stored field.
