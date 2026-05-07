@@ -185,17 +185,17 @@ class EmsInverterStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorE
             ap = inv.active_power_w
             reason = (
                 f"EV drawing {ev:.0f} W. Inverter set to power-control mode;"
-                " active power clamped ≤ 0 so battery is never charged while EV is charging."
+                " directing PV to AC (battery neither charged nor drained)."
             )
             formula = (
-                f"active_power = min(0, pv_w − house_non_ev)"
-                f" = min(0, {pv:.0f} − {house_non_ev:.0f}) = {ap:.0f} W"
+                f"active_power = -min(pv_w, house_load_w)"
+                f" = -min({pv:.0f}, {house:.0f}) = {ap:.0f} W"
             )
         elif inv.status == "starting_up":
-            ap = min(0.0, pv - house_non_ev)
+            ap = -min(pv, house)
             reason = _INVERTER_STATUS_REASONS["starting_up"]
             formula = (
-                f"Would write: min(0, {pv:.0f} − {house_non_ev:.0f})"
+                f"Would write: -min({pv:.0f}, {house:.0f})"
                 f" = {ap:.0f} W (suppressed during startup)"
             )
         else:

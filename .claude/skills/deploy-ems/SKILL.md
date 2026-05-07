@@ -86,8 +86,16 @@ Custom integrations require a full restart — they cannot be reloaded.
 
 ### 8. Wait for HA to come back up
 
+Poll `ha core info` until the supervisor responds, with a 180s cap. Fail the deploy if HA never comes back.
+
 ```powershell
-Start-Sleep -Seconds 30
+$deadline = (Get-Date).AddSeconds(180)
+do {
+  Start-Sleep -Seconds 3
+  ssh root@192.168.0.12 "ha core info" *> $null
+  $ready = ($LASTEXITCODE -eq 0)
+} until ($ready -or (Get-Date) -gt $deadline)
+if (-not $ready) { throw "Home Assistant did not come back up within 180s after restart" }
 ```
 
 ### 9. Tail logs and check for errors

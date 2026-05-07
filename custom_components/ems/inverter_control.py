@@ -49,14 +49,14 @@ def _compute(
     if inverter_strategy == "Off":
         return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
 
-    house_non_ev = max(0.0, house_load_w - ev_power_w)
-
     if ev_charging_commanded:
-        # Battery must not be charged while EV is charging: clamp active_power to <= 0.
-        # Negative = inverter drains to AC (PV/battery feeds house+EV); 0 = idle.
+        # Direct all available PV to AC (capped by total AC demand). Battery is neither
+        # charged nor drained: magnitude never exceeds pv_w so battery gap isn't touched;
+        # sign is always ≤ 0 so battery is never charged from AC.
+        # Negative = inverter drains to AC; 0 = PV is 0 (night).
         return InverterDecision(
             inverter_verb=mapping.power_control_option,
-            active_power_w=min(0.0, pv_w - house_non_ev),
+            active_power_w=-min(pv_w, house_load_w),
             status="controlling",
         )
 

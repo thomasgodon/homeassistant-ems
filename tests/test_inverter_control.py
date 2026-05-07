@@ -4,7 +4,10 @@ Inverter control algorithm:
   Off → inverter_verb=None, active_power_w=None (hands-off)
   Control Inverter + ev_charging_commanded=False → verb=disabled_option, active_power_w=None
   Control Inverter + ev_charging_commanded=True  → verb=power_control_option,
-                                                    active_power_w=max(0, pv_w - house_non_ev)
+                                                    active_power_w=-min(pv_w, house_load_w)
+
+active_power is clamped to ≤ 0: magnitude never exceeds pv_w so battery is never drained;
+sign is always ≤ 0 so battery is never charged from AC. PV is directed to AC up to AC demand.
 
 The gate is ev_charging_commanded (strategy output), NOT measured ev_power_w, to avoid a
 start-of-session deadlock where the inverter would never switch before the EV begins drawing.
@@ -115,45 +118,42 @@ def test_ev_charging_uses_power_control_option_from_mapping() -> None:
     assert d.inverter_verb == "Power Control"
 
 
-def test_pv_surplus_clamped_to_zero() -> None:
-    """pv=5000, house_non_ev=0 → surplus clamped to 0 (battery must not charge while EV charges)."""
-    d = _decide(pv_w=5000.0, house_load_w=1000.0, ev_power_w=3000.0, ev_charging_commanded=True)
-    # house_non_ev = max(0, 1000 - 3000) = 0; pv - house_non_ev = 5000 → clamped to 0
-    assert d.active_power_w == pytest.approx(0.0)
+def test_pv_below_house_load_drains_full_pv() -> None:
+    """pv=500, house=4000 → active_power=-min(500,4000)=-500: all PV to AC, battery untouched."""
+    d = _decide(pv_w=500.0, house_load_w=4000.0, ev_charging_commanded=True)
+    assert d.active_power_w == pytest.approx(-500.0)
 
 
-def test_house_non_ev_subtracted_from_pv() -> None:
-    """pv=3000, house=2000, ev=500 → house_non_ev=1500, surplus=1500 → clamped to 0."""
-    d = _decide(pv_w=3000.0, house_load_w=2000.0, ev_power_w=500.0, ev_charging_commanded=True)
-    # house_non_ev = max(0, 2000 - 500) = 1500; pv - house_non_ev = 1500 → clamped to 0
-    assert d.active_power_w == pytest.approx(0.0)
-
-
-def test_pv_surplus_after_ev_clamped_to_zero() -> None:
-    """pv=500, house=2000, ev=3000 → house_non_ev=0; surplus 500 W clamped to 0."""
-    d = _decide(pv_w=500.0, house_load_w=2000.0, ev_power_w=3000.0, ev_charging_commanded=True)
-    # house_non_ev = max(0, 2000 - 3000) = 0; pv - house_non_ev = 500 → clamped to 0
-    assert d.active_power_w == pytest.approx(0.0)
-
-
-def test_inverter_drains_negative_when_pv_below_house_non_ev() -> None:
-    """pv=0, house=1500, ev=500 → house_non_ev=1000; deficit → active_power=-1000 (drain)."""
-    d = _decide(pv_w=0.0, house_load_w=1500.0, ev_power_w=500.0, ev_charging_commanded=True)
-    # house_non_ev = max(0, 1500 - 500) = 1000; pv - house_non_ev = -1000 → negative drain
+def test_pv_above_house_load_capped_by_demand() -> None:
+    """pv=6000, house=1000 → active_power=-1000: cap at AC demand, surplus goes to battery."""
+    d = _decide(pv_w=6000.0, house_load_w=1000.0, ev_charging_commanded=True)
     assert d.active_power_w == pytest.approx(-1000.0)
 
 
-def test_active_power_zero_when_pv_equals_house_non_ev() -> None:
-    """pv=1000, house=1500, ev=500 → house_non_ev=1000, active_power=0."""
-    d = _decide(pv_w=1000.0, house_load_w=1500.0, ev_power_w=500.0, ev_charging_commanded=True)
+def test_pv_equals_house_load() -> None:
+    """pv=3000, house=3000 → active_power=-3000: balanced, battery untouched."""
+    d = _decide(pv_w=3000.0, house_load_w=3000.0, ev_charging_commanded=True)
+    assert d.active_power_w == pytest.approx(-3000.0)
+
+
+def test_no_pv_active_power_is_zero() -> None:
+    """pv=0 → active_power=0: nothing to drain, inverter effectively idle."""
+    d = _decide(pv_w=0.0, house_load_w=4000.0, ev_charging_commanded=True)
     assert d.active_power_w == pytest.approx(0.0)
 
 
-def test_house_non_ev_cannot_be_negative() -> None:
-    """EV draws more than total house load → house_non_ev=0; PV surplus clamped to 0."""
-    d = _decide(pv_w=2000.0, house_load_w=500.0, ev_power_w=3000.0, ev_charging_commanded=True)
-    # house_non_ev = max(0, 500 - 3000) = 0; pv - house_non_ev = 2000 → clamped to 0
-    assert d.active_power_w == pytest.approx(0.0)
+def test_battery_never_charged_from_ac() -> None:
+    """active_power is always ≤ 0 — battery is never commanded to charge from AC."""
+    for pv, house in [(0, 0), (1000, 500), (500, 1000), (3000, 3000)]:
+        d = _decide(pv_w=float(pv), house_load_w=float(house), ev_charging_commanded=True)
+        assert (d.active_power_w or 0.0) <= 0.0
+
+
+def test_ev_power_not_needed_for_formula() -> None:
+    """Formula uses house_load_w (full AC demand); ev_power_w doesn't change active_power."""
+    d1 = _decide(pv_w=1000.0, house_load_w=4000.0, ev_power_w=0.0, ev_charging_commanded=True)
+    d2 = _decide(pv_w=1000.0, house_load_w=4000.0, ev_power_w=3500.0, ev_charging_commanded=True)
+    assert d1.active_power_w == d2.active_power_w == pytest.approx(-1000.0)
 
 
 # ── None verb/options fallthrough ─────────────────────────────────────────────
