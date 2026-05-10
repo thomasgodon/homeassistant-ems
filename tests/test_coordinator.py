@@ -635,3 +635,104 @@ async def test_strategy_coordinator_sets_inverter_status_starting_up_during_grac
         result = await coord._async_update_data()
 
     assert result.inverter_decision.status == "starting_up"
+
+
+# ---------------------------------------------------------------------------
+# Fast loop ev_plugged regression: stale prior_inputs must not win
+# ---------------------------------------------------------------------------
+
+def _make_stale_unplugged_result() -> LadderResult:
+    """LadderResult whose inputs carry ev_plugged=False (simulating prior unplug)."""
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    thresholds = Thresholds(max_grid_import_w=6000, ev_target_soc=80, ev_min_charge_w=1400)
+    mapping = VerbMapping(
+        inverter_select_entity=None,
+        disabled_option=None,
+        power_control_option=None,
+        active_power_entity=None,
+        ev_charge_target_entity=None,
+    )
+    inputs = Inputs(
+        now=now,
+        grid_import_w=0.0,
+        pv_w=0.0,
+        house_load_w=0.0,
+        ev_plugged=False,
+        ev_power_w=0.0,
+        ev_soc=None,
+        ev_strategy="Price-optimised",
+        is_cheap_hour=True,
+        inverter_strategy="Off",
+        thresholds=thresholds,
+        mapping=mapping,
+    )
+    return LadderResult(
+        ev_decision=EvDecision(
+            strategy="ev_idle", ev_charge_power_w=0.0, charging_state="ev_not_connected"
+        ),
+        inverter_decision=InverterDecision(inverter_verb=None, active_power_w=None),
+        inputs=inputs,
+        computed_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_fast_loop_reads_ev_plug_fresh_on_replug():
+    """Regression: prior_inputs.ev_plugged=False (stale) is overridden by a fresh entity read."""
+    states = {
+        "sensor.pv": 3000,
+        "sensor.load": 1000,
+        "sensor.ev": 0,
+        "sensor.grid": 0,
+        "binary_sensor.ev_plug": "on",
+        "select.ems_ev_charging_mode": "Price-optimised",
+        "select.ems_inverter_control_mode": "Off",
+        "select.ems_ev_smoothing": "Fast",
+    }
+    coord = _make_fast_coordinator(states)
+    coord._entry.data["ev_plug"] = "binary_sensor.ev_plug"
+    coord._state.last_result = _make_stale_unplugged_result()
+
+    with patch(_DT_UTIL) as mock_dt:
+        mock_dt.utcnow.return_value = _NOW
+        result = await coord._async_update_data()
+
+    assert result.inputs.ev_plugged is True
+    assert result.ev_decision.charging_state != "ev_not_connected"
+
+
+@pytest.mark.asyncio
+async def test_fast_loop_reads_ev_plug_fresh_on_unplug():
+    """Sanity inverse: prior_inputs.ev_plugged=True is overridden when entity reports off."""
+    states = {
+        "sensor.pv": 3000,
+        "sensor.load": 1000,
+        "sensor.ev": 0,
+        "sensor.grid": 0,
+        "binary_sensor.ev_plug": "off",
+        "select.ems_ev_charging_mode": "Price-optimised",
+        "select.ems_inverter_control_mode": "Off",
+        "select.ems_ev_smoothing": "Fast",
+    }
+    base = _make_stale_unplugged_result()
+    from dataclasses import replace as dc_replace
+    stale_plugged_inputs = dc_replace(base.inputs, ev_plugged=True)
+    plugged_result = LadderResult(
+        ev_decision=EvDecision(
+            strategy="ev_charging", ev_charge_power_w=2000.0, charging_state="charging"
+        ),
+        inverter_decision=base.inverter_decision,
+        inputs=stale_plugged_inputs,
+        computed_at=base.computed_at,
+    )
+
+    coord = _make_fast_coordinator(states)
+    coord._entry.data["ev_plug"] = "binary_sensor.ev_plug"
+    coord._state.last_result = plugged_result
+
+    with patch(_DT_UTIL) as mock_dt:
+        mock_dt.utcnow.return_value = _NOW
+        result = await coord._async_update_data()
+
+    assert result.inputs.ev_plugged is False
+    assert result.ev_decision.charging_state == "ev_not_connected"

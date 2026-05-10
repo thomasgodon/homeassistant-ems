@@ -225,13 +225,14 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         ev_strategy = _read_select_state(self.hass, "select.ems_ev_charging_mode", "Off")
         inverter_strategy = _read_select_state(self.hass, "select.ems_inverter_control_mode", "Off")
         is_cheap_hour = _read_bool(self.hass, data.get(CONF_PRICE_SIGNAL_ENTITY), True)
+        ev_plugged = _read_bool(self.hass, data.get(CONF_EV_PLUG), True)
 
         ev_fast = strategy_module.recompute(
             pv_w=pv_w,
             house_load_w=house_load_w,
             ev_power_w=ev_power_w,
             grid_import_w=grid_import_w,
-            ev_plugged=prior_inputs.ev_plugged,
+            ev_plugged=ev_plugged,
             ev_soc=prior_inputs.ev_soc,
             ev_strategy=ev_strategy,
             is_cheap_hour=is_cheap_hour,
@@ -292,6 +293,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             ev_power_w=ev_power_w,
             grid_import_w=grid_import_w,
             is_cheap_hour=is_cheap_hour,
+            ev_plugged=ev_plugged,
         )
         result = LadderResult(
             ev_decision=ev_fast,

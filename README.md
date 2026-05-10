@@ -21,7 +21,7 @@ Two execution loops share a single `EmsState` object. Each loop runs two indepen
 5. `controller.write_slow()` — writes the inverter verb **every cycle** (overriding any manual user change within 10 s), writes active power if the EV is charging, and always writes the EV charge target.
 
 ### 1-second fast loop (`EmsFastLoopCoordinator`)
-Always runs once the integration is active. Re-reads `pv_w`, `house_load_w`, `ev_power_w`, and `grid_import_w`, then runs `strategy.recompute()` and `inverter_control.recompute()`. Calls `controller.write_fast()` — which writes active power and EV target but **never writes the inverter verb** (verb enforcement is the slow loop's job).
+Always runs once the integration is active. Re-reads `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`, `ev_plugged`, `ev_strategy`, `inverter_strategy`, and `is_cheap_hour`, then runs `strategy.recompute()` and `inverter_control.recompute()`. Calls `controller.write_fast()` — which writes active power and EV target but **never writes the inverter verb** (verb enforcement is the slow loop's job).
 
 ### EV algorithm — power balance
 
@@ -133,7 +133,7 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | `thresholds` | `max_grid_import_w` from entity (Step 3); `ev_target_soc` from entity (Step 2); `ev_min_charge_w` from `number.ems_ev_min_charge_w`; `max_ev_charge_w` from entity (Step 2) |
 | `mapping` | Inverter select entity + active power entity + EV charge target entity from config |
 
-The 1-second fast loop re-reads only: `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`, `ev_strategy`, `inverter_strategy`; remaining fields are reused from the last 10 s result.
+The 1-second fast loop re-reads: `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`, `ev_plugged`, `ev_strategy`, `inverter_strategy`, `is_cheap_hour`; remaining fields (`ev_soc`, `thresholds`, `mapping`) are reused from the last 10 s result.
 
 ---
 
