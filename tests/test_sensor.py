@@ -175,6 +175,7 @@ def test_charging_state_options_cover_all_states():
         "Not enough power",
         "Starting up",
         "Outside cheap hours",
+        "Awaiting solar surplus",
     }
 
 
@@ -241,7 +242,9 @@ def test_inverter_status_unique_id():
 
 def test_inverter_status_options_cover_all_states():
     sensor = EmsInverterStatusSensor(_make_coordinator(0.0))
-    assert set(sensor.options) == {"Controlling", "Idle", "Disabled", "Starting up"}
+    assert set(sensor.options) == {
+        "Controlling", "Idle", "Disabled", "Starting up", "Peak shaving", "Holding battery"
+    }
 
 
 def test_inverter_status_attributes_none_when_no_data():

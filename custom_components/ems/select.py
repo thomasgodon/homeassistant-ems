@@ -24,7 +24,7 @@ async def async_setup_entry(
 class EmsEvChargingMode(SelectEntity, RestoreEntity):
     _attr_unique_id = "ems_ev_charging_mode"
     _attr_name = "EMS EV Charging Mode"
-    _attr_options = ["Grid-optimised", "Price-optimised", "Off"]
+    _attr_options = ["Grid-optimised", "Price-optimised", "Energy-optimised", "Off"]
     _attr_current_option = "Off"
     _attr_icon = "mdi:car-electric"
 
@@ -34,9 +34,8 @@ class EmsEvChargingMode(SelectEntity, RestoreEntity):
 
     async def async_added_to_hass(self) -> None:
         if (last := await self.async_get_last_state()) is not None:
-            state = "Grid-optimised" if last.state == "Energy-optimised" else last.state
-            if state in self._attr_options:
-                self._attr_current_option = state
+            if last.state in self._attr_options:
+                self._attr_current_option = last.state
 
     async def async_select_option(self, option: str) -> None:
         self._attr_current_option = option

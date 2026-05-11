@@ -17,6 +17,7 @@ _CHARGING_STATE_LABELS: dict[str, str] = {
     "not_enough_power": "Not enough power",
     "starting_up": "Starting up",
     "outside_cheap_hours": "Outside cheap hours",
+    "awaiting_solar_surplus": "Awaiting solar surplus",
 }
 
 _INVERTER_STATUS_LABELS: dict[str, str] = {
@@ -24,6 +25,8 @@ _INVERTER_STATUS_LABELS: dict[str, str] = {
     "idle": "Idle",
     "disabled": "Disabled",
     "starting_up": "Starting up",
+    "peak_shaving": "Peak shaving",
+    "holding_battery": "Holding battery",
 }
 
 _INVERTER_STATUS_REASONS: dict[str, str] = {
@@ -35,6 +38,12 @@ _INVERTER_STATUS_REASONS: dict[str, str] = {
     "starting_up": (
         "Startup grace (60 s). Strategy still computing,"
         " but writes are suppressed while sensors stabilize."
+    ),
+    "peak_shaving": (
+        "Grid import exceeded the cap. Battery is discharging to cover the excess."
+    ),
+    "holding_battery": (
+        "Cheap hour with PV producing. Battery discharge suppressed so PV charges the battery."
     ),
 }
 
@@ -191,6 +200,19 @@ class EmsInverterStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorE
                 f"active_power = -min(pv_w, house_load_w)"
                 f" = -min({pv:.0f}, {house:.0f}) = {ap:.0f} W"
             )
+        elif inv.status == "peak_shaving":
+            ap = inv.active_power_w
+            grid = inp.grid_import_w
+            max_imp = inp.thresholds.max_grid_import_w
+            reason = _INVERTER_STATUS_REASONS["peak_shaving"]
+            formula = (
+                f"active_power = -(pv_w + (grid_import_w - max_grid_import_w))"
+                f" = -({pv:.0f} + ({grid:.0f} - {max_imp:.0f})) = {ap:.0f} W"
+            )
+        elif inv.status == "holding_battery":
+            ap = 0.0
+            reason = _INVERTER_STATUS_REASONS["holding_battery"]
+            formula = "active_power = 0 W (battery discharge suppressed)"
         elif inv.status == "starting_up":
             ap = -min(pv, house)
             reason = _INVERTER_STATUS_REASONS["starting_up"]

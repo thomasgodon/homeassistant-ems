@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfPower
+from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -30,6 +30,16 @@ _NUMBERS: tuple[EmsNumberDescription, ...] = (
         native_step=50,
         default_value=1400,
         icon="mdi:ev-station",
+    ),
+    EmsNumberDescription(
+        key="ems_battery_target_soc",
+        name="EMS Battery Target SoC",
+        native_unit_of_measurement=PERCENTAGE,
+        native_min_value=0,
+        native_max_value=100,
+        native_step=1,
+        default_value=80,
+        icon="mdi:battery-charging-80",
     ),
 )
 

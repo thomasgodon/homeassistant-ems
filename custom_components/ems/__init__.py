@@ -32,7 +32,7 @@ PLATFORMS = [
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    if entry.version >= 9:
+    if entry.version >= 10:
         return True
 
     new_data = {**entry.data}
@@ -63,7 +63,17 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # v8 → v9: add price signal entity (optional, defaults to None)
     new_data.setdefault("price_signal_entity", None)
 
-    hass.config_entries.async_update_entry(entry, data=new_data, version=9)
+    # v9 → v10: add battery management entities (all optional, default None)
+    for key in (
+        "battery_soc",
+        "battery_capacity",
+        "solar_forecast_remaining",
+        "house_load_forecast_remaining",
+        "prices_json_entity",
+    ):
+        new_data.setdefault(key, None)
+
+    hass.config_entries.async_update_entry(entry, data=new_data, version=10)
     return True
 
 

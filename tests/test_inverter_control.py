@@ -1,16 +1,16 @@
 """Tests for inverter_control.decide() and inverter_control.recompute().
 
-Inverter control algorithm:
-  Off → inverter_verb=None, active_power_w=None (hands-off)
-  Control Inverter + ev_charging_commanded=False → verb=disabled_option, active_power_w=None
-  Control Inverter + ev_charging_commanded=True  → verb=power_control_option,
-                                                    active_power_w=-min(pv_w, house_load_w)
+Priority ladder:
+  1. Peak shaving  — grid_import > max_grid_import AND EV idle
+                     → verb=power_control, active_power=-(pv + excess), status=peak_shaving
+  2. EV charging   — ev_charging_commanded=True
+                     → verb=power_control, active_power=-min(pv,house), status=controlling
+  3. EOD suppress  — eod_suppress=True AND pv>0 AND EV idle
+                     → verb=power_control, active_power=0, status=holding_battery
+  4. Idle          — otherwise
+                     → verb=disabled_option, active_power=None, status=idle
 
-active_power is clamped to ≤ 0: magnitude never exceeds pv_w so battery is never drained;
-sign is always ≤ 0 so battery is never charged from AC. PV is directed to AC up to AC demand.
-
-The gate is ev_charging_commanded (strategy output), NOT measured ev_power_w, to avoid a
-start-of-session deadlock where the inverter would never switch before the EV begins drawing.
+Off mode: never write anything (disabled status, all None).
 """
 from __future__ import annotations
 
@@ -41,17 +41,23 @@ def _decide(
     pv_w: float = 0.0,
     house_load_w: float = 0.0,
     ev_power_w: float = 0.0,
+    grid_import_w: float = 0.0,
     inverter_strategy: str = "Control Inverter",
     mapping: VerbMapping = _MAPPING,
     ev_charging_commanded: bool = False,
+    eod_suppress: bool = False,
+    max_grid_import_w: float = 4500.0,
 ) -> InverterDecision:
     return inverter_control_module.recompute(
         pv_w=pv_w,
         house_load_w=house_load_w,
         ev_power_w=ev_power_w,
+        grid_import_w=grid_import_w,
         inverter_strategy=inverter_strategy,
         mapping=mapping,
         ev_charging_commanded=ev_charging_commanded,
+        eod_suppress=eod_suppress,
+        max_grid_import_w=max_grid_import_w,
     )
 
 
@@ -177,6 +183,7 @@ def test_recompute_matches_decide(builder) -> None:
         pv_w=3000.0,
         house_load_w=1500.0,
         ev_power_w=2000.0,
+        grid_import_w=500.0,
         inverter_strategy="Control Inverter",
     )
     ev_decision = EvDecision(
@@ -187,9 +194,11 @@ def test_recompute_matches_decide(builder) -> None:
         pv_w=inp.pv_w,
         house_load_w=inp.house_load_w,
         ev_power_w=inp.ev_power_w,
+        grid_import_w=inp.grid_import_w,
         inverter_strategy=inp.inverter_strategy,
         mapping=inp.mapping,
         ev_charging_commanded=True,
+        max_grid_import_w=inp.thresholds.max_grid_import_w,
     )
     assert d1 == d2
 
@@ -233,3 +242,104 @@ def test_uncommanded_with_residual_ev_power_uses_disabled() -> None:
     d = _decide(ev_charging_commanded=False, ev_power_w=500.0)
     assert d.inverter_verb == "disabled"
     assert d.status == "idle"
+
+
+# ── Peak shaving ──────────────────────────────────────────────────────────────
+
+def test_peak_shaving_when_grid_exceeds_cap_and_ev_idle() -> None:
+    """grid_import > max_grid_import + EV idle → battery discharges for excess."""
+    d = _decide(
+        pv_w=1000.0,
+        grid_import_w=5500.0,
+        ev_charging_commanded=False,
+        max_grid_import_w=4500.0,
+    )
+    # excess = 5500 - 4500 = 1000; active_power = -(1000 + 1000) = -2000
+    assert d.status == "peak_shaving"
+    assert d.inverter_verb == "power_control"
+    assert d.active_power_w == pytest.approx(-2000.0)
+
+
+def test_peak_shaving_suppressed_when_ev_charging() -> None:
+    """When EV is commanding charging, EV formula wins — no battery peak shave."""
+    d = _decide(
+        pv_w=1000.0,
+        house_load_w=500.0,
+        grid_import_w=5500.0,
+        ev_charging_commanded=True,
+        max_grid_import_w=4500.0,
+    )
+    assert d.status == "controlling"
+    assert d.active_power_w == pytest.approx(-500.0)
+
+
+def test_no_peak_shaving_when_grid_at_cap() -> None:
+    """grid_import == max_grid_import → no peak shaving (not strictly greater)."""
+    d = _decide(
+        grid_import_w=4500.0,
+        ev_charging_commanded=False,
+        max_grid_import_w=4500.0,
+    )
+    assert d.status == "idle"
+
+
+def test_peak_shaving_battery_never_charged() -> None:
+    """Peak shaving active_power is always ≤ 0."""
+    d = _decide(
+        pv_w=0.0,
+        grid_import_w=6000.0,
+        ev_charging_commanded=False,
+        max_grid_import_w=4500.0,
+    )
+    assert d.active_power_w is not None
+    assert d.active_power_w <= 0.0
+
+
+# ── EOD suppress (holding_battery) ────────────────────────────────────────────
+
+def test_eod_suppress_with_pv_holds_battery() -> None:
+    """eod_suppress=True + pv>0 + EV idle → active_power=0, status=holding_battery."""
+    d = _decide(pv_w=3000.0, eod_suppress=True)
+    assert d.status == "holding_battery"
+    assert d.inverter_verb == "power_control"
+    assert d.active_power_w == pytest.approx(0.0)
+
+
+def test_eod_suppress_ignored_without_pv() -> None:
+    """eod_suppress but no PV (night) → idle, no write."""
+    d = _decide(pv_w=0.0, eod_suppress=True)
+    assert d.status == "idle"
+
+
+def test_eod_suppress_ignored_when_ev_charging() -> None:
+    """EV charging takes priority over EOD suppress."""
+    d = _decide(pv_w=3000.0, house_load_w=1500.0, ev_charging_commanded=True, eod_suppress=True)
+    assert d.status == "controlling"
+    assert d.active_power_w == pytest.approx(-1500.0)
+
+
+# ── Priority precedence ────────────────────────────────────────────────────────
+
+def test_priority_peak_shave_over_eod_suppress() -> None:
+    """Peak shaving beats EOD suppress when both conditions are met."""
+    d = _decide(
+        pv_w=1000.0,
+        grid_import_w=5500.0,
+        eod_suppress=True,
+        ev_charging_commanded=False,
+        max_grid_import_w=4500.0,
+    )
+    assert d.status == "peak_shaving"
+
+
+def test_priority_ev_over_eod_suppress() -> None:
+    """EV charging beats EOD suppress."""
+    d = _decide(
+        pv_w=2000.0,
+        house_load_w=1000.0,
+        grid_import_w=500.0,
+        ev_charging_commanded=True,
+        eod_suppress=True,
+        max_grid_import_w=4500.0,
+    )
+    assert d.status == "controlling"

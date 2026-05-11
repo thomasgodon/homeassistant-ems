@@ -9,7 +9,7 @@ async def test_ev_charging_mode_options():
     from custom_components.ems.select import EmsEvChargingMode
 
     entity = EmsEvChargingMode()
-    assert entity._attr_options == ["Grid-optimised", "Price-optimised", "Off"]
+    assert entity._attr_options == ["Grid-optimised", "Price-optimised", "Energy-optimised", "Off"]
 
 
 @pytest.mark.asyncio
@@ -21,7 +21,7 @@ async def test_ev_charging_mode_default():
 
 
 @pytest.mark.asyncio
-async def test_ev_charging_mode_migrates_energy_optimised_to_grid_optimised():
+async def test_ev_charging_mode_restores_energy_optimised():
     from unittest.mock import AsyncMock, MagicMock
 
     from custom_components.ems.select import EmsEvChargingMode
@@ -33,7 +33,7 @@ async def test_ev_charging_mode_migrates_energy_optimised_to_grid_optimised():
 
     await entity.async_added_to_hass()
 
-    assert entity._attr_current_option == "Grid-optimised"
+    assert entity._attr_current_option == "Energy-optimised"
 
 
 @pytest.mark.asyncio

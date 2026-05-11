@@ -25,6 +25,14 @@ CONF_MAX_GRID_IMPORT_W = "max_grid_import_w"
 CONF_EV_TARGET_SOC = "ev_target_soc"
 CONF_PRICE_SIGNAL_ENTITY = "price_signal_entity"
 
+# Config entry data keys — battery management (optional)
+CONF_BATTERY_SOC = "battery_soc"
+CONF_BATTERY_CAPACITY = "battery_capacity"
+CONF_SOLAR_FORECAST_REMAINING = "solar_forecast_remaining"
+CONF_HOUSE_LOAD_FORECAST_REMAINING = "house_load_forecast_remaining"
+CONF_PRICES_JSON_ENTITY = "prices_json_entity"
+
 # Threshold defaults
 DEFAULT_MAX_GRID_IMPORT_W = 4500.0
 DEFAULT_EV_TARGET_SOC = 80.0
+DEFAULT_BATTERY_TARGET_SOC = 80.0

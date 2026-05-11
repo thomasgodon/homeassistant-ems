@@ -31,17 +31,25 @@ class Inputs:
     ev_plugged: bool
     ev_power_w: float
     ev_soc: float | None
-    ev_strategy: Literal["Grid-optimised", "Price-optimised", "Off"]
+    ev_strategy: Literal["Grid-optimised", "Price-optimised", "Energy-optimised", "Off"]
     is_cheap_hour: bool
     inverter_strategy: Literal["Control Inverter", "Off"]
     thresholds: Thresholds
     mapping: VerbMapping
     last_ev_target_w: float | None = None
+    battery_soc: float | None = None
+    battery_capacity_kwh: float | None = None
+    battery_target_soc: float = 80.0
+    solar_forecast_remaining_kwh: float | None = None
+    house_load_forecast_remaining_kwh: float | None = None
+    prices_today: tuple[float, ...] | None = None
 
 
 StrategyLabel = Literal["ev_charging", "ev_idle"]
 
-InverterStatus = Literal["controlling", "idle", "disabled", "starting_up"]
+InverterStatus = Literal[
+    "controlling", "idle", "disabled", "starting_up", "peak_shaving", "holding_battery"
+]
 
 EvChargingState = Literal[
     "charging",
@@ -51,6 +59,7 @@ EvChargingState = Literal[
     "not_enough_power",
     "starting_up",
     "outside_cheap_hours",
+    "awaiting_solar_surplus",
 ]
 
 

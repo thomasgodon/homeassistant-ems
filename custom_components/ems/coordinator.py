@@ -14,6 +14,8 @@ from . import inverter_control as inverter_control_module
 from . import strategy as strategy_module
 from .const import (
     CONF_ACTIVE_POWER_ENTITY,
+    CONF_BATTERY_CAPACITY,
+    CONF_BATTERY_SOC,
     CONF_EV_CHARGE_TARGET_ENTITY,
     CONF_EV_MAX_CHARGE_W,
     CONF_EV_PLUG,
@@ -22,12 +24,16 @@ from .const import (
     CONF_EV_TARGET_SOC,
     CONF_GRID_IMPORT_POWER,
     CONF_HOUSE_LOAD,
+    CONF_HOUSE_LOAD_FORECAST_REMAINING,
     CONF_INVERTER_DISABLED_OPTION,
     CONF_INVERTER_POWER_CONTROL_OPTION,
     CONF_INVERTER_SELECT,
     CONF_MAX_GRID_IMPORT_W,
     CONF_PRICE_SIGNAL_ENTITY,
+    CONF_PRICES_JSON_ENTITY,
     CONF_PV_POWER,
+    CONF_SOLAR_FORECAST_REMAINING,
+    DEFAULT_BATTERY_TARGET_SOC,
     DEFAULT_EV_TARGET_SOC,
     DEFAULT_MAX_GRID_IMPORT_W,
     DOMAIN,
@@ -167,6 +173,19 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             else None
         )
 
+        battery_soc = _read_float_optional(hass, data.get(CONF_BATTERY_SOC))
+        battery_capacity_kwh = _read_float_optional(hass, data.get(CONF_BATTERY_CAPACITY))
+        battery_target_soc = _read_number(
+            hass, "number.ems_battery_target_soc", DEFAULT_BATTERY_TARGET_SOC
+        )
+        solar_forecast_remaining_kwh = _read_float_optional(
+            hass, data.get(CONF_SOLAR_FORECAST_REMAINING)
+        )
+        house_load_forecast_remaining_kwh = _read_float_optional(
+            hass, data.get(CONF_HOUSE_LOAD_FORECAST_REMAINING)
+        )
+        prices_today = _read_prices_json(hass, data.get(CONF_PRICES_JSON_ENTITY))
+
         return Inputs(
             now=now,
             grid_import_w=grid_import_w,
@@ -181,6 +200,12 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             thresholds=thresholds,
             mapping=mapping,
             last_ev_target_w=last_ev_target_w,
+            battery_soc=battery_soc,
+            battery_capacity_kwh=battery_capacity_kwh,
+            battery_target_soc=battery_target_soc,
+            solar_forecast_remaining_kwh=solar_forecast_remaining_kwh,
+            house_load_forecast_remaining_kwh=house_load_forecast_remaining_kwh,
+            prices_today=prices_today,
         )
 
 
@@ -227,6 +252,20 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         is_cheap_hour = _read_bool(self.hass, data.get(CONF_PRICE_SIGNAL_ENTITY), True)
         ev_plugged = _read_bool(self.hass, data.get(CONF_EV_PLUG), True)
 
+        # Battery inputs are re-read every 10 s by the strategy loop; reuse from prior state.
+        fast_inputs_for_eod = replace(
+            prior_inputs,
+            now=dt_util.utcnow(),
+            pv_w=pv_w,
+            house_load_w=house_load_w,
+            ev_power_w=ev_power_w,
+            grid_import_w=grid_import_w,
+            is_cheap_hour=is_cheap_hour,
+            ev_plugged=ev_plugged,
+        )
+        eod_suppress = strategy_module.is_eod_suppress_hour(fast_inputs_for_eod)
+        energy_optimised_allowed = strategy_module._energy_optimised_allows_ev(fast_inputs_for_eod)
+
         ev_fast = strategy_module.recompute(
             pv_w=pv_w,
             house_load_w=house_load_w,
@@ -238,14 +277,18 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             is_cheap_hour=is_cheap_hour,
             thresholds=prior_inputs.thresholds,
             last_ev_target_w=self._ema_ev_w,
+            energy_optimised_allowed=energy_optimised_allowed,
         )
         inverter_fast = inverter_control_module.recompute(
             pv_w=pv_w,
             house_load_w=house_load_w,
             ev_power_w=ev_power_w,
+            grid_import_w=grid_import_w,
             inverter_strategy=inverter_strategy,
             mapping=prior_inputs.mapping,
             ev_charging_commanded=ev_fast.strategy == "ev_charging",
+            eod_suppress=eod_suppress,
+            max_grid_import_w=prior_inputs.thresholds.max_grid_import_w,
         )
 
         session_start = self._prev_ev_power_w == 0.0 and ev_power_w > 0.0
@@ -285,16 +328,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         await self._controller.write_fast(ev_fast, inverter_fast)
 
         now = dt_util.utcnow()
-        fast_inputs = replace(
-            prior_inputs,
-            now=now,
-            pv_w=pv_w,
-            house_load_w=house_load_w,
-            ev_power_w=ev_power_w,
-            grid_import_w=grid_import_w,
-            is_cheap_hour=is_cheap_hour,
-            ev_plugged=ev_plugged,
-        )
+        fast_inputs = replace(fast_inputs_for_eod, now=now)
         result = LadderResult(
             ev_decision=ev_fast,
             inverter_decision=inverter_fast,
@@ -349,3 +383,21 @@ def _read_select_state(hass: HomeAssistant, entity_id: str, default: str) -> str
 
 def _read_number(hass: HomeAssistant, entity_id: str, default: float) -> float:
     return _read_float(hass, entity_id, default)
+
+
+def _read_prices_json(hass: HomeAssistant, entity_id: str | None) -> tuple[float, ...] | None:
+    if not entity_id:
+        return None
+    state = hass.states.get(entity_id)
+    if state is None or state.state in ("unavailable", "unknown"):
+        return None
+    try:
+        import json
+        prices = json.loads(state.state)
+        if isinstance(prices, list) and len(prices) == 24:
+            return tuple(float(p) for p in prices)
+    except Exception:
+        _LOGGER.warning(
+            "EMS: could not parse prices_json_entity '%s' as 24-element list", entity_id
+        )
+    return None

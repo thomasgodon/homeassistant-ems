@@ -17,6 +17,8 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_ACTIVE_POWER_ENTITY,
+    CONF_BATTERY_CAPACITY,
+    CONF_BATTERY_SOC,
     CONF_EV_CHARGE_TARGET_ENTITY,
     CONF_EV_MAX_CHARGE_W,
     CONF_EV_PLUG,
@@ -25,12 +27,15 @@ from .const import (
     CONF_EV_TARGET_SOC,
     CONF_GRID_IMPORT_POWER,
     CONF_HOUSE_LOAD,
+    CONF_HOUSE_LOAD_FORECAST_REMAINING,
     CONF_INVERTER_DISABLED_OPTION,
     CONF_INVERTER_POWER_CONTROL_OPTION,
     CONF_INVERTER_SELECT,
     CONF_MAX_GRID_IMPORT_W,
     CONF_PRICE_SIGNAL_ENTITY,
+    CONF_PRICES_JSON_ENTITY,
     CONF_PV_POWER,
+    CONF_SOLAR_FORECAST_REMAINING,
     DOMAIN,
 )
 
@@ -40,10 +45,11 @@ _BOOL_ENTITY = EntitySelectorConfig(domain=[BINARY_SENSOR_DOMAIN, INPUT_BOOLEAN_
 _SELECT_ENTITY = EntitySelectorConfig(domain=[SELECT_DOMAIN, INPUT_SELECT_DOMAIN])
 _NUMBER_OR_INPUT_NUMBER = EntitySelectorConfig(domain=[NUMBER_DOMAIN, INPUT_NUMBER_DOMAIN])
 _NUMBER_OR_SENSOR = EntitySelectorConfig(domain=[NUMBER_DOMAIN, INPUT_NUMBER_DOMAIN, SENSOR_DOMAIN])
+_JSON_SENSOR = EntitySelectorConfig(domain=[SENSOR_DOMAIN])
 
 
 class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 9
+    VERSION = 10
 
     def __init__(self) -> None:
         self._data: dict = {}
@@ -84,7 +90,7 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_EV_CHARGE_TARGET_ENTITY] = user_input.get(CONF_EV_CHARGE_TARGET_ENTITY)
             self._data[CONF_EV_MAX_CHARGE_W] = user_input.get(CONF_EV_MAX_CHARGE_W)
             self._data[CONF_PRICE_SIGNAL_ENTITY] = user_input.get(CONF_PRICE_SIGNAL_ENTITY)
-            return await self.async_step_grid()
+            return await self.async_step_battery()
 
         schema = vol.Schema({
             vol.Required(CONF_EV_POWER): EntitySelector(_POWER_SENSOR),
@@ -96,6 +102,28 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_PRICE_SIGNAL_ENTITY): EntitySelector(_BOOL_ENTITY),
         })
         return self.async_show_form(step_id="ev", data_schema=schema)
+
+    async def async_step_battery(self, user_input=None):
+        if user_input is not None:
+            self._data[CONF_BATTERY_SOC] = user_input.get(CONF_BATTERY_SOC)
+            self._data[CONF_BATTERY_CAPACITY] = user_input.get(CONF_BATTERY_CAPACITY)
+            self._data[CONF_SOLAR_FORECAST_REMAINING] = user_input.get(
+                CONF_SOLAR_FORECAST_REMAINING
+            )
+            self._data[CONF_HOUSE_LOAD_FORECAST_REMAINING] = user_input.get(
+                CONF_HOUSE_LOAD_FORECAST_REMAINING
+            )
+            self._data[CONF_PRICES_JSON_ENTITY] = user_input.get(CONF_PRICES_JSON_ENTITY)
+            return await self.async_step_grid()
+
+        schema = vol.Schema({
+            vol.Optional(CONF_BATTERY_SOC): EntitySelector(_SOC_SENSOR),
+            vol.Optional(CONF_BATTERY_CAPACITY): EntitySelector(_NUMBER_OR_SENSOR),
+            vol.Optional(CONF_SOLAR_FORECAST_REMAINING): EntitySelector(_NUMBER_OR_SENSOR),
+            vol.Optional(CONF_HOUSE_LOAD_FORECAST_REMAINING): EntitySelector(_NUMBER_OR_SENSOR),
+            vol.Optional(CONF_PRICES_JSON_ENTITY): EntitySelector(_JSON_SENSOR),
+        })
+        return self.async_show_form(step_id="battery", data_schema=schema)
 
     async def async_step_grid(self, user_input=None):
         if user_input is not None:
@@ -172,7 +200,7 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
             self._data[CONF_EV_CHARGE_TARGET_ENTITY] = user_input.get(CONF_EV_CHARGE_TARGET_ENTITY)
             self._data[CONF_EV_MAX_CHARGE_W] = user_input.get(CONF_EV_MAX_CHARGE_W)
             self._data[CONF_PRICE_SIGNAL_ENTITY] = user_input.get(CONF_PRICE_SIGNAL_ENTITY)
-            return await self.async_step_grid()
+            return await self.async_step_battery()
 
         schema = vol.Schema({
             vol.Required(
@@ -205,6 +233,43 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
             ): EntitySelector(_BOOL_ENTITY),
         })
         return self.async_show_form(step_id="ev", data_schema=schema)
+
+    async def async_step_battery(self, user_input=None):
+        if user_input is not None:
+            self._data[CONF_BATTERY_SOC] = user_input.get(CONF_BATTERY_SOC)
+            self._data[CONF_BATTERY_CAPACITY] = user_input.get(CONF_BATTERY_CAPACITY)
+            self._data[CONF_SOLAR_FORECAST_REMAINING] = user_input.get(
+                CONF_SOLAR_FORECAST_REMAINING
+            )
+            self._data[CONF_HOUSE_LOAD_FORECAST_REMAINING] = user_input.get(
+                CONF_HOUSE_LOAD_FORECAST_REMAINING
+            )
+            self._data[CONF_PRICES_JSON_ENTITY] = user_input.get(CONF_PRICES_JSON_ENTITY)
+            return await self.async_step_grid()
+
+        schema = vol.Schema({
+            vol.Optional(
+                CONF_BATTERY_SOC,
+                default=self._data.get(CONF_BATTERY_SOC),
+            ): EntitySelector(_SOC_SENSOR),
+            vol.Optional(
+                CONF_BATTERY_CAPACITY,
+                default=self._data.get(CONF_BATTERY_CAPACITY),
+            ): EntitySelector(_NUMBER_OR_SENSOR),
+            vol.Optional(
+                CONF_SOLAR_FORECAST_REMAINING,
+                default=self._data.get(CONF_SOLAR_FORECAST_REMAINING),
+            ): EntitySelector(_NUMBER_OR_SENSOR),
+            vol.Optional(
+                CONF_HOUSE_LOAD_FORECAST_REMAINING,
+                default=self._data.get(CONF_HOUSE_LOAD_FORECAST_REMAINING),
+            ): EntitySelector(_NUMBER_OR_SENSOR),
+            vol.Optional(
+                CONF_PRICES_JSON_ENTITY,
+                default=self._data.get(CONF_PRICES_JSON_ENTITY),
+            ): EntitySelector(_JSON_SENSOR),
+        })
+        return self.async_show_form(step_id="battery", data_schema=schema)
 
     async def async_step_grid(self, user_input=None):
         if user_input is not None:
