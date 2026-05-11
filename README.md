@@ -6,6 +6,35 @@ Works with any inverter that exposes a `select` entity for operating modes and a
 
 ---
 
+## Table of Contents
+
+- [How it works](#how-it-works)
+  - [10-second strategy loop](#10-second-strategy-loop-emsstrategycoordinator)
+  - [1-second fast loop](#1-second-fast-loop-emsfastloopcoordinator)
+  - [EV algorithm — power balance](#ev-algorithm--power-balance)
+  - [Inverter control algorithm — priority ladder](#inverter-control-algorithm--priority-ladder)
+  - [EOD battery fullness decision](#eod-battery-fullness-decision)
+- [Installation](#installation)
+- [Configuration](#configuration-config-flow)
+  - [Step 1 — Inverter](#step-1--inverter)
+  - [Step 2 — EV Charger](#step-2--ev-charger)
+  - [Step 3 — Battery Management](#step-3--battery-management)
+  - [Step 4 — Grid](#step-4--grid)
+- [Runtime inputs](#runtime-inputs)
+- [Tunable thresholds](#tunable-thresholds)
+- [EV charging mode](#ev-charging-mode)
+- [Inverter control mode](#inverter-control-mode)
+- [Outputs](#outputs-writes-to-your-hardware)
+  - [Slow loop (10 s)](#slow-loop-10-s--controllerwrite_slow)
+  - [Fast loop (1 s)](#fast-loop-1-s--controllerwrite_fast)
+- [Exposed entities](#exposed-entities)
+  - [Select entities](#select-entities)
+  - [Number entities](#number-entities-numberems_)
+  - [Sensor entities](#sensor-entities-sensorems_)
+- [Development](#development)
+
+---
+
 ## How it works
 
 Two execution loops share a single `EmsState` object. Each loop runs two independent algorithms:
