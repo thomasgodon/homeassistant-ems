@@ -130,7 +130,7 @@ All fields optional. When not configured the corresponding battery features are 
 | `battery_capacity` | `sensor` / `number` / `input_number` | Total usable battery capacity (kWh) |
 | `solar_forecast_remaining` | `sensor` / `number` / `input_number` | Expected remaining solar generation today (kWh) — Solcast-style entity |
 | `house_load_forecast_remaining` | `sensor` / `number` / `input_number` | Expected remaining house load today (kWh); when absent house load is ignored in the forecast comparison |
-| `prices_json_entity` | `sensor` | Sensor whose **state** is a JSON list of 24 floats (€/kWh) indexed by hour 0..23 |
+| `prices_json_entity` | `sensor` | Sensor whose **state** is a JSON list of 24 floats (€/kWh or €ct/kWh) indexed by hour 0..23. Must be exactly 24 elements. Example: `[0.08, 0.07, 0.07, 0.08, 0.10, 0.14, 0.18, 0.21, 0.20, 0.17, 0.15, 0.14, 0.13, 0.14, 0.15, 0.17, 0.21, 0.25, 0.24, 0.22, 0.19, 0.16, 0.13, 0.10]` (hour 0 = midnight, hour 23 = 23:00). Only relative ordering matters so any consistent unit works. |
 
 ### Step 4 — Grid
 
