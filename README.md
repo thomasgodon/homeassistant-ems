@@ -80,22 +80,24 @@ Integrating closed-loop: using the last commanded target (`last_ev_target_w`) as
 
 ### Inverter control algorithm — priority ladder
 
-Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS never touches the inverter. When set to **`Control Inverter`**, the following four cases are evaluated in strict priority order each second:
+Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS never touches the inverter. When set to **`Control Inverter`**, the following cases are evaluated in strict priority order each second. **EV charging mode has no effect on this ladder** — the battery step runs purely on measured power values and the inverter strategy setting.
 
 | Priority | Condition | `active_power_w` | Status |
 |---|---|---|---|
-| 1 | `grid_import_w > max_grid_import_w` AND EV idle | `-(pv_w + (grid_import_w − max_grid_import_w))` | `peak_shaving` |
-| 2 | EV charging commanded | `-min(pv_w, house_load_w)` | `controlling` |
-| 3 | EOD suppress active AND `pv_w > 0` AND EV idle | `0` | `holding_battery` |
-| 4 | otherwise | not written | `idle` |
+| 1 | `grid_import_w > max_grid_import_w` | `-(pv_w + (grid_import_w − max_grid_import_w))` | `peak_shaving` |
+| 2 | EOD suppress active AND `pv_w > 0` | `0` | `holding_battery` |
+| 3 | `ev_power_w == 0` AND `pv_w == 0` | not written | `idle` |
+| 4 | otherwise (`pv_w > 0` OR `ev_power_w > 0`) | `-min(pv_w, house_load_w)` | `controlling` |
 
-**Peak shaving (priority 1):** when grid import spikes above the cap and the EV is not charging, the battery discharges to cover the excess. The EV must be idle to satisfy the no-battery-to-EV constraint. Responds within 1 second via the fast loop.
+**Peak shaving (priority 1):** when grid import spikes above the cap, the battery discharges to cover the excess. Fires regardless of EV state — the EV strategy throttles EV draw to stay below the cap, so peak shaving is a safety net. Responds within 1 second via the fast loop.
 
-**EV charging (priority 2):** directs all available PV to AC (`-min(pv_w, house_load_w)`). Battery is neither charged from AC (sign always ≤ 0) nor drained for the EV (magnitude capped by `pv_w`).
+**EOD suppress (priority 2):** during cheap hours (identified from the hourly prices JSON) when solar forecast alone won't fill the battery to the target SoC, EMS sets `active_power_w = 0` so PV charges the battery instead of the battery discharging to cover house load. Only active during PV production. Peak shaving overrides it if a grid spike occurs.
 
-**EOD suppress (priority 3):** during cheap hours (identified from the hourly prices JSON) when solar forecast alone won't fill the battery to the target SoC, EMS sets `active_power_w = 0` so PV charges the battery instead of the battery discharging to cover house load. Only active during PV production. Peak shaving overrides it if a grid spike occurs.
+**Idle (priority 3):** when there is no PV and no EV draw, EMS hands the inverter back to its native mode. Safe because there is no energy to route and no battery-to-EV risk.
 
-**Battery protection:** `active_power_w` is always ≤ 0 — battery is never commanded to charge from AC. The gate is the **commanded** EV state, not the measured `ev_power_w`, preventing start-of-session deadlock.
+**Controlling (default):** whenever PV is producing or the EV is drawing, EMS asserts `power_control` with `active_power_w = -min(pv_w, house_load_w)`. This directs all available PV to AC consumption; battery is never drained for the EV (magnitude capped by `pv_w`) and never charged from AC (sign always ≤ 0).
+
+**Battery protection:** `active_power_w` is always ≤ 0 — battery is never commanded to charge from AC. The inverter is held in `power_control` whenever `pv_w > 0` or `ev_power_w > 0`, preventing the native self-use mode from routing battery power to the EV through AC.
 
 ### EOD battery fullness decision
 

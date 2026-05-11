@@ -105,7 +105,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             raise UpdateFailed(f"EMS input build failed: {exc}") from exc
 
         ev_decision = strategy_module.decide(inputs)
-        inverter_decision = inverter_control_module.decide(inputs, ev_decision)
+        inverter_decision = inverter_control_module.decide(inputs)
 
         in_grace = (
             self._state.startup_grace_until is not None
@@ -286,7 +286,6 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             grid_import_w=grid_import_w,
             inverter_strategy=inverter_strategy,
             mapping=prior_inputs.mapping,
-            ev_charging_commanded=ev_fast.strategy == "ev_charging",
             eod_suppress=eod_suppress,
             max_grid_import_w=prior_inputs.thresholds.max_grid_import_w,
         )
