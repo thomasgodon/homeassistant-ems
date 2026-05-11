@@ -7,6 +7,7 @@ import pytest
 
 from custom_components.ems.models import EvDecision, InverterDecision, LadderResult
 from custom_components.ems.sensor import (
+    EmsBatteryActionSensor,
     EmsEvChargingStateSensor,
     EmsEvCurrentSensor,
     EmsInverterActivePowerSensor,
@@ -23,6 +24,7 @@ def _make_coordinator(
     inverter_status: str | None = None,
     pv_w: float = 6000.0,
     house_load_w: float = 2000.0,
+    grid_import_w: float = 0.0,
 ) -> MagicMock:
     coordinator = MagicMock()
     if ev_charge_power_w is None:
@@ -42,7 +44,12 @@ def _make_coordinator(
         coordinator.data = LadderResult(
             ev_decision=ev_decision,
             inverter_decision=inverter_decision,
-            inputs=MagicMock(ev_power_w=ev_power_w, pv_w=pv_w, house_load_w=house_load_w),
+            inputs=MagicMock(
+                ev_power_w=ev_power_w,
+                pv_w=pv_w,
+                house_load_w=house_load_w,
+                grid_import_w=grid_import_w,
+            ),
             computed_at=datetime.datetime(2026, 5, 4, 12, 0, 0, tzinfo=datetime.UTC),
         )
     return coordinator
@@ -295,3 +302,93 @@ def test_inverter_status_attributes_starting_up():
     assert "startup" in attrs["formula"].lower() or "suppressed" in attrs["formula"]
     assert "Startup grace" in attrs["reason"]
     assert attrs["active_power_w"] == pytest.approx(-min(5000.0, 1000.0))
+
+
+# ── EmsBatteryActionSensor ────────────────────────────────────────────────────
+
+def test_battery_action_charging_from_solar():
+    # pv=5000, grid=-1000 (exporting), house=1000 → balance=3000 → charging
+    sensor = EmsBatteryActionSensor(
+        _make_coordinator(0.0, pv_w=5000.0, grid_import_w=-1000.0, house_load_w=1000.0)
+    )
+    assert sensor.native_value == "Charging from solar"
+
+
+def test_battery_action_idle_balanced():
+    # pv=0, grid=2000, house=2000 → balance=0 → idle
+    sensor = EmsBatteryActionSensor(
+        _make_coordinator(0.0, pv_w=0.0, grid_import_w=2000.0, house_load_w=2000.0)
+    )
+    assert sensor.native_value == "Idle"
+
+
+def test_battery_action_discharging():
+    # pv=500, grid=500, house=2000 → balance=-1000 → discharging
+    sensor = EmsBatteryActionSensor(
+        _make_coordinator(0.0, pv_w=500.0, grid_import_w=500.0, house_load_w=2000.0)
+    )
+    assert sensor.native_value == "Discharging"
+
+
+def test_battery_action_idle_within_positive_deadband():
+    # pv=1000, grid=0, house=900 → balance=+100 < 200 → idle
+    sensor = EmsBatteryActionSensor(
+        _make_coordinator(0.0, pv_w=1000.0, grid_import_w=0.0, house_load_w=900.0)
+    )
+    assert sensor.native_value == "Idle"
+
+
+def test_battery_action_idle_within_negative_deadband():
+    # pv=1000, grid=0, house=1100 → balance=-100 > -200 → idle
+    sensor = EmsBatteryActionSensor(
+        _make_coordinator(0.0, pv_w=1000.0, grid_import_w=0.0, house_load_w=1100.0)
+    )
+    assert sensor.native_value == "Idle"
+
+
+def test_battery_action_charging_just_over_deadband():
+    # pv=1000, grid=0, house=750 → balance=+250 > 200 → charging
+    sensor = EmsBatteryActionSensor(
+        _make_coordinator(0.0, pv_w=1000.0, grid_import_w=0.0, house_load_w=750.0)
+    )
+    assert sensor.native_value == "Charging from solar"
+
+
+def test_battery_action_none_when_no_data():
+    sensor = EmsBatteryActionSensor(_make_coordinator(None))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_battery_action_available_when_data_present():
+    sensor = EmsBatteryActionSensor(_make_coordinator(0.0))
+    assert sensor.available is True
+
+
+def test_battery_action_unique_id():
+    sensor = EmsBatteryActionSensor(_make_coordinator(0.0))
+    assert sensor.unique_id == "ems_battery_action"
+
+
+def test_battery_action_options_cover_all_states():
+    sensor = EmsBatteryActionSensor(_make_coordinator(0.0))
+    assert set(sensor.options) == {"Charging from solar", "Discharging", "Idle"}
+
+
+def test_battery_action_attributes_contain_signed_value():
+    # pv=5000, grid=-1000, house=1000 → balance=3000
+    sensor = EmsBatteryActionSensor(
+        _make_coordinator(0.0, pv_w=5000.0, grid_import_w=-1000.0, house_load_w=1000.0)
+    )
+    attrs = sensor.extra_state_attributes
+    assert attrs["battery_action_w"] == pytest.approx(3000.0)
+    assert attrs["pv_w"] == 5000.0
+    assert attrs["grid_import_w"] == -1000.0
+    assert attrs["house_load_w"] == 1000.0
+    assert attrs["deadband_w"] == 200.0
+    assert "formula" in attrs
+
+
+def test_battery_action_attributes_none_when_no_data():
+    sensor = EmsBatteryActionSensor(_make_coordinator(None))
+    assert sensor.extra_state_attributes is None

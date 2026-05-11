@@ -99,6 +99,8 @@ Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS nev
 
 **Battery protection:** `active_power_w` is always ≤ 0 — battery is never commanded to charge from AC. The inverter is held in `power_control` whenever `pv_w > 0` or `ev_power_w > 0`, preventing the native self-use mode from routing battery power to the EV through AC.
 
+**Observing physical battery flow:** the inverter status describes the EMS *control mode*, not the instantaneous battery direction. The separate `sensor.ems_battery_action` sensor derives that from energy balance (`pv_w + grid_import_w − house_load_w`) and reports `Charging from solar`, `Discharging`, or `Idle` independently of which inverter-control branch is active.
+
 ### EOD battery fullness decision
 
 Each 10-second cycle, `strategy.is_eod_suppress_hour(inputs)` determines whether the current hour should suppress battery discharge:
@@ -291,6 +293,7 @@ Active power and EV target are cached — a service call is skipped if the value
 | `sensor.ems_ev_current_w` | float (W) | Computed EV charge target EMS is writing to `ev_charge_target_entity`. `0` when idle. |
 | `sensor.ems_inverter_active_power` | float (W) | Active power EMS is writing to `active_power_entity`. |
 | `sensor.ems_inverter_status` | see below | Explains why and how EMS is (or isn't) controlling the inverter. Attributes include `reason`, `formula`, `pv_w`, `house_load_w`, `ev_power_w`, `house_non_ev_w`, `active_power_w`. |
+| `sensor.ems_battery_action` | see below | Physical battery flow derived from energy balance. Independent of the inverter-control branch. Attributes include `battery_action_w` (signed W), `pv_w`, `grid_import_w`, `house_load_w`, `deadband_w`, `formula`. |
 
 #### `sensor.ems_ev_charging_state` values
 
@@ -315,6 +318,16 @@ Active power and EV target are cached — a service call is skipped if the value
 | `Idle` | No active condition; inverter set to its `disabled_option` |
 | `Disabled` | Inverter Control Mode is `Off`; EMS does not write to the inverter |
 | `Starting up` | Startup grace period; strategy computes but writes are suppressed |
+
+#### `sensor.ems_battery_action` values
+
+Derived from `battery_action_w = pv_w + grid_import_w − house_load_w` with a 200 W deadband.
+
+| Value | Condition | Meaning |
+|-------|-----------|---------|
+| `Charging from solar` | `battery_action_w > +200` | PV surplus is flowing into the battery |
+| `Discharging` | `battery_action_w < −200` | Battery is covering load not met by PV + grid |
+| `Idle` | within ±200 W | Battery is neither meaningfully charging nor discharging |
 
 ---
 

@@ -29,6 +29,14 @@ _INVERTER_STATUS_LABELS: dict[str, str] = {
     "holding_battery": "Holding battery",
 }
 
+_BATTERY_ACTION_DEADBAND_W = 200.0
+
+_BATTERY_ACTION_LABELS: dict[str, str] = {
+    "charging_from_solar": "Charging from solar",
+    "discharging": "Discharging",
+    "idle": "Idle",
+}
+
 _INVERTER_STATUS_REASONS: dict[str, str] = {
     "idle": (
         "No EV draw. Inverter set to its disabled option;"
@@ -60,6 +68,7 @@ async def async_setup_entry(
         EmsEvChargingStateSensor(coordinator),
         EmsInverterActivePowerSensor(coordinator),
         EmsInverterStatusSensor(coordinator),
+        EmsBatteryActionSensor(coordinator),
     ])
 
 
@@ -233,6 +242,53 @@ class EmsInverterStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorE
             "ev_power_w": ev,
             "house_non_ev_w": house_non_ev,
             "active_power_w": ap,
+        }
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None
+
+
+class EmsBatteryActionSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    _attr_unique_id = "ems_battery_action"
+    _attr_name = "EMS Battery Action"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(_BATTERY_ACTION_LABELS.values())
+
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data is None:
+            return None
+        inp = self.coordinator.data.inputs
+        action_w = inp.pv_w + inp.grid_import_w - inp.house_load_w
+        if action_w > _BATTERY_ACTION_DEADBAND_W:
+            key = "charging_from_solar"
+        elif action_w < -_BATTERY_ACTION_DEADBAND_W:
+            key = "discharging"
+        else:
+            key = "idle"
+        return _BATTERY_ACTION_LABELS[key]
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        if self.coordinator.data is None:
+            return None
+        inp = self.coordinator.data.inputs
+        action_w = inp.pv_w + inp.grid_import_w - inp.house_load_w
+        return {
+            "battery_action_w": round(action_w, 1),
+            "pv_w": inp.pv_w,
+            "grid_import_w": inp.grid_import_w,
+            "house_load_w": inp.house_load_w,
+            "deadband_w": _BATTERY_ACTION_DEADBAND_W,
+            "formula": "pv_w + grid_import_w - house_load_w",
         }
 
     @property
