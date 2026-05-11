@@ -1,3 +1,5 @@
+<p align="center"><img src="brand/logo.png" alt="EMS" height="96"></p>
+
 # EMS — Energy Management System
 
 A brand-agnostic Home Assistant custom integration for **EV charging and battery management**. It decides how many watts your EV should charge at every second using solar surplus and available grid headroom, enforces a maximum grid import cap, prevents battery power from flowing to the EV, shaves grid import peaks with battery discharge, and steers the home battery toward a target SoC by end of day.
