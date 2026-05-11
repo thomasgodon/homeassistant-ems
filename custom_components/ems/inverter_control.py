@@ -4,7 +4,7 @@ from . import strategy as strategy_module
 from .models import Inputs, InverterDecision, VerbMapping
 
 
-def decide(inputs: Inputs) -> InverterDecision:
+def decide(inputs: Inputs, *, commanded_ev_charge_w: float) -> InverterDecision:
     """Compute inverter verb and active power target. Never raises."""
     return _compute(
         pv_w=inputs.pv_w,
@@ -15,6 +15,7 @@ def decide(inputs: Inputs) -> InverterDecision:
         mapping=inputs.mapping,
         eod_suppress=strategy_module.is_eod_suppress_hour(inputs),
         max_grid_import_w=inputs.thresholds.max_grid_import_w,
+        commanded_ev_charge_w=commanded_ev_charge_w,
     )
 
 
@@ -28,6 +29,7 @@ def recompute(
     mapping: VerbMapping,
     eod_suppress: bool = False,
     max_grid_import_w: float = 0.0,
+    commanded_ev_charge_w: float = 0.0,
 ) -> InverterDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
     return _compute(
@@ -39,6 +41,7 @@ def recompute(
         mapping=mapping,
         eod_suppress=eod_suppress,
         max_grid_import_w=max_grid_import_w,
+        commanded_ev_charge_w=commanded_ev_charge_w,
     )
 
 
@@ -54,6 +57,7 @@ def _compute(
     mapping: VerbMapping,
     eod_suppress: bool,
     max_grid_import_w: float,
+    commanded_ev_charge_w: float,
 ) -> InverterDecision:
     if inverter_strategy == "Off":
         return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
@@ -77,17 +81,19 @@ def _compute(
             status="holding_battery",
         )
 
-    # Priority 3 — idle: no EV draw and no PV production, safe to hand the
-    # inverter back to its native mode (e.g. at night with no charging session).
-    if ev_power_w == 0.0 and pv_w == 0.0:
+    # Priority 3 — idle: EMS is not commanding any charge and the EV is not
+    # drawing. Release inverter to its native Self-Use Mode; PV routing and
+    # battery management happen autonomously without EMS involvement.
+    if commanded_ev_charge_w == 0.0 and ev_power_w == 0.0:
         return InverterDecision(
             inverter_verb=mapping.disabled_option,
             active_power_w=None,
             status="idle",
         )
 
-    # Default — direct available PV to AC; battery never drained for EV
-    # (magnitude capped by pv_w), never charged from AC (sign always ≤ 0).
+    # Default — EMS is actively charging the EV (or EV is winding down).
+    # Direct available PV to AC; battery never drained for EV (magnitude
+    # capped by pv_w), never charged from AC (sign always ≤ 0).
     return InverterDecision(
         inverter_verb=mapping.power_control_option,
         active_power_w=-min(pv_w, house_load_w),

@@ -5,12 +5,12 @@ Priority ladder (inverter_strategy == "Control Inverter"):
                      → verb=power_control, active_power=-(pv + excess), status=peak_shaving
   2. EOD suppress  — eod_suppress=True AND pv>0
                      → verb=power_control, active_power=0, status=holding_battery
-  3. Idle          — ev_power_w == 0 AND pv_w == 0
+  3. Idle          — commanded_ev_charge_w == 0 AND ev_power_w == 0
                      → verb=disabled_option, active_power=None, status=idle
-  4. Default       — ev_power_w > 0 OR pv_w > 0
+  4. Default       — commanded_ev_charge_w > 0 OR ev_power_w > 0
                      → verb=power_control, active_power=-min(pv,house), status=controlling
 
-EV charging mode does not affect the battery/inverter step.
+commanded_ev_charge_w is the smoothed EV target EMS will write this cycle.
 Off mode: never write anything (disabled status, all None).
 """
 from __future__ import annotations
@@ -47,6 +47,7 @@ def _decide(
     mapping: VerbMapping = _MAPPING,
     eod_suppress: bool = False,
     max_grid_import_w: float = 4500.0,
+    commanded_ev_charge_w: float = 0.0,
 ) -> InverterDecision:
     return inverter_control_module.recompute(
         pv_w=pv_w,
@@ -57,6 +58,7 @@ def _decide(
         mapping=mapping,
         eod_suppress=eod_suppress,
         max_grid_import_w=max_grid_import_w,
+        commanded_ev_charge_w=commanded_ev_charge_w,
     )
 
 
@@ -119,12 +121,12 @@ def test_idle_status() -> None:
 
 # ── Controlling: power_control + clamped active_power ─────────────────────────
 
-def test_controlling_when_pv_only() -> None:
-    """pv>0, no EV draw → inverter directs PV to AC."""
-    d = _decide(pv_w=3000.0, house_load_w=1500.0, ev_power_w=0.0)
-    assert d.status == "controlling"
-    assert d.inverter_verb == "power_control"
-    assert d.active_power_w == pytest.approx(-1500.0)
+def test_idle_when_pv_only_and_no_ev_charging() -> None:
+    """pv>0 but EMS not charging EV → release inverter to Self-Use, no active_power write."""
+    d = _decide(pv_w=3000.0, house_load_w=1500.0, ev_power_w=0.0, commanded_ev_charge_w=0.0)
+    assert d.status == "idle"
+    assert d.inverter_verb == "disabled"
+    assert d.active_power_w is None
 
 
 def test_controlling_when_ev_only() -> None:
@@ -149,31 +151,31 @@ def test_controlling_verb_from_mapping() -> None:
         active_power_entity=None,
         ev_charge_target_entity=None,
     )
-    d = _decide(pv_w=2000.0, mapping=mapping)
+    d = _decide(pv_w=2000.0, mapping=mapping, commanded_ev_charge_w=2000.0)
     assert d.inverter_verb == "Power Control"
 
 
 def test_none_power_control_option_passed_as_verb() -> None:
     """When mapping.power_control_option is None, verb is None."""
-    d = _decide(pv_w=2000.0, mapping=_MAPPING_NO_OPTIONS)
+    d = _decide(pv_w=2000.0, mapping=_MAPPING_NO_OPTIONS, commanded_ev_charge_w=2000.0)
     assert d.inverter_verb is None
 
 
 def test_pv_below_house_load_drains_full_pv() -> None:
     """pv=500, house=4000 → active_power=-min(500,4000)=-500: all PV to AC, battery untouched."""
-    d = _decide(pv_w=500.0, house_load_w=4000.0)
+    d = _decide(pv_w=500.0, house_load_w=4000.0, commanded_ev_charge_w=500.0)
     assert d.active_power_w == pytest.approx(-500.0)
 
 
 def test_pv_above_house_load_capped_by_demand() -> None:
     """pv=6000, house=1000 → active_power=-1000: cap at AC demand, surplus goes to battery."""
-    d = _decide(pv_w=6000.0, house_load_w=1000.0)
+    d = _decide(pv_w=6000.0, house_load_w=1000.0, commanded_ev_charge_w=1000.0)
     assert d.active_power_w == pytest.approx(-1000.0)
 
 
 def test_pv_equals_house_load() -> None:
     """pv=3000, house=3000 → active_power=-3000: balanced, battery untouched."""
-    d = _decide(pv_w=3000.0, house_load_w=3000.0)
+    d = _decide(pv_w=3000.0, house_load_w=3000.0, commanded_ev_charge_w=3000.0)
     assert d.active_power_w == pytest.approx(-3000.0)
 
 
@@ -193,19 +195,34 @@ def test_battery_never_charged_from_ac() -> None:
 
 def test_active_power_formula_uses_house_load_not_ev_power() -> None:
     """Formula uses house_load_w (full AC demand); ev_power_w doesn't change active_power."""
-    d1 = _decide(pv_w=1000.0, house_load_w=4000.0, ev_power_w=0.0)
-    d2 = _decide(pv_w=1000.0, house_load_w=4000.0, ev_power_w=3500.0)
+    d1 = _decide(pv_w=1000.0, house_load_w=4000.0, ev_power_w=0.0, commanded_ev_charge_w=1000.0)
+    d2 = _decide(pv_w=1000.0, house_load_w=4000.0, ev_power_w=3500.0, commanded_ev_charge_w=1000.0)
     assert d1.active_power_w == d2.active_power_w == pytest.approx(-1000.0)
 
 
-def test_controlling_status_with_pv() -> None:
-    d = _decide(pv_w=1000.0, ev_power_w=0.0)
-    assert d.status == "controlling"
+def test_idle_when_pv_but_no_commanded_charge() -> None:
+    """pv>0 but EMS not charging → idle, Self-Use takes over."""
+    d = _decide(pv_w=1000.0, ev_power_w=0.0, commanded_ev_charge_w=0.0)
+    assert d.status == "idle"
 
 
 def test_controlling_status_with_ev() -> None:
     d = _decide(pv_w=0.0, ev_power_w=500.0)
     assert d.status == "controlling"
+
+
+def test_controlling_when_commanded_but_ev_not_yet_drawing() -> None:
+    """EMS commands a charge target but EV hasn't started drawing (first cycle of session)."""
+    d = _decide(pv_w=3000.0, ev_power_w=0.0, commanded_ev_charge_w=2000.0)
+    assert d.status == "controlling"
+    assert d.inverter_verb == "power_control"
+
+
+def test_controlling_during_ev_wind_down() -> None:
+    """EMS commanded 0 but EV is still drawing from AC (winding down after session)."""
+    d = _decide(pv_w=3000.0, house_load_w=1500.0, ev_power_w=1200.0, commanded_ev_charge_w=0.0)
+    assert d.status == "controlling"
+    assert d.inverter_verb == "power_control"
 
 
 # ── recompute matches decide ──────────────────────────────────────────────────
@@ -218,7 +235,8 @@ def test_recompute_matches_decide(builder) -> None:
         grid_import_w=500.0,
         inverter_strategy="Control Inverter",
     )
-    d1 = inverter_control_module.decide(inp)
+    commanded = 2000.0
+    d1 = inverter_control_module.decide(inp, commanded_ev_charge_w=commanded)
     d2 = inverter_control_module.recompute(
         pv_w=inp.pv_w,
         house_load_w=inp.house_load_w,
@@ -227,6 +245,7 @@ def test_recompute_matches_decide(builder) -> None:
         inverter_strategy=inp.inverter_strategy,
         mapping=inp.mapping,
         max_grid_import_w=inp.thresholds.max_grid_import_w,
+        commanded_ev_charge_w=commanded,
     )
     assert d1 == d2
 

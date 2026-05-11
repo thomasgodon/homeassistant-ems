@@ -80,24 +80,26 @@ Integrating closed-loop: using the last commanded target (`last_ev_target_w`) as
 
 ### Inverter control algorithm — priority ladder
 
-Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS never touches the inverter. When set to **`Control Inverter`**, the following cases are evaluated in strict priority order each second. **EV charging mode has no effect on this ladder** — the battery step runs purely on measured power values and the inverter strategy setting.
+Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS never touches the inverter. When set to **`Control Inverter`**, the following cases are evaluated in strict priority order each second.
 
 | Priority | Condition | `active_power_w` | Status |
 |---|---|---|---|
 | 1 | `grid_import_w > max_grid_import_w` | `-(pv_w + (grid_import_w − max_grid_import_w))` | `peak_shaving` |
 | 2 | EOD suppress active AND `pv_w > 0` | `0` | `holding_battery` |
-| 3 | `ev_power_w == 0` AND `pv_w == 0` | not written | `idle` |
-| 4 | otherwise (`pv_w > 0` OR `ev_power_w > 0`) | `-min(pv_w, house_load_w)` | `controlling` |
+| 3 | `commanded_ev_charge_w == 0` AND `ev_power_w == 0` | not written | `idle` |
+| 4 | otherwise (`commanded_ev_charge_w > 0` OR `ev_power_w > 0`) | `-min(pv_w, house_load_w)` | `controlling` |
+
+`commanded_ev_charge_w` is the smoothed EV charge target EMS will write to the wallbox this cycle.
 
 **Peak shaving (priority 1):** when grid import spikes above the cap, the battery discharges to cover the excess. Fires regardless of EV state — the EV strategy throttles EV draw to stay below the cap, so peak shaving is a safety net. Responds within 1 second via the fast loop.
 
 **EOD suppress (priority 2):** during cheap hours (identified from the hourly prices JSON) when solar forecast alone won't fill the battery to the target SoC, EMS sets `active_power_w = 0` so PV charges the battery instead of the battery discharging to cover house load. Only active during PV production. Peak shaving overrides it if a grid spike occurs.
 
-**Idle (priority 3):** when there is no PV and no EV draw, EMS hands the inverter back to its native mode. Safe because there is no energy to route and no battery-to-EV risk.
+**Idle (priority 3):** when EMS is not commanding an EV charge target and the EV is not drawing, EMS releases the inverter to its native Self-Use Mode. Peak shaving and EOD suppress still take priority and force Power Control when active. This means an EV idle mid-day with PV producing correctly hands control back to the inverter — Self-Use routes PV to house load and surplus to battery autonomously, without EMS involvement.
 
-**Controlling (default):** whenever PV is producing or the EV is drawing, EMS asserts `power_control` with `active_power_w = -min(pv_w, house_load_w)`. This directs all available PV to AC consumption; battery is never drained for the EV (magnitude capped by `pv_w`) and never charged from AC (sign always ≤ 0).
+**Controlling (default):** whenever EMS is commanding a charge target or the EV is still drawing (wind-down), EMS asserts `power_control` with `active_power_w = -min(pv_w, house_load_w)`. Power Control is asserted on cycle 1 of a session, before the first target is written. Battery is never drained for the EV (magnitude capped by `pv_w`) and never charged from AC (sign always ≤ 0).
 
-**Battery protection:** `active_power_w` is always ≤ 0 — battery is never commanded to charge from AC. The inverter is held in `power_control` whenever `pv_w > 0` or `ev_power_w > 0`, preventing the native self-use mode from routing battery power to the EV through AC.
+**Battery protection:** `active_power_w` is always ≤ 0. The inverter is held in `power_control` for the duration of a charging session; outside sessions, Self-Use Mode handles battery routing autonomously.
 
 **Observing physical battery flow:** the inverter status describes the EMS *control mode*, not the instantaneous battery direction. The separate `sensor.ems_battery_action` sensor derives that from energy balance (`pv_w + grid_import_w − house_load_w`) and reports `Charging from solar`, `Discharging`, or `Idle` independently of which inverter-control branch is active.
 

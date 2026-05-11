@@ -105,7 +105,9 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             raise UpdateFailed(f"EMS input build failed: {exc}") from exc
 
         ev_decision = strategy_module.decide(inputs)
-        inverter_decision = inverter_control_module.decide(inputs)
+        inverter_decision = inverter_control_module.decide(
+            inputs, commanded_ev_charge_w=ev_decision.ev_charge_power_w
+        )
 
         in_grace = (
             self._state.startup_grace_until is not None
@@ -279,20 +281,12 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             last_ev_target_w=self._ema_ev_w,
             energy_optimised_allowed=energy_optimised_allowed,
         )
-        inverter_fast = inverter_control_module.recompute(
-            pv_w=pv_w,
-            house_load_w=house_load_w,
-            ev_power_w=ev_power_w,
-            grid_import_w=grid_import_w,
-            inverter_strategy=inverter_strategy,
-            mapping=prior_inputs.mapping,
-            eod_suppress=eod_suppress,
-            max_grid_import_w=prior_inputs.thresholds.max_grid_import_w,
-        )
 
         session_start = self._prev_ev_power_w == 0.0 and ev_power_w > 0.0
         self._prev_ev_power_w = ev_power_w
 
+        # Apply EV-target EMA before the inverter decision so commanded_ev_charge_w
+        # reflects the smoothed value that will actually be written to the wallbox.
         if ev_strategy == "Off":
             self._ema_ev_w = None
             self._ema_active_w = None
@@ -300,9 +294,6 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             ev_alpha = _EV_SMOOTHING_ALPHA.get(
                 _read_select_state(self.hass, "select.ems_ev_smoothing", "Fast"), 0.3
             )
-
-            if inverter_fast.active_power_w is None:
-                self._ema_active_w = None
 
             if session_start or self._ema_ev_w is None:
                 self._ema_ev_w = ev_fast.ev_charge_power_w
@@ -314,7 +305,22 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
 
             ev_fast = replace(ev_fast, ev_charge_power_w=self._ema_ev_w)
 
-            if inverter_fast.active_power_w is not None:
+        inverter_fast = inverter_control_module.recompute(
+            pv_w=pv_w,
+            house_load_w=house_load_w,
+            ev_power_w=ev_power_w,
+            grid_import_w=grid_import_w,
+            inverter_strategy=inverter_strategy,
+            mapping=prior_inputs.mapping,
+            eod_suppress=eod_suppress,
+            max_grid_import_w=prior_inputs.thresholds.max_grid_import_w,
+            commanded_ev_charge_w=ev_fast.ev_charge_power_w,
+        )
+
+        if ev_strategy != "Off":
+            if inverter_fast.active_power_w is None:
+                self._ema_active_w = None
+            elif inverter_fast.active_power_w is not None:
                 if session_start or self._ema_active_w is None:
                     self._ema_active_w = inverter_fast.active_power_w
                 else:
