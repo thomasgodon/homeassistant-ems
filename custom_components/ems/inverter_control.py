@@ -16,6 +16,7 @@ def decide(inputs: Inputs, *, commanded_ev_charge_w: float) -> InverterDecision:
         eod_suppress=strategy_module.is_eod_suppress_hour(inputs),
         max_grid_import_w=inputs.thresholds.max_grid_import_w,
         commanded_ev_charge_w=commanded_ev_charge_w,
+        cheap_for_inverter=_is_cheap_hour_for_inverter(inputs.prices_today, inputs.now.hour),
     )
 
 
@@ -30,6 +31,7 @@ def recompute(
     eod_suppress: bool = False,
     max_grid_import_w: float = 0.0,
     commanded_ev_charge_w: float = 0.0,
+    cheap_for_inverter: bool = False,
 ) -> InverterDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
     return _compute(
@@ -42,10 +44,18 @@ def recompute(
         eod_suppress=eod_suppress,
         max_grid_import_w=max_grid_import_w,
         commanded_ev_charge_w=commanded_ev_charge_w,
+        cheap_for_inverter=cheap_for_inverter,
     )
 
 
 # ── core logic ────────────────────────────────────────────────────────────────
+
+def _is_cheap_hour_for_inverter(prices_today: tuple[float, ...] | None, current_hour: int) -> bool:
+    if prices_today is None or len(prices_today) < 24:
+        return False
+    threshold = (min(prices_today) + max(prices_today)) / 2
+    return prices_today[current_hour] <= threshold
+
 
 def _compute(
     *,
@@ -58,6 +68,7 @@ def _compute(
     eod_suppress: bool,
     max_grid_import_w: float,
     commanded_ev_charge_w: float,
+    cheap_for_inverter: bool = False,
 ) -> InverterDecision:
     if inverter_strategy == "Off":
         return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
@@ -81,7 +92,16 @@ def _compute(
             status="holding_battery",
         )
 
-    # Priority 3 — idle: EMS is not commanding any charge and the EV is not
+    # Priority 3 — cheap-hour hold: no EV activity and current hour is cheap.
+    # Force active_power_w=0 so battery is not drained; grid covers house load.
+    if commanded_ev_charge_w == 0.0 and ev_power_w == 0.0 and cheap_for_inverter:
+        return InverterDecision(
+            inverter_verb=mapping.power_control_option,
+            active_power_w=0.0,
+            status="holding_battery_cheap",
+        )
+
+    # Priority 4 — idle: EMS is not commanding any charge and the EV is not
     # drawing. Release inverter to its native Self-Use Mode; PV routing and
     # battery management happen autonomously without EMS involvement.
     if commanded_ev_charge_w == 0.0 and ev_power_w == 0.0:

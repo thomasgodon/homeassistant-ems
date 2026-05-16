@@ -90,8 +90,9 @@ Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS nev
 |---|---|---|---|
 | 1 | `grid_import_w > max_grid_import_w` | `-(pv_w + (grid_import_w − max_grid_import_w))` | `peak_shaving` |
 | 2 | EOD suppress active AND `pv_w > 0` | `0` | `holding_battery` |
-| 3 | `commanded_ev_charge_w == 0` AND `ev_power_w == 0` | not written | `idle` |
-| 4 | otherwise (`commanded_ev_charge_w > 0` OR `ev_power_w > 0`) | `-min(pv_w, house_load_w)` | `controlling` |
+| 3 | no EV AND current hour is cheap (`prices_today[now.hour] ≤ (min+max)/2`) | `0` | `holding_battery_cheap` |
+| 4 | `commanded_ev_charge_w == 0` AND `ev_power_w == 0` | not written | `idle` |
+| 5 | otherwise (`commanded_ev_charge_w > 0` OR `ev_power_w > 0`) | `-min(pv_w, house_load_w)` | `controlling` |
 
 `commanded_ev_charge_w` is the smoothed EV charge target EMS will write to the wallbox this cycle.
 
@@ -99,7 +100,9 @@ Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS nev
 
 **EOD suppress (priority 2):** during cheap hours (identified from the hourly prices JSON) when solar forecast alone won't fill the battery to the target SoC, EMS sets `active_power_w = 0` so PV charges the battery instead of the battery discharging to cover house load. Only active during PV production. Peak shaving overrides it if a grid spike occurs.
 
-**Idle (priority 3):** when EMS is not commanding an EV charge target and the EV is not drawing, EMS releases the inverter to its native Self-Use Mode. Peak shaving and EOD suppress still take priority and force Power Control when active. This means an EV idle mid-day with PV producing correctly hands control back to the inverter — Self-Use routes PV to house load and surplus to battery autonomously, without EMS involvement.
+**Cheap-hour hold (priority 3):** when no EV session is active and the current hour's price is at or below the daily midpoint (`(min_price + max_price) / 2` over all 24 hours), EMS asserts Power Control with `active_power_w = 0`. Battery is held; PV charges the battery and grid covers house load at low cost. Falls through to Self-Use Mode (priority 4) when prices are unconfigured or the current hour is expensive.
+
+**Idle (priority 4):** when EMS is not commanding an EV charge target and the EV is not drawing, EMS releases the inverter to its native Self-Use Mode. In Self-Use Mode the inverter autonomously discharges the battery to cover house load — this is the desired behaviour during expensive hours. This means expensive idle hours use battery, while cheap idle hours hold the battery (priority 3 above).
 
 **Controlling (default):** whenever EMS is commanding a charge target or the EV is still drawing (wind-down), EMS asserts `power_control` with `active_power_w = -min(pv_w, house_load_w)`. Power Control is asserted on cycle 1 of a session, before the first target is written. Battery is never drained for the EV (magnitude capped by `pv_w`) and never charged from AC (sign always ≤ 0).
 

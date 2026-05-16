@@ -1,14 +1,16 @@
 """Tests for inverter_control.decide() and inverter_control.recompute().
 
 Priority ladder (inverter_strategy == "Control Inverter"):
-  1. Peak shaving  — grid_import > max_grid_import
-                     → verb=power_control, active_power=-(pv + excess), status=peak_shaving
-  2. EOD suppress  — eod_suppress=True AND pv>0
-                     → verb=power_control, active_power=0, status=holding_battery
-  3. Idle          — commanded_ev_charge_w == 0 AND ev_power_w == 0
-                     → verb=disabled_option, active_power=None, status=idle
-  4. Default       — commanded_ev_charge_w > 0 OR ev_power_w > 0
-                     → verb=power_control, active_power=-min(pv,house), status=controlling
+  1. Peak shaving       — grid_import > max_grid_import
+                          → verb=power_control, active_power=-(pv + excess), status=peak_shaving
+  2. EOD suppress       — eod_suppress=True AND pv>0
+                          → verb=power_control, active_power=0, status=holding_battery
+  3. Cheap-hour hold    — no EV AND cheap_for_inverter=True
+                          → verb=power_control, active_power=0, status=holding_battery_cheap
+  4. Idle               — commanded_ev_charge_w == 0 AND ev_power_w == 0
+                          → verb=disabled_option, active_power=None, status=idle
+  5. Default            — commanded_ev_charge_w > 0 OR ev_power_w > 0
+                          → verb=power_control, active_power=-min(pv,house), status=controlling
 
 commanded_ev_charge_w is the smoothed EV target EMS will write this cycle.
 Off mode: never write anything (disabled status, all None).
@@ -48,6 +50,7 @@ def _decide(
     eod_suppress: bool = False,
     max_grid_import_w: float = 4500.0,
     commanded_ev_charge_w: float = 0.0,
+    cheap_for_inverter: bool = False,
 ) -> InverterDecision:
     return inverter_control_module.recompute(
         pv_w=pv_w,
@@ -59,6 +62,7 @@ def _decide(
         eod_suppress=eod_suppress,
         max_grid_import_w=max_grid_import_w,
         commanded_ev_charge_w=commanded_ev_charge_w,
+        cheap_for_inverter=cheap_for_inverter,
     )
 
 
@@ -344,3 +348,94 @@ def test_priority_eod_suppress_over_controlling() -> None:
     """EOD suppress beats the default controlling branch."""
     d = _decide(pv_w=2000.0, ev_power_w=1000.0, eod_suppress=True)
     assert d.status == "holding_battery"
+
+
+# ── Cheap-hour hold ───────────────────────────────────────────────────────────
+
+def test_cheap_hour_idle_holds_battery() -> None:
+    """Cheap hour + no EV → power_control, active_power=0, status=holding_battery_cheap."""
+    d = _decide(pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=True)
+    assert d.status == "holding_battery_cheap"
+    assert d.inverter_verb == "power_control"
+    assert d.active_power_w == pytest.approx(0.0)
+
+
+def test_expensive_hour_idle_releases_to_self_use() -> None:
+    """Expensive hour (cheap_for_inverter=False) + no EV → idle / Self-Use Mode."""
+    d = _decide(pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=False)
+    assert d.status == "idle"
+    assert d.inverter_verb == "disabled"
+    assert d.active_power_w is None
+
+
+def test_cheap_hour_ev_charging_unchanged() -> None:
+    """Cheap hour + EV drawing → cheap-hour hold does not preempt EV charging path."""
+    d = _decide(pv_w=3000.0, house_load_w=1500.0, ev_power_w=2000.0, cheap_for_inverter=True)
+    assert d.status == "controlling"
+    assert d.active_power_w == pytest.approx(-min(3000.0, 1500.0))
+
+
+def test_cheap_hour_commanded_ev_charge_unchanged() -> None:
+    """Cheap hour + commanded EV charge > 0 → controlling, not cheap hold."""
+    d = _decide(
+        pv_w=3000.0, house_load_w=1500.0, commanded_ev_charge_w=1000.0, cheap_for_inverter=True
+    )
+    assert d.status == "controlling"
+
+
+def test_peak_shaving_beats_cheap_hour_hold() -> None:
+    """Grid spike beats cheap-hour hold — peak shaving is Priority 1."""
+    d = _decide(
+        pv_w=1000.0,
+        grid_import_w=5500.0,
+        max_grid_import_w=4500.0,
+        cheap_for_inverter=True,
+    )
+    assert d.status == "peak_shaving"
+    assert d.active_power_w == pytest.approx(-2000.0)
+
+
+def test_eod_suppress_beats_cheap_hour_hold() -> None:
+    """EOD suppress (Priority 2) beats cheap-hour hold (Priority 3)."""
+    d = _decide(pv_w=3000.0, eod_suppress=True, cheap_for_inverter=True)
+    assert d.status == "holding_battery"
+
+
+def test_cheap_hour_hold_without_prices_falls_through() -> None:
+    """cheap_for_inverter=False (no prices) → idle, not cheap hold."""
+    d = _decide(pv_w=3000.0, cheap_for_inverter=False)
+    assert d.status == "idle"
+
+
+# ── _is_cheap_hour_for_inverter helper ───────────────────────────────────────
+
+def test_helper_none_prices_returns_false() -> None:
+    assert inverter_control_module._is_cheap_hour_for_inverter(None, 10) is False
+
+
+def test_helper_short_tuple_returns_false() -> None:
+    assert inverter_control_module._is_cheap_hour_for_inverter((1.0,) * 23, 10) is False
+
+
+def test_helper_threshold_is_midpoint() -> None:
+    """With prices 1.0×23 + 5.0, threshold=(1+5)/2=3.0; hour 23 is expensive, rest are cheap."""
+    prices = (1.0,) * 23 + (5.0,)
+    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 0) is True
+    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 22) is True
+    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 23) is False
+
+
+def test_helper_boundary_at_threshold_is_cheap() -> None:
+    """Price exactly at threshold → cheap (<=)."""
+    prices = tuple([1.0] * 12 + [5.0] * 12)
+    threshold = (1.0 + 5.0) / 2  # 3.0; price[0]=1.0≤3.0 cheap, price[12]=5.0>3.0 expensive
+    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 0) is True
+    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 12) is False
+    _ = threshold  # referenced for documentation only
+
+
+def test_helper_all_equal_prices_are_cheap() -> None:
+    """All prices equal → threshold equals price → all hours are cheap (<=)."""
+    prices = (3.0,) * 24
+    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 0) is True
+    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 23) is True

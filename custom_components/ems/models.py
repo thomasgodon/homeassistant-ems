@@ -48,7 +48,8 @@ class Inputs:
 StrategyLabel = Literal["ev_charging", "ev_idle"]
 
 InverterStatus = Literal[
-    "controlling", "idle", "disabled", "starting_up", "peak_shaving", "holding_battery"
+    "controlling", "idle", "disabled", "starting_up", "peak_shaving", "holding_battery",
+    "holding_battery_cheap",
 ]
 
 EvChargingState = Literal[
