@@ -51,8 +51,10 @@ Two execution loops share a single `EmsState` object. Each loop runs two indepen
 4. Writes are skipped for 60 seconds after startup to avoid flapping on `unavailable` sensors.
 5. `controller.write_slow()` — writes the inverter verb **every cycle** (overriding any manual user change within 10 s), writes active power when applicable, and always writes the EV charge target.
 
+**Input reactivity:** the strategy loop registers a state-change listener on every configured input entity and every `select.ems_*` / `number.ems_*` entity. A state change on any of these triggers an immediate `async_request_refresh()` — the 10-second interval acts only as a fallback for entities that do not change. The fast loop's 1-second poll for `pv_w`, `house_load_w`, `ev_power_w`, and `grid_import_w` already provides sub-second latency for those values; changes to all other inputs (SoC, prices, thresholds, mode selects, number knobs) now propagate on the next event-loop tick rather than waiting up to 10 seconds.
+
 ### 1-second fast loop (`EmsFastLoopCoordinator`)
-Always runs once the integration is active. Re-reads `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`, `ev_plugged`, `ev_strategy`, `inverter_strategy`, and `is_cheap_hour`, then runs `strategy.recompute()` and `inverter_control.recompute()`. Calls `controller.write_fast()` — which writes active power and EV target but **never writes the inverter verb** (verb enforcement is the slow loop's job).
+Always runs once the integration is active. Re-reads `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`, `ev_plugged`, `ev_strategy`, `inverter_strategy`, and `is_cheap_hour`, then runs `strategy.recompute()` and `inverter_control.recompute()`. Calls `controller.write_fast()` — which writes active power and EV target but **never writes the inverter verb** (verb enforcement is the slow loop's job). Battery fields (`ev_soc`, `battery_soc`, thresholds, prices, forecasts) are carried from the most recent slow-loop result and refreshed whenever the strategy loop fires.
 
 ### EV algorithm — power balance
 
@@ -204,7 +206,9 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | `thresholds` | `max_grid_import_w` entity; `ev_target_soc` entity; `ev_min_charge_w` from `number.ems_ev_min_charge_w`; `max_ev_charge_w` entity |
 | `mapping` | Inverter select + active power + EV charge target entities from config |
 
-The 1-second fast loop re-reads: `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`, `ev_plugged`, `ev_strategy`, `inverter_strategy`, `is_cheap_hour`; battery fields are carried from the last 10 s result.
+The 1-second fast loop re-reads: `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`, `ev_plugged`, `ev_strategy`, `inverter_strategy`, `is_cheap_hour`; battery fields are carried from the last slow-loop result.
+
+Every configured input entity and every `select.ems_*` / `number.ems_*` entity is also subscribed via `async_track_state_change_event`. A state change on any of them fires an immediate `async_request_refresh()` on the strategy loop, so threshold knobs, SoC sensors, price/forecast entities, and mode selects take effect on the next event-loop tick — not at the next 10-second boundary.
 
 ---
 

@@ -86,16 +86,33 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         self._state.startup_grace_until = dt_util.utcnow() + timedelta(seconds=60)
         self._controller.reset_write_cache()
 
+        watched: list[str] = [
+            "select.ems_ev_charging_mode",
+            "select.ems_inverter_control_mode",
+            "select.ems_ev_smoothing",
+            "number.ems_ev_min_charge_w",
+            "number.ems_battery_target_soc",
+        ]
+        data = self._entry.data
+        for key in (
+            CONF_GRID_IMPORT_POWER, CONF_PV_POWER, CONF_HOUSE_LOAD,
+            CONF_EV_POWER, CONF_EV_PLUG, CONF_EV_SOC,
+            CONF_EV_TARGET_SOC, CONF_EV_MAX_CHARGE_W,
+            CONF_BATTERY_SOC, CONF_BATTERY_CAPACITY,
+            CONF_PRICE_SIGNAL_ENTITY, CONF_PRICES_JSON_ENTITY,
+            CONF_MAX_GRID_IMPORT_W,
+            CONF_SOLAR_FORECAST_REMAINING, CONF_HOUSE_LOAD_FORECAST_REMAINING,
+        ):
+            entity_id = data.get(key)
+            if entity_id:
+                watched.append(entity_id)
+
         @callback
-        def _on_mode_change(_event) -> None:
-            self.hass.async_create_task(self.async_refresh())
+        def _on_input_change(_event) -> None:
+            self.hass.async_create_task(self.async_request_refresh())
 
         self._entry.async_on_unload(
-            async_track_state_change_event(
-                self.hass,
-                ["select.ems_ev_charging_mode", "select.ems_inverter_control_mode"],
-                _on_mode_change,
-            )
+            async_track_state_change_event(self.hass, watched, _on_input_change)
         )
 
     async def _async_update_data(self) -> LadderResult:

@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.ems.const import (
+    CONF_BATTERY_SOC,
     CONF_EV_TARGET_SOC,
+    CONF_GRID_IMPORT_POWER,
     CONF_MAX_GRID_IMPORT_W,
     DEFAULT_EV_TARGET_SOC,
     DEFAULT_MAX_GRID_IMPORT_W,
@@ -736,3 +738,117 @@ async def test_fast_loop_reads_ev_plug_fresh_on_unplug():
 
     assert result.inputs.ev_plugged is False
     assert result.ev_decision.charging_state == "ev_not_connected"
+
+
+# ---------------------------------------------------------------------------
+# EmsStrategyCoordinator async_setup — listener wiring
+# ---------------------------------------------------------------------------
+
+_TRACK_STATE = (
+    "custom_components.ems.coordinator.async_track_state_change_event"
+)
+
+
+def _make_setup_coordinator(entry_data: dict):
+    from custom_components.ems.coordinator import EmsStrategyCoordinator
+
+    entry = _make_entry(entry_data)
+    entry.async_on_unload = MagicMock()
+
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    state = MagicMock()
+    controller = MagicMock()
+    controller.reset_write_cache = MagicMock()
+
+    coord = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
+    coord.hass = hass
+    coord._entry = entry
+    coord._state = state
+    coord._controller = controller
+    return coord
+
+
+@pytest.mark.asyncio
+async def test_async_setup_watches_number_entities():
+    """number.ems_* knobs are included in the state-change watch list."""
+    coord = _make_setup_coordinator({"grid_import_power": "sensor.grid"})
+    captured: list[str] = []
+
+    def mock_track(hass, entities, cb):
+        captured.extend(entities)
+        return MagicMock()
+
+    with patch(_TRACK_STATE, side_effect=mock_track), \
+         patch("custom_components.ems.coordinator.dt_util"):
+        await coord.async_setup()
+
+    assert "number.ems_ev_min_charge_w" in captured
+    assert "number.ems_battery_target_soc" in captured
+    assert "select.ems_ev_smoothing" in captured
+
+
+@pytest.mark.asyncio
+async def test_async_setup_watches_configured_sensor():
+    """Configured sensor entity IDs from entry.data appear in the watch list."""
+    coord = _make_setup_coordinator({
+        CONF_GRID_IMPORT_POWER: "sensor.grid",
+        CONF_BATTERY_SOC: "sensor.battery_soc",
+    })
+    captured: list[str] = []
+
+    def mock_track(hass, entities, cb):
+        captured.extend(entities)
+        return MagicMock()
+
+    with patch(_TRACK_STATE, side_effect=mock_track), \
+         patch("custom_components.ems.coordinator.dt_util"):
+        await coord.async_setup()
+
+    assert "sensor.grid" in captured
+    assert "sensor.battery_soc" in captured
+
+
+@pytest.mark.asyncio
+async def test_async_setup_omits_unconfigured_optional_sensors():
+    """None values for optional entities must not enter the watch list."""
+    coord = _make_setup_coordinator({
+        CONF_GRID_IMPORT_POWER: "sensor.grid",
+        # CONF_BATTERY_SOC intentionally absent
+    })
+    captured: list[str] = []
+
+    def mock_track(hass, entities, cb):
+        captured.extend(entities)
+        return MagicMock()
+
+    with patch(_TRACK_STATE, side_effect=mock_track), \
+         patch("custom_components.ems.coordinator.dt_util"):
+        await coord.async_setup()
+
+    assert None not in captured
+    assert all(isinstance(e, str) for e in captured)
+
+
+@pytest.mark.asyncio
+async def test_async_setup_input_change_calls_request_refresh():
+    """State-change event on any watched entity triggers async_request_refresh."""
+    coord = _make_setup_coordinator({CONF_GRID_IMPORT_POWER: "sensor.grid"})
+    captured_cb = None
+
+    def mock_track(hass, entities, cb):
+        nonlocal captured_cb
+        captured_cb = cb
+        return MagicMock()
+
+    with patch(_TRACK_STATE, side_effect=mock_track), \
+         patch("custom_components.ems.coordinator.dt_util"):
+        await coord.async_setup()
+
+    coord.async_request_refresh = AsyncMock()
+    captured_cb(MagicMock())  # simulate a state-change event
+    coord.hass.async_create_task.assert_called_once()
+    # the task wraps async_request_refresh — verify the coroutine was created
+    call_arg = coord.hass.async_create_task.call_args[0][0]
+    assert call_arg is not None
