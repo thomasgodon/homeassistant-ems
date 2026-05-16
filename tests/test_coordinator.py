@@ -425,7 +425,7 @@ async def test_fast_loop_ema_first_tick_uses_raw_value():
     with patch(_RECOMPUTE_EV, return_value=_EV_DECISION_CHARGING), \
          patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE), \
          patch(_DT_UTIL) as mock_dt:
-        mock_dt.utcnow.return_value = _NOW
+        mock_dt.now.return_value = _NOW
         await coord._async_update_data()
 
     written_ev: EvDecision = coord._controller.write_fast.call_args[0][0]
@@ -444,7 +444,7 @@ async def test_fast_loop_ema_second_tick_blends():
     coord._state.last_result = _make_ladder_result()
 
     with patch(_DT_UTIL) as mock_dt:
-        mock_dt.utcnow.return_value = _NOW
+        mock_dt.now.return_value = _NOW
         with patch(_RECOMPUTE_EV, return_value=_EV_DECISION_CHARGING), \
              patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE):
             await coord._async_update_data()
@@ -468,7 +468,7 @@ async def test_fast_loop_ema_resets_on_session_start():
     coord._state.last_result = _make_ladder_result()
 
     with patch(_DT_UTIL) as mock_dt:
-        mock_dt.utcnow.return_value = _NOW
+        mock_dt.now.return_value = _NOW
 
         # Tick 1: ev charging — EMA initialised to raw values
         with patch(_RECOMPUTE_EV, return_value=_EV_DECISION_CHARGING), \
@@ -527,7 +527,7 @@ async def test_fast_loop_ema_slow_mode_uses_lower_alpha():
     coord.hass.states.get = states_with_smoothing("Slow")
 
     with patch(_DT_UTIL) as mock_dt:
-        mock_dt.utcnow.return_value = _NOW
+        mock_dt.now.return_value = _NOW
         with patch(_RECOMPUTE_EV, return_value=first_ev), patch(_RECOMPUTE_INV, return_value=inv):
             await coord._async_update_data()
         with patch(_RECOMPUTE_EV, return_value=second_ev), patch(_RECOMPUTE_INV, return_value=inv):
@@ -558,7 +558,7 @@ async def test_fast_loop_off_mode_bypasses_ema_and_resets_state():
     with patch(_RECOMPUTE_EV, return_value=off_ev), \
          patch(_RECOMPUTE_INV, return_value=off_inv), \
          patch(_DT_UTIL) as mock_dt:
-        mock_dt.utcnow.return_value = _NOW
+        mock_dt.now.return_value = _NOW
         await coord._async_update_data()
 
     written_ev: EvDecision = coord._controller.write_fast.call_args[0][0]
@@ -585,7 +585,7 @@ async def test_fast_loop_inverter_off_mode_no_active_power_ema():
     with patch(_RECOMPUTE_EV, return_value=ev), \
          patch(_RECOMPUTE_INV, return_value=inv_off), \
          patch(_DT_UTIL) as mock_dt:
-        mock_dt.utcnow.return_value = _NOW
+        mock_dt.now.return_value = _NOW
         await coord._async_update_data()
 
     written_inv: InverterDecision = coord._controller.write_fast.call_args[0][1]
@@ -633,7 +633,7 @@ async def test_strategy_coordinator_sets_inverter_status_starting_up_during_grac
     coord._controller = controller
 
     with patch("custom_components.ems.coordinator.dt_util") as mock_dt:
-        mock_dt.utcnow.return_value = now
+        mock_dt.now.return_value = now
         result = await coord._async_update_data()
 
     assert result.inverter_decision.status == "starting_up"
@@ -696,7 +696,7 @@ async def test_fast_loop_reads_ev_plug_fresh_on_replug():
     coord._state.last_result = _make_stale_unplugged_result()
 
     with patch(_DT_UTIL) as mock_dt:
-        mock_dt.utcnow.return_value = _NOW
+        mock_dt.now.return_value = _NOW
         result = await coord._async_update_data()
 
     assert result.inputs.ev_plugged is True
@@ -733,7 +733,7 @@ async def test_fast_loop_reads_ev_plug_fresh_on_unplug():
     coord._state.last_result = plugged_result
 
     with patch(_DT_UTIL) as mock_dt:
-        mock_dt.utcnow.return_value = _NOW
+        mock_dt.now.return_value = _NOW
         result = await coord._async_update_data()
 
     assert result.inputs.ev_plugged is False

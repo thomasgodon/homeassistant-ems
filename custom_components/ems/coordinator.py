@@ -83,7 +83,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
 
     async def async_setup(self) -> None:
         """Set startup grace window."""
-        self._state.startup_grace_until = dt_util.utcnow() + timedelta(seconds=60)
+        self._state.startup_grace_until = dt_util.now() + timedelta(seconds=60)
         self._controller.reset_write_cache()
 
         watched: list[str] = [
@@ -153,7 +153,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         hass = self.hass
         data = self._entry.data
 
-        now = dt_util.utcnow()
+        now = dt_util.now()
 
         ev_strategy = _read_select_state(hass, "select.ems_ev_charging_mode", "Off")
         inverter_strategy = _read_select_state(hass, "select.ems_inverter_control_mode", "Off")
@@ -255,7 +255,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         if self._state.last_result is None:
             return None
         grace_until = self._state.startup_grace_until
-        if grace_until is not None and dt_util.utcnow() < grace_until:
+        if grace_until is not None and dt_util.now() < grace_until:
             return self._state.last_result
 
         data = self._entry.data
@@ -274,7 +274,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         # Battery inputs are re-read every 10 s by the strategy loop; reuse from prior state.
         fast_inputs_for_eod = replace(
             prior_inputs,
-            now=dt_util.utcnow(),
+            now=dt_util.now(),
             pv_w=pv_w,
             house_load_w=house_load_w,
             ev_power_w=ev_power_w,
@@ -349,7 +349,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
 
         await self._controller.write_fast(ev_fast, inverter_fast)
 
-        now = dt_util.utcnow()
+        now = dt_util.now()
         fast_inputs = replace(fast_inputs_for_eod, now=now)
         result = LadderResult(
             ev_decision=ev_fast,
