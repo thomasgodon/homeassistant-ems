@@ -169,7 +169,7 @@ All fields optional. When not configured the corresponding battery features are 
 | Config key | Type | Description |
 |------------|------|-------------|
 | `battery_soc` | `sensor` | Current home battery state of charge (%) |
-| `battery_capacity` | `sensor` / `number` / `input_number` | Total usable battery capacity (kWh) |
+| `battery_capacity` | `sensor` / `number` / `input_number` | Total usable battery capacity. EMS reads `unit_of_measurement` and converts automatically — use **Wh** or **kWh**. |
 | `solar_forecast_remaining` | `sensor` / `number` / `input_number` | Expected remaining solar generation today (kWh) — Solcast-style entity |
 | `house_load_forecast_remaining` | `sensor` / `number` / `input_number` | Expected remaining house load today (kWh); when absent house load is ignored in the forecast comparison |
 | `prices_json_entity` | `sensor` | Sensor whose **state** is a JSON list of 24 floats (€/kWh or €ct/kWh) indexed by hour 0..23. Must be exactly 24 elements. Example: `[0.08, 0.07, 0.07, 0.08, 0.10, 0.14, 0.18, 0.21, 0.20, 0.17, 0.15, 0.14, 0.13, 0.14, 0.15, 0.17, 0.21, 0.25, 0.24, 0.22, 0.19, 0.16, 0.13, 0.10]` (hour 0 = midnight, hour 23 = 23:00). Only relative ordering matters so any consistent unit works. |
@@ -201,7 +201,7 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | `inverter_strategy` | `select.ems_inverter_control_mode` |
 | `is_cheap_hour` | `price_signal_entity` (Step 2); `True` when not configured or unavailable |
 | `battery_soc` | `battery_soc` entity (%) or `None` |
-| `battery_capacity_kwh` | `battery_capacity` entity (kWh) or `None` |
+| `battery_capacity_kwh` | `battery_capacity` entity, auto-converted to kWh (reads `unit_of_measurement`), or `None` |
 | `battery_target_soc` | `number.ems_battery_target_soc`; defaults to `80` % |
 | `solar_forecast_remaining_kwh` | `solar_forecast_remaining` entity (kWh) or `None` |
 | `house_load_forecast_remaining_kwh` | `house_load_forecast_remaining` entity (kWh) or `None` |
@@ -325,7 +325,8 @@ Active power and EV target are cached — a service call is skipped if the value
 |-------|---------|
 | `Controlling` | EV charging commanded; inverter in power-control mode, active power written |
 | `Peak shaving` | Grid import exceeded cap; battery discharging to cover excess |
-| `Holding battery` | Cheap hour with PV producing; discharge suppressed so PV charges battery |
+| `Holding battery` | EOD-suppress active with PV producing; discharge suppressed so PV charges battery |
+| `Holding battery (cheap hour)` | Cheap-priced hour, no EV activity; battery held so house load comes from grid |
 | `Idle` | No active condition; inverter set to its `disabled_option` |
 | `Disabled` | Inverter Control Mode is `Off`; EMS does not write to the inverter |
 | `Starting up` | Startup grace period; strategy computes but writes are suppressed |

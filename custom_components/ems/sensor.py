@@ -27,6 +27,7 @@ _INVERTER_STATUS_LABELS: dict[str, str] = {
     "starting_up": "Starting up",
     "peak_shaving": "Peak shaving",
     "holding_battery": "Holding battery",
+    "holding_battery_cheap": "Holding battery (cheap hour)",
 }
 
 _BATTERY_ACTION_DEADBAND_W = 200.0
@@ -52,6 +53,10 @@ _INVERTER_STATUS_REASONS: dict[str, str] = {
     ),
     "holding_battery": (
         "Cheap hour with PV producing. Battery discharge suppressed so PV charges the battery."
+    ),
+    "holding_battery_cheap": (
+        "Cheap-priced hour with no EV activity."
+        " Battery hold so house load comes from grid, not battery."
     ),
 }
 

@@ -250,7 +250,8 @@ def test_inverter_status_unique_id():
 def test_inverter_status_options_cover_all_states():
     sensor = EmsInverterStatusSensor(_make_coordinator(0.0))
     assert set(sensor.options) == {
-        "Controlling", "Idle", "Disabled", "Starting up", "Peak shaving", "Holding battery"
+        "Controlling", "Idle", "Disabled", "Starting up", "Peak shaving",
+        "Holding battery", "Holding battery (cheap hour)",
     }
 
 

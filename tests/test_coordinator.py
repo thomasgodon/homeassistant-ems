@@ -44,6 +44,77 @@ def _make_hass(states: dict | None = None) -> MagicMock:
     return hass
 
 
+def _make_state(value: str, unit: str | None = None) -> MagicMock:
+    """Fake HA state with .state and .attributes.get('unit_of_measurement')."""
+    s = MagicMock()
+    s.state = value
+    s.attributes = {"unit_of_measurement": unit} if unit is not None else {}
+    return s
+
+
+def _make_hass_with_attr(entity_id: str, value: str, unit: str | None = None) -> MagicMock:
+    hass = MagicMock()
+    entity_state = _make_state(value, unit)
+
+    def get_state(eid):
+        return entity_state if eid == entity_id else None
+
+    hass.states.get = MagicMock(side_effect=get_state)
+    return hass
+
+
+# ---------------------------------------------------------------------------
+# _read_kwh_optional — unit-aware capacity conversion
+# ---------------------------------------------------------------------------
+
+def test_read_kwh_optional_wh_converts_to_kwh():
+    from custom_components.ems.coordinator import _read_kwh_optional
+    hass = _make_hass_with_attr("input_number.battery_capacity", "5800", "Wh")
+    assert _read_kwh_optional(hass, "input_number.battery_capacity") == pytest.approx(5.8)
+
+
+def test_read_kwh_optional_kwh_passthrough():
+    from custom_components.ems.coordinator import _read_kwh_optional
+    hass = _make_hass_with_attr("input_number.battery_capacity", "5.8", "kWh")
+    assert _read_kwh_optional(hass, "input_number.battery_capacity") == pytest.approx(5.8)
+
+
+def test_read_kwh_optional_no_unit_assumes_kwh():
+    from custom_components.ems.coordinator import _read_kwh_optional
+    hass = _make_hass_with_attr("input_number.battery_capacity", "5.8", None)
+    assert _read_kwh_optional(hass, "input_number.battery_capacity") == pytest.approx(5.8)
+
+
+def test_read_kwh_optional_wh_case_insensitive():
+    from custom_components.ems.coordinator import _read_kwh_optional
+    for unit in ("wh", "WH", "Wh", "wH"):
+        hass = _make_hass_with_attr("input_number.battery_capacity", "5800", unit)
+        result = _read_kwh_optional(hass, "input_number.battery_capacity")
+        assert result == pytest.approx(5.8), f"failed for unit={unit!r}"
+
+
+def test_read_kwh_optional_unavailable_returns_none():
+    from custom_components.ems.coordinator import _read_kwh_optional
+    s = MagicMock()
+    s.state = "unavailable"
+    hass = MagicMock()
+    hass.states.get = MagicMock(return_value=s)
+    assert _read_kwh_optional(hass, "input_number.battery_capacity") is None
+
+
+def test_read_kwh_optional_entity_absent_returns_none():
+    from custom_components.ems.coordinator import _read_kwh_optional
+    hass = MagicMock()
+    hass.states.get = MagicMock(return_value=None)
+    assert _read_kwh_optional(hass, "input_number.battery_capacity") is None
+
+
+def test_read_kwh_optional_no_entity_id_returns_none():
+    from custom_components.ems.coordinator import _read_kwh_optional
+    hass = MagicMock()
+    assert _read_kwh_optional(hass, None) is None
+
+
 # ---------------------------------------------------------------------------
 # _build_inputs reads max_grid_import_w / ev_target_soc from entities
 # ---------------------------------------------------------------------------

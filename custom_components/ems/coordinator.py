@@ -193,7 +193,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         )
 
         battery_soc = _read_float_optional(hass, data.get(CONF_BATTERY_SOC))
-        battery_capacity_kwh = _read_float_optional(hass, data.get(CONF_BATTERY_CAPACITY))
+        battery_capacity_kwh = _read_kwh_optional(hass, data.get(CONF_BATTERY_CAPACITY))
         battery_target_soc = _read_number(
             hass, "number.ems_battery_target_soc", DEFAULT_BATTERY_TARGET_SOC
         )
@@ -389,6 +389,23 @@ def _read_float_optional(hass: HomeAssistant, entity_id: str | None) -> float | 
         return float(state.state)
     except (ValueError, TypeError):
         return None
+
+
+def _read_kwh_optional(hass: HomeAssistant, entity_id: str | None) -> float | None:
+    """Read a capacity entity and normalise to kWh, honouring unit_of_measurement."""
+    if not entity_id:
+        return None
+    state = hass.states.get(entity_id)
+    if state is None or state.state in ("unavailable", "unknown"):
+        return None
+    try:
+        value = float(state.state)
+    except (ValueError, TypeError):
+        return None
+    unit = (state.attributes.get("unit_of_measurement") or "").strip().lower()
+    if unit == "wh":
+        return value / 1000.0
+    return value  # kWh or unspecified — assume kWh
 
 
 def _read_bool(hass: HomeAssistant, entity_id: str | None, default: bool) -> bool:
