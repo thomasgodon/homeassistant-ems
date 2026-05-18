@@ -9,17 +9,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import EmsFastLoopCoordinator
 
-_CHARGING_STATE_LABELS: dict[str, str] = {
-    "charging": "Charging",
-    "ev_not_connected": "EV not connected",
-    "charging_disabled": "Charging disabled",
-    "target_soc_reached": "Target SoC reached",
-    "not_enough_power": "Not enough power",
-    "starting_up": "Starting up",
-    "outside_cheap_hours": "Outside cheap hours",
-    "awaiting_solar_surplus": "Awaiting solar surplus",
-}
-
 _INVERTER_STATUS_LABELS: dict[str, str] = {
     "controlling": "Controlling",
     "idle": "Idle",
@@ -30,13 +19,7 @@ _INVERTER_STATUS_LABELS: dict[str, str] = {
     "holding_battery_cheap": "Holding battery (cheap hour)",
 }
 
-_BATTERY_ACTION_DEADBAND_W = 200.0
-
-_BATTERY_ACTION_LABELS: dict[str, str] = {
-    "charging_from_solar": "Charging from solar",
-    "discharging": "Discharging",
-    "idle": "Idle",
-}
+_BATTERY_POWER_DEADBAND_W = 200.0
 
 _INVERTER_STATUS_REASONS: dict[str, str] = {
     "idle": (
@@ -70,10 +53,10 @@ async def async_setup_entry(
     async_add_entities([
         EmsInverterModeSensor(coordinator),
         EmsEvCurrentSensor(coordinator),
-        EmsEvChargingStateSensor(coordinator),
+        EmsEvStatusSensor(coordinator),
         EmsInverterActivePowerSensor(coordinator),
         EmsInverterStatusSensor(coordinator),
-        EmsBatteryActionSensor(coordinator),
+        EmsBatteryStatusSensor(coordinator),
     ])
 
 
@@ -149,11 +132,11 @@ class EmsInverterActivePowerSensor(CoordinatorEntity[EmsFastLoopCoordinator], Se
         return True
 
 
-class EmsEvChargingStateSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
-    _attr_unique_id = "ems_ev_charging_state"
-    _attr_name = "EMS EV Charging State"
-    _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = list(_CHARGING_STATE_LABELS.values())
+class EmsEvStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    """Prose status for EV charging — priority-ordered, human-readable."""
+
+    _attr_unique_id = "ems_ev_status"
+    _attr_name = "EMS EV Status"
 
     def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
         super().__init__(coordinator)
@@ -166,7 +149,31 @@ class EmsEvChargingStateSensor(CoordinatorEntity[EmsFastLoopCoordinator], Sensor
     def native_value(self) -> str | None:
         if self.coordinator.data is None:
             return None
-        return _CHARGING_STATE_LABELS.get(self.coordinator.data.ev_decision.charging_state)
+        ev = self.coordinator.data.ev_decision
+        inp = self.coordinator.data.inputs
+        state = ev.charging_state
+
+        if state == "starting_up":
+            return "Starting up…"
+        if state == "charging_disabled":
+            return "EV charging disabled"
+        if state == "ev_not_connected":
+            return "EV not connected"
+        if state == "target_soc_reached":
+            if inp.ev_soc is not None:
+                return f"EV battery full ({round(inp.ev_soc)}% reached)"
+            return "EV battery full"
+        if state == "outside_cheap_hours":
+            return "Waiting for cheap hours"
+        if state == "awaiting_solar_surplus":
+            return "Waiting for solar surplus"
+        if state == "not_enough_power":
+            return "Not enough surplus to charge"
+        # state == "charging"
+        kw = round(ev.ev_charge_power_w / 1000, 1)
+        if inp.grid_import_w > 0:
+            return f"Charging EV at {kw} kW with grid headroom"
+        return f"Charging EV at {kw} kW from solar surplus"
 
     @property
     def available(self) -> bool:
@@ -254,11 +261,11 @@ class EmsInverterStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorE
         return self.coordinator.data is not None
 
 
-class EmsBatteryActionSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
-    _attr_unique_id = "ems_battery_action"
-    _attr_name = "EMS Battery Action"
-    _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = list(_BATTERY_ACTION_LABELS.values())
+class EmsBatteryStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    """Prose status for the battery — Reason > Action > SoC priority ordering."""
+
+    _attr_unique_id = "ems_battery_status"
+    _attr_name = "EMS Battery Status"
 
     def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
         super().__init__(coordinator)
@@ -271,30 +278,37 @@ class EmsBatteryActionSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEn
     def native_value(self) -> str | None:
         if self.coordinator.data is None:
             return None
+        inv = self.coordinator.data.inverter_decision
         inp = self.coordinator.data.inputs
-        action_w = inp.pv_w + inp.grid_import_w - inp.house_load_w
-        if action_w > _BATTERY_ACTION_DEADBAND_W:
-            key = "charging_from_solar"
-        elif action_w < -_BATTERY_ACTION_DEADBAND_W:
-            key = "discharging"
-        else:
-            key = "idle"
-        return _BATTERY_ACTION_LABELS[key]
 
-    @property
-    def extra_state_attributes(self) -> dict | None:
-        if self.coordinator.data is None:
-            return None
-        inp = self.coordinator.data.inputs
-        action_w = inp.pv_w + inp.grid_import_w - inp.house_load_w
-        return {
-            "battery_action_w": round(action_w, 1),
-            "pv_w": inp.pv_w,
-            "grid_import_w": inp.grid_import_w,
-            "house_load_w": inp.house_load_w,
-            "deadband_w": _BATTERY_ACTION_DEADBAND_W,
-            "formula": "pv_w + grid_import_w - house_load_w",
-        }
+        soc_str = f" · {round(inp.battery_soc)}%" if inp.battery_soc is not None else ""
+
+        # Reason rows — override power-balance when EMS has an explicit intent
+        if inv.status == "starting_up":
+            return "Starting up…"
+        if inv.status == "peak_shaving":
+            return f"Discharging to limit grid import{soc_str}"
+        if inv.status == "holding_battery":
+            return f"Saving solar charge for tonight{soc_str}"
+        if inv.status == "holding_battery_cheap":
+            return f"Holding charge — electricity is cheap now{soc_str}"
+
+        # Action rows — derived from power balance
+        battery_w = inp.pv_w + inp.grid_import_w - inp.house_load_w
+
+        if (
+            inp.battery_soc is not None
+            and inp.battery_soc >= inp.battery_target_soc
+            and abs(battery_w) <= _BATTERY_POWER_DEADBAND_W
+        ):
+            return f"Battery full — {round(inp.battery_soc)}% reached"
+        if battery_w > _BATTERY_POWER_DEADBAND_W:
+            kw = round(abs(battery_w) / 1000, 1)
+            return f"Charging from solar at {kw} kW{soc_str}"
+        if battery_w < -_BATTERY_POWER_DEADBAND_W:
+            kw = round(abs(battery_w) / 1000, 1)
+            return f"Powering house at {kw} kW{soc_str}"
+        return f"Idle{soc_str}"
 
     @property
     def available(self) -> bool:

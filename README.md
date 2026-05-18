@@ -108,7 +108,7 @@ Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS nev
 
 **Battery protection:** `active_power_w` is always ≤ 0. The inverter is held in `power_control` for the duration of a charging session; outside sessions, Self-Use Mode handles battery routing autonomously.
 
-**Observing physical battery flow:** the inverter status describes the EMS *control mode*, not the instantaneous battery direction. The separate `sensor.ems_battery_action` sensor derives that from energy balance (`pv_w + grid_import_w − house_load_w`) and reports `Charging from solar`, `Discharging`, or `Idle` independently of which inverter-control branch is active.
+**Observing physical battery flow:** the inverter status describes the EMS *control mode*, not the instantaneous battery direction. The separate `sensor.ems_battery_status` sensor surfaces this as human-readable prose, prioritising the *reason* (peak shaving, EOD hold, cheap-hour hold) before the raw power-balance action.
 
 ### EOD battery fullness decision
 
@@ -299,25 +299,26 @@ Active power and EV target are cached — a service call is skipped if the value
 
 | Entity | Values | Description |
 |--------|--------|-------------|
-| `sensor.ems_ev_charging_state` | see below | Human-readable EV charging state. Updated every second. |
+| `sensor.ems_ev_status` | prose string | Priority-ordered EV status with kW values and reason. Updated every second. |
 | `sensor.ems_inverter_mode` | `power_control`, `disabled`, or `None` | Current inverter verb from the last `InverterDecision`. |
 | `sensor.ems_ev_current_w` | float (W) | Computed EV charge target EMS is writing to `ev_charge_target_entity`. `0` when idle. |
 | `sensor.ems_inverter_active_power` | float (W) | Active power EMS is writing to `active_power_entity`. |
 | `sensor.ems_inverter_status` | see below | Explains why and how EMS is (or isn't) controlling the inverter. Attributes include `reason`, `formula`, `pv_w`, `house_load_w`, `ev_power_w`, `house_non_ev_w`, `active_power_w`. |
-| `sensor.ems_battery_action` | see below | Physical battery flow derived from energy balance. Independent of the inverter-control branch. Attributes include `battery_action_w` (signed W), `pv_w`, `grid_import_w`, `house_load_w`, `deadband_w`, `formula`. |
+| `sensor.ems_battery_status` | prose string | Priority-ordered battery status (Reason > Action > SoC). Surfaces peak shaving, EOD hold, and cheap-hour hold before raw power-balance action. |
 
-#### `sensor.ems_ev_charging_state` values
+#### `sensor.ems_ev_status` messages (priority order)
 
-| Value | Meaning |
-|-------|---------|
-| `Charging` | EV is actively charging under EMS control |
+| Message | Condition |
+|---------|-----------|
+| `Starting up…` | 60-second startup grace; writes suppressed |
+| `EV charging disabled` | EV charging mode is `Off` |
 | `EV not connected` | EV plug sensor reports not connected |
-| `Charging disabled` | EV charging mode is set to `Off` |
-| `Target SoC reached` | EV SoC is at or above the configured target |
-| `Not enough power` | Available grid headroom is below the minimum charge threshold |
-| `Starting up` | EMS is in the 60-second startup grace period; no writes yet |
-| `Outside cheap hours` | Mode is `Price-optimised` and the price signal entity is `off` |
-| `Awaiting solar surplus` | Mode is `Energy-optimised` and solar forecast surplus does not exceed battery gap |
+| `EV battery full (N% reached)` | EV SoC is at or above the configured target |
+| `Waiting for cheap hours` | Mode is `Price-optimised` and current hour is not cheap |
+| `Waiting for solar surplus` | Mode is `Energy-optimised` and forecast surplus doesn't exceed battery gap |
+| `Not enough surplus to charge` | Available headroom is below the minimum charge threshold |
+| `Charging EV at N.N kW from solar surplus` | Actively charging; grid import ≤ 0 (exporting or balanced) |
+| `Charging EV at N.N kW with grid headroom` | Actively charging; grid import > 0 (using allowed headroom) |
 
 #### `sensor.ems_inverter_status` values
 
@@ -331,15 +332,22 @@ Active power and EV target are cached — a service call is skipped if the value
 | `Disabled` | Inverter Control Mode is `Off`; EMS does not write to the inverter |
 | `Starting up` | Startup grace period; strategy computes but writes are suppressed |
 
-#### `sensor.ems_battery_action` values
+#### `sensor.ems_battery_status` messages (priority order)
 
-Derived from `battery_action_w = pv_w + grid_import_w − house_load_w` with a 200 W deadband.
+Reason rows (1–4) override the power-balance rows whenever EMS has an explicit control intent.
 
-| Value | Condition | Meaning |
-|-------|-----------|---------|
-| `Charging from solar` | `battery_action_w > +200` | PV surplus is flowing into the battery |
-| `Discharging` | `battery_action_w < −200` | Battery is covering load not met by PV + grid |
-| `Idle` | within ±200 W | Battery is neither meaningfully charging nor discharging |
+| Message | Priority | Condition |
+|---------|----------|-----------|
+| `Starting up…` | 1 | 60-second startup grace |
+| `Discharging to limit grid import · N%` | 2 | Inverter status is `peak_shaving` |
+| `Saving solar charge for tonight · N%` | 3 | Inverter status is `holding_battery` (EOD suppress) |
+| `Holding charge — electricity is cheap now · N%` | 4 | Inverter status is `holding_battery_cheap` |
+| `Battery full — N% reached` | 5 | `battery_soc ≥ battery_target_soc` and power balance within 200 W |
+| `Charging from solar at N.N kW · N%` | 6 | `pv_w + grid_import_w − house_load_w > +200` |
+| `Powering house at N.N kW · N%` | 7 | `pv_w + grid_import_w − house_load_w < −200` |
+| `Idle · N%` | 8 | Power balance within ±200 W |
+
+SoC suffix (` · N%`) is omitted when `battery_soc` is unavailable.
 
 ---
 
