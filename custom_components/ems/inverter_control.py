@@ -17,6 +17,8 @@ def decide(inputs: Inputs, *, commanded_ev_charge_w: float) -> InverterDecision:
         max_grid_import_w=inputs.thresholds.max_grid_import_w,
         commanded_ev_charge_w=commanded_ev_charge_w,
         cheap_for_inverter=_is_cheap_hour_for_inverter(inputs.prices_today, inputs.now.hour),
+        battery_soc=inputs.battery_soc,
+        battery_target_soc=inputs.battery_target_soc,
     )
 
 
@@ -32,6 +34,8 @@ def recompute(
     max_grid_import_w: float = 0.0,
     commanded_ev_charge_w: float = 0.0,
     cheap_for_inverter: bool = False,
+    battery_soc: float | None = None,
+    battery_target_soc: float = 80.0,
 ) -> InverterDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
     return _compute(
@@ -45,6 +49,8 @@ def recompute(
         max_grid_import_w=max_grid_import_w,
         commanded_ev_charge_w=commanded_ev_charge_w,
         cheap_for_inverter=cheap_for_inverter,
+        battery_soc=battery_soc,
+        battery_target_soc=battery_target_soc,
     )
 
 
@@ -69,6 +75,8 @@ def _compute(
     max_grid_import_w: float,
     commanded_ev_charge_w: float,
     cheap_for_inverter: bool = False,
+    battery_soc: float | None = None,
+    battery_target_soc: float = 80.0,
 ) -> InverterDecision:
     if inverter_strategy == "Off":
         return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
@@ -92,9 +100,16 @@ def _compute(
             status="holding_battery",
         )
 
-    # Priority 3 — cheap-hour hold: no EV activity and current hour is cheap.
-    # Force active_power_w=0 so battery is not drained; grid covers house load.
-    if commanded_ev_charge_w == 0.0 and ev_power_w == 0.0 and cheap_for_inverter:
+    # Priority 3 — cheap-hour hold: no EV activity, current hour is cheap, and battery
+    # is below target. Force active_power_w=0 to prevent battery drain; grid covers house.
+    # Skipped when battery is at/above target — no reason to grid-fill an already-full battery.
+    # When battery_soc is unknown (None), hold conservatively.
+    if (
+        commanded_ev_charge_w == 0.0
+        and ev_power_w == 0.0
+        and cheap_for_inverter
+        and (battery_soc is None or battery_soc < battery_target_soc)
+    ):
         return InverterDecision(
             inverter_verb=mapping.power_control_option,
             active_power_w=0.0,

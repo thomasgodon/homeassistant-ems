@@ -336,6 +336,8 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             max_grid_import_w=prior_inputs.thresholds.max_grid_import_w,
             commanded_ev_charge_w=ev_fast.ev_charge_power_w,
             cheap_for_inverter=cheap_for_inverter,
+            battery_soc=prior_inputs.battery_soc,
+            battery_target_soc=prior_inputs.battery_target_soc,
         )
 
         if ev_strategy != "Off":

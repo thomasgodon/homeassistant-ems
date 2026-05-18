@@ -6,6 +6,7 @@ Priority ladder (inverter_strategy == "Control Inverter"):
   2. EOD suppress       — eod_suppress=True AND pv>0
                           → verb=power_control, active_power=0, status=holding_battery
   3. Cheap-hour hold    — no EV AND cheap_for_inverter=True
+                          AND (battery_soc is None OR battery_soc < battery_target_soc)
                           → verb=power_control, active_power=0, status=holding_battery_cheap
   4. Idle               — commanded_ev_charge_w == 0 AND ev_power_w == 0
                           → verb=disabled_option, active_power=None, status=idle
@@ -51,6 +52,8 @@ def _decide(
     max_grid_import_w: float = 4500.0,
     commanded_ev_charge_w: float = 0.0,
     cheap_for_inverter: bool = False,
+    battery_soc: float | None = None,
+    battery_target_soc: float = 80.0,
 ) -> InverterDecision:
     return inverter_control_module.recompute(
         pv_w=pv_w,
@@ -63,6 +66,8 @@ def _decide(
         max_grid_import_w=max_grid_import_w,
         commanded_ev_charge_w=commanded_ev_charge_w,
         cheap_for_inverter=cheap_for_inverter,
+        battery_soc=battery_soc,
+        battery_target_soc=battery_target_soc,
     )
 
 
@@ -405,6 +410,43 @@ def test_cheap_hour_hold_without_prices_falls_through() -> None:
     """cheap_for_inverter=False (no prices) → idle, not cheap hold."""
     d = _decide(pv_w=3000.0, cheap_for_inverter=False)
     assert d.status == "idle"
+
+
+def test_cheap_hour_hold_fires_when_battery_soc_unknown() -> None:
+    """battery_soc=None + cheap hour → hold conservatively (no sensor to say it's full)."""
+    d = _decide(pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=True, battery_soc=None)
+    assert d.status == "holding_battery_cheap"
+
+
+def test_cheap_hour_hold_fires_when_battery_below_target() -> None:
+    """battery_soc < battery_target_soc + cheap hour → hold."""
+    d = _decide(
+        pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=True,
+        battery_soc=50.0, battery_target_soc=80.0,
+    )
+    assert d.status == "holding_battery_cheap"
+
+
+def test_cheap_hour_hold_skipped_when_battery_at_target() -> None:
+    """battery_soc == battery_target_soc + cheap hour → idle (battery already full)."""
+    d = _decide(
+        pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=True,
+        battery_soc=80.0, battery_target_soc=80.0,
+    )
+    assert d.status == "idle"
+    assert d.inverter_verb == "disabled"
+    assert d.active_power_w is None
+
+
+def test_cheap_hour_hold_skipped_when_battery_above_target() -> None:
+    """battery_soc > battery_target_soc + cheap hour → idle (no need to grid-fill)."""
+    d = _decide(
+        pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=True,
+        battery_soc=95.0, battery_target_soc=80.0,
+    )
+    assert d.status == "idle"
+    assert d.inverter_verb == "disabled"
+    assert d.active_power_w is None
 
 
 # ── _is_cheap_hour_for_inverter helper ───────────────────────────────────────
