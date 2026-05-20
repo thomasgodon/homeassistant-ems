@@ -1,7 +1,9 @@
 """Tests for inverter_control.decide() and inverter_control.recompute().
 
 Priority ladder (inverter_strategy == "Control Inverter"):
-  1. Peak shaving       — grid_import > max_grid_import
+  1. Peak shaving       — grid_import > max_grid_import AND commanded_ev_charge_w == 0
+                          AND ev_power_w == 0 (suppressed during EV sessions to prevent
+                          double-correction with the EV integrator)
                           → verb=power_control, active_power=-(pv + excess), status=peak_shaving
   2. EOD suppress       — eod_suppress=True AND pv>0
                           → verb=power_control, active_power=0, status=holding_battery
@@ -274,8 +276,8 @@ def test_peak_shaving_when_grid_exceeds_cap() -> None:
     assert d.active_power_w == pytest.approx(-2000.0)
 
 
-def test_peak_shaving_fires_during_ev_charging() -> None:
-    """Peak shaving fires even when EV is drawing — EV mode does not gate battery step."""
+def test_peak_shaving_suppressed_during_ev_charging() -> None:
+    """Peak shaving is suppressed when EV is drawing — would double-correct with EV integrator."""
     d = _decide(
         pv_w=1000.0,
         house_load_w=500.0,
@@ -283,8 +285,21 @@ def test_peak_shaving_fires_during_ev_charging() -> None:
         grid_import_w=5500.0,
         max_grid_import_w=4500.0,
     )
-    assert d.status == "peak_shaving"
-    assert d.active_power_w == pytest.approx(-2000.0)
+    assert d.status == "controlling"
+    assert d.active_power_w == pytest.approx(-min(1000.0, 500.0))
+
+
+def test_peak_shaving_suppressed_when_commanded_ev_charge() -> None:
+    """Peak shaving suppressed on cycle 1 of a session (commanded > 0, EV not yet drawing)."""
+    d = _decide(
+        pv_w=1000.0,
+        house_load_w=500.0,
+        ev_power_w=0.0,
+        commanded_ev_charge_w=2000.0,
+        grid_import_w=5500.0,
+        max_grid_import_w=4500.0,
+    )
+    assert d.status == "controlling"
 
 
 def test_no_peak_shaving_when_grid_at_cap() -> None:

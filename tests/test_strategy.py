@@ -646,3 +646,65 @@ def test_energy_optimised_respects_min_charge_floor(builder) -> None:
     )
     assert d.strategy == "ev_idle"
     assert d.charging_state == "not_enough_power"
+
+
+# ── solar_shortfall_kwh ───────────────────────────────────────────────────────
+
+def test_solar_shortfall_kwh_returns_none_when_battery_soc_missing() -> None:
+    inp = _eod_inputs(battery_capacity_kwh=10.0, solar_forecast_remaining_kwh=5.0)
+    assert strategy_module.solar_shortfall_kwh(inp) is None
+
+
+def test_solar_shortfall_kwh_returns_none_when_capacity_missing() -> None:
+    inp = _eod_inputs(battery_soc=50.0, solar_forecast_remaining_kwh=5.0)
+    assert strategy_module.solar_shortfall_kwh(inp) is None
+
+
+def test_solar_shortfall_kwh_returns_none_when_solar_missing() -> None:
+    inp = _eod_inputs(battery_soc=50.0, battery_capacity_kwh=10.0)
+    assert strategy_module.solar_shortfall_kwh(inp) is None
+
+
+def test_solar_shortfall_kwh_positive_when_solar_short() -> None:
+    # gap = 10 * (80-50)/100 = 3 kWh, solar = 2 kWh, house = 0 → shortfall = 3 - 2 = 1.0
+    inp = _eod_inputs(
+        battery_soc=50.0,
+        battery_capacity_kwh=10.0,
+        battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=2.0,
+    )
+    assert strategy_module.solar_shortfall_kwh(inp) == pytest.approx(1.0)
+
+
+def test_solar_shortfall_kwh_negative_when_solar_covers() -> None:
+    # gap = 3 kWh, solar = 10 kWh → shortfall = 3 - 10 = -7.0
+    inp = _eod_inputs(
+        battery_soc=50.0,
+        battery_capacity_kwh=10.0,
+        battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=10.0,
+    )
+    assert strategy_module.solar_shortfall_kwh(inp) == pytest.approx(-7.0)
+
+
+def test_solar_shortfall_kwh_subtracts_house_forecast() -> None:
+    # gap = 5 kWh (50%→100% on 10 kWh), solar = 10, house = 4 → effective = 6 → shortfall = -1.0
+    inp = _eod_inputs(
+        battery_soc=50.0,
+        battery_capacity_kwh=10.0,
+        battery_target_soc=100.0,
+        solar_forecast_remaining_kwh=10.0,
+        house_load_forecast_remaining_kwh=4.0,
+    )
+    assert strategy_module.solar_shortfall_kwh(inp) == pytest.approx(-1.0)
+
+
+def test_solar_shortfall_kwh_negative_when_battery_at_target() -> None:
+    # battery_gap = 0 (soc >= target), effective_solar = 5 → shortfall = -5.0
+    inp = _eod_inputs(
+        battery_soc=80.0,
+        battery_capacity_kwh=10.0,
+        battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=5.0,
+    )
+    assert strategy_module.solar_shortfall_kwh(inp) == pytest.approx(-5.0)

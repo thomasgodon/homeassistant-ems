@@ -55,6 +55,11 @@ def _make_coordinator(
                 battery_soc=battery_soc,
                 battery_target_soc=battery_target_soc,
                 ev_soc=ev_soc,
+                # Forecast fields default to None so solar_shortfall_kwh returns None
+                # (no shortfall suffix) unless the test explicitly monkeypatches the helper.
+                battery_capacity_kwh=None,
+                solar_forecast_remaining_kwh=None,
+                house_load_forecast_remaining_kwh=None,
             ),
             computed_at=datetime.datetime(2026, 5, 4, 12, 0, 0, tzinfo=datetime.UTC),
         )
@@ -369,7 +374,7 @@ def test_battery_status_holding_battery_cheap():
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(0.0, inverter_status="holding_battery_cheap", battery_soc=45.0)
     )
-    assert sensor.native_value == "Holding charge — electricity is cheap now · 45%"
+    assert sensor.native_value == "Drawing from grid — electricity is cheap now · 45%"
 
 
 def test_battery_status_full():
@@ -458,3 +463,77 @@ def test_battery_status_available_when_data_present():
 def test_battery_status_unique_id():
     sensor = EmsBatteryStatusSensor(_make_coordinator(0.0))
     assert sensor.unique_id == "ems_battery_status"
+
+
+def test_battery_status_shortfall_suffix_charging(monkeypatch):
+    # pv=5000, grid=-1000, house=1000 → battery_w=+3000 > 200 → "Charging from solar..."
+    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 1.2)
+    sensor = EmsBatteryStatusSensor(
+        _make_coordinator(
+            0.0, inverter_status="idle",
+            pv_w=5000.0, grid_import_w=-1000.0, house_load_w=1000.0,
+            battery_soc=60.0, battery_target_soc=80.0,
+        )
+    )
+    assert sensor.native_value == "Charging from solar at 3.0 kW · 60% · solar short by 1.2 kWh"
+
+
+def test_battery_status_shortfall_suffix_idle(monkeypatch):
+    # pv=1000, grid=0, house=900 → battery_w=+100 (within deadband)
+    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 2.5)
+    sensor = EmsBatteryStatusSensor(
+        _make_coordinator(
+            0.0, inverter_status="idle",
+            pv_w=1000.0, grid_import_w=0.0, house_load_w=900.0,
+            battery_soc=50.0, battery_target_soc=80.0,
+        )
+    )
+    assert sensor.native_value == "Idle · 50% · solar short by 2.5 kWh"
+
+
+def test_battery_status_no_shortfall_suffix_when_battery_full(monkeypatch):
+    # battery_soc >= target and within deadband → "Battery full" row, no suffix
+    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 9.9)
+    sensor = EmsBatteryStatusSensor(
+        _make_coordinator(
+            0.0, inverter_status="idle",
+            pv_w=2000.0, grid_import_w=0.0, house_load_w=2100.0,
+            battery_soc=80.0, battery_target_soc=80.0,
+        )
+    )
+    assert sensor.native_value == "Battery full — 80% reached"
+
+
+def test_battery_status_no_shortfall_suffix_when_reason_row(monkeypatch):
+    # holding_battery is a reason row — suffix must not appear
+    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 3.0)
+    sensor = EmsBatteryStatusSensor(
+        _make_coordinator(0.0, inverter_status="holding_battery", battery_soc=60.0)
+    )
+    assert "solar short" not in sensor.native_value
+
+
+def test_battery_status_no_shortfall_suffix_when_helper_returns_none(monkeypatch):
+    # missing forecast inputs → helper returns None → no suffix
+    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: None)
+    sensor = EmsBatteryStatusSensor(
+        _make_coordinator(
+            0.0, inverter_status="idle",
+            pv_w=1000.0, grid_import_w=0.0, house_load_w=900.0,
+            battery_soc=50.0, battery_target_soc=80.0,
+        )
+    )
+    assert "solar short" not in sensor.native_value
+
+
+def test_battery_status_no_shortfall_suffix_when_solar_covers(monkeypatch):
+    # helper returns negative → no shortfall, no suffix
+    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: -0.5)
+    sensor = EmsBatteryStatusSensor(
+        _make_coordinator(
+            0.0, inverter_status="idle",
+            pv_w=1000.0, grid_import_w=0.0, house_load_w=900.0,
+            battery_soc=50.0, battery_target_soc=80.0,
+        )
+    )
+    assert "solar short" not in sensor.native_value

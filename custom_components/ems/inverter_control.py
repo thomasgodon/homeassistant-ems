@@ -81,9 +81,16 @@ def _compute(
     if inverter_strategy == "Off":
         return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
 
-    # Priority 1 — peak shaving: grid spike above cap.
-    # Battery discharges to cover the excess.
-    if grid_import_w > max_grid_import_w:
+    # Priority 1 — peak shaving: grid spike above cap, only when EV is idle.
+    # During an EV session the closed-loop EV integrator already drives
+    # grid_import → max_grid_import_w; firing peak shaving simultaneously
+    # causes double-correction that crashes ev_target to 0, stops the EV,
+    # collapses grid_import, then unwinds to max — a sawtooth oscillation.
+    if (
+        grid_import_w > max_grid_import_w
+        and commanded_ev_charge_w == 0.0
+        and ev_power_w == 0.0
+    ):
         excess_w = grid_import_w - max_grid_import_w
         return InverterDecision(
             inverter_verb=mapping.power_control_option,

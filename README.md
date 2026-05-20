@@ -88,7 +88,7 @@ Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS nev
 
 | Priority | Condition | `active_power_w` | Status |
 |---|---|---|---|
-| 1 | `grid_import_w > max_grid_import_w` | `-(pv_w + (grid_import_w − max_grid_import_w))` | `peak_shaving` |
+| 1 | `grid_import_w > max_grid_import_w` AND `commanded_ev_charge_w == 0` AND `ev_power_w == 0` | `-(pv_w + (grid_import_w − max_grid_import_w))` | `peak_shaving` |
 | 2 | EOD suppress active AND `pv_w > 0` | `0` | `holding_battery` |
 | 3 | no EV AND current hour is cheap (`prices_today[now.hour] ≤ (min+max)/2`) AND `battery_soc < battery_target_soc` (or unknown) | `0` | `holding_battery_cheap` |
 | 4 | `commanded_ev_charge_w == 0` AND `ev_power_w == 0` | not written | `idle` |
@@ -96,7 +96,7 @@ Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS nev
 
 `commanded_ev_charge_w` is the smoothed EV charge target EMS will write to the wallbox this cycle.
 
-**Peak shaving (priority 1):** when grid import spikes above the cap, the battery discharges to cover the excess. Fires regardless of EV state — the EV strategy throttles EV draw to stay below the cap, so peak shaving is a safety net. Responds within 1 second via the fast loop.
+**Peak shaving (priority 1):** when grid import spikes above the cap **and no EV session is active**, the battery discharges to cover the excess — protecting against sudden house-load events (appliances, etc.). During an EV charging session, peak shaving is suppressed: the closed-loop EV integrator already drives `grid_import → max_grid_import_w` by adjusting the EV charge target, and firing peak shaving simultaneously would double-correct (crashing the EV target to zero, stopping the EV, collapsing grid import, then winding the integrator back up to maximum — a sawtooth oscillation). Responds within 1 second via the fast loop.
 
 **EOD suppress (priority 2):** during cheap hours (identified from the hourly prices JSON) when solar forecast alone won't fill the battery to the target SoC, EMS sets `active_power_w = 0` so PV charges the battery instead of the battery discharging to cover house load. Only active during PV production. Peak shaving overrides it if a grid spike occurs.
 
@@ -327,7 +327,7 @@ Active power and EV target are cached — a service call is skipped if the value
 | `Controlling` | EV charging commanded; inverter in power-control mode, active power written |
 | `Peak shaving` | Grid import exceeded cap; battery discharging to cover excess |
 | `Holding battery` | EOD-suppress active with PV producing; discharge suppressed so PV charges battery |
-| `Holding battery (cheap hour)` | Cheap-priced hour, no EV activity, and battery below target SoC; battery held so house load comes from grid |
+| `Holding battery (cheap hour)` | Cheap-priced hour, no EV activity, and battery below target SoC; battery is held and house load is drawn from the grid |
 | `Idle` | No active condition; inverter set to its `disabled_option` |
 | `Disabled` | Inverter Control Mode is `Off`; EMS does not write to the inverter |
 | `Starting up` | Startup grace period; strategy computes but writes are suppressed |
@@ -341,13 +341,15 @@ Reason rows (1–4) override the power-balance rows whenever EMS has an explicit
 | `Starting up…` | 1 | 60-second startup grace |
 | `Discharging to limit grid import · N%` | 2 | Inverter status is `peak_shaving` |
 | `Saving solar charge for tonight · N%` | 3 | Inverter status is `holding_battery` (EOD suppress) |
-| `Holding charge — electricity is cheap now · N%` | 4 | Inverter status is `holding_battery_cheap` |
+| `Drawing from grid — electricity is cheap now · N%` | 4 | Inverter status is `holding_battery_cheap`; battery held, house load drawn from grid |
 | `Battery full — N% reached` | 5 | `battery_soc ≥ battery_target_soc` and power balance within 200 W |
 | `Charging from solar at N.N kW · N%` | 6 | `pv_w + grid_import_w − house_load_w > +200` |
 | `Powering house at N.N kW · N%` | 7 | `pv_w + grid_import_w − house_load_w < −200` |
 | `Idle · N%` | 8 | Power balance within ±200 W |
 
 SoC suffix (` · N%`) is omitted when `battery_soc` is unavailable.
+
+A `· solar short by X.X kWh` suffix is appended to rows 6–8 when the remaining solar forecast (minus forecast house load) won't fully charge the battery to `battery_target_soc`. Hidden when forecast inputs are unavailable or solar covers the gap.
 
 ---
 

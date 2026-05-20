@@ -8,6 +8,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import EmsFastLoopCoordinator
+from .strategy import solar_shortfall_kwh
 
 _INVERTER_STATUS_LABELS: dict[str, str] = {
     "controlling": "Controlling",
@@ -291,7 +292,7 @@ class EmsBatteryStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEn
         if inv.status == "holding_battery":
             return f"Saving solar charge for tonight{soc_str}"
         if inv.status == "holding_battery_cheap":
-            return f"Holding charge — electricity is cheap now{soc_str}"
+            return f"Drawing from grid — electricity is cheap now{soc_str}"
 
         # Action rows — derived from power balance
         battery_w = inp.pv_w + inp.grid_import_w - inp.house_load_w
@@ -302,13 +303,21 @@ class EmsBatteryStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEn
             and abs(battery_w) <= _BATTERY_POWER_DEADBAND_W
         ):
             return f"Battery full — {round(inp.battery_soc)}% reached"
+
+        shortfall = solar_shortfall_kwh(inp)
+        shortfall_str = (
+            f" · solar short by {shortfall:.1f} kWh"
+            if shortfall is not None and shortfall > 0.0
+            else ""
+        )
+
         if battery_w > _BATTERY_POWER_DEADBAND_W:
             kw = round(abs(battery_w) / 1000, 1)
-            return f"Charging from solar at {kw} kW{soc_str}"
+            return f"Charging from solar at {kw} kW{soc_str}{shortfall_str}"
         if battery_w < -_BATTERY_POWER_DEADBAND_W:
             kw = round(abs(battery_w) / 1000, 1)
-            return f"Powering house at {kw} kW{soc_str}"
-        return f"Idle{soc_str}"
+            return f"Powering house at {kw} kW{soc_str}{shortfall_str}"
+        return f"Idle{soc_str}{shortfall_str}"
 
     @property
     def available(self) -> bool:

@@ -112,6 +112,28 @@ def _idle(charging_state: EvChargingState) -> EvDecision:
 
 # ── EOD battery fullness helpers ──────────────────────────────────────────────
 
+def solar_shortfall_kwh(inputs: Inputs) -> float | None:
+    """Return battery_gap_kwh − effective_solar_kwh.
+
+    Positive = solar forecast falls short of filling battery to target.
+    Negative or zero = solar covers the gap (or battery already at/above target).
+    None if any required input is missing.
+    """
+    if (
+        inputs.battery_soc is None
+        or inputs.battery_capacity_kwh is None
+        or inputs.solar_forecast_remaining_kwh is None
+    ):
+        return None
+
+    battery_gap_kwh = inputs.battery_capacity_kwh * max(
+        0.0, (inputs.battery_target_soc - inputs.battery_soc) / 100.0
+    )
+    house_forecast = inputs.house_load_forecast_remaining_kwh or 0.0
+    effective_solar = inputs.solar_forecast_remaining_kwh - house_forecast
+    return battery_gap_kwh - effective_solar
+
+
 def is_eod_suppress_hour(inputs: Inputs) -> bool:
     """Return True if this hour should suppress battery discharge for EOD battery target.
 
@@ -119,33 +141,22 @@ def is_eod_suppress_hour(inputs: Inputs) -> bool:
     each hour counted as saving 1 kWh from the battery (conservative approximation).
     """
     if (
-        inputs.battery_soc is None
-        or inputs.battery_capacity_kwh is None
-        or inputs.solar_forecast_remaining_kwh is None
-        or inputs.prices_today is None
+        inputs.prices_today is None
         or len(inputs.prices_today) < 24
     ):
         return False
 
-    battery_gap_kwh = inputs.battery_capacity_kwh * max(
-        0.0, (inputs.battery_target_soc - inputs.battery_soc) / 100.0
-    )
-    if battery_gap_kwh <= 0.0:
+    shortfall = solar_shortfall_kwh(inputs)
+    if shortfall is None or shortfall <= 0.0:
         return False
 
-    house_forecast = inputs.house_load_forecast_remaining_kwh or 0.0
-    effective_solar = inputs.solar_forecast_remaining_kwh - house_forecast
-    if effective_solar >= battery_gap_kwh:
-        return False
-
-    deficit_kwh = battery_gap_kwh - effective_solar
     current_hour = inputs.now.hour
 
     # Rank remaining hours (current hour inclusive) by price, pick cheapest N
     # where N = number of hours needed to cover deficit (1 kWh assumed per hour).
     remaining = [h for h in range(current_hour, 24)]
     sorted_by_price = sorted(remaining, key=lambda h: inputs.prices_today[h])
-    n_hours = math.ceil(deficit_kwh)
+    n_hours = math.ceil(shortfall)
     cheap_hours = set(sorted_by_price[:n_hours])
 
     return current_hour in cheap_hours
@@ -153,16 +164,7 @@ def is_eod_suppress_hour(inputs: Inputs) -> bool:
 
 def _energy_optimised_allows_ev(inputs: Inputs) -> bool:
     """Allow EV charging in Energy-optimised mode only when forecast surplus exceeds battery gap."""
-    if (
-        inputs.battery_soc is None
-        or inputs.battery_capacity_kwh is None
-        or inputs.solar_forecast_remaining_kwh is None
-    ):
+    shortfall = solar_shortfall_kwh(inputs)
+    if shortfall is None:
         return False
-
-    battery_gap_kwh = inputs.battery_capacity_kwh * max(
-        0.0, (inputs.battery_target_soc - inputs.battery_soc) / 100.0
-    )
-    house_forecast = inputs.house_load_forecast_remaining_kwh or 0.0
-    effective_solar = inputs.solar_forecast_remaining_kwh - house_forecast
-    return effective_solar > battery_gap_kwh
+    return shortfall < 0.0
