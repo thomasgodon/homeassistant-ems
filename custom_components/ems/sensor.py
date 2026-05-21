@@ -8,7 +8,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import EmsFastLoopCoordinator
-from .strategy import solar_shortfall_kwh
+from .strategy import cheap_hold_rank, solar_shortfall_kwh
 
 _INVERTER_STATUS_LABELS: dict[str, str] = {
     "controlling": "Controlling",
@@ -17,7 +17,6 @@ _INVERTER_STATUS_LABELS: dict[str, str] = {
     "starting_up": "Starting up",
     "peak_shaving": "Peak shaving",
     "holding_battery": "Holding battery",
-    "holding_battery_cheap": "Holding battery (cheap hour)",
 }
 
 _BATTERY_POWER_DEADBAND_W = 200.0
@@ -36,11 +35,9 @@ _INVERTER_STATUS_REASONS: dict[str, str] = {
         "Grid import exceeded the cap. Battery is discharging to cover the excess."
     ),
     "holding_battery": (
-        "Cheap hour with PV producing. Battery discharge suppressed so PV charges the battery."
-    ),
-    "holding_battery_cheap": (
-        "Cheap-priced hour with no EV activity."
-        " Battery hold so house load comes from grid, not battery."
+        "Solar can't fill the battery today;"
+        " draining cheap grid for the house during the cheapest remaining hours"
+        " to preserve battery for the expensive evening."
     ),
 }
 
@@ -233,7 +230,13 @@ class EmsInverterStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorE
             )
         elif inv.status == "holding_battery":
             ap = 0.0
-            reason = _INVERTER_STATUS_REASONS["holding_battery"]
+            rank_info = cheap_hold_rank(inp)
+            base_reason = _INVERTER_STATUS_REASONS["holding_battery"]
+            if rank_info is not None:
+                r, n = rank_info
+                reason = base_reason + f" (this hour ranked {r} of {n} cheapest)"
+            else:
+                reason = base_reason
             formula = "active_power = 0 W (battery discharge suppressed)"
         elif inv.status == "starting_up":
             ap = -min(pv, house)
@@ -290,9 +293,11 @@ class EmsBatteryStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEn
         if inv.status == "peak_shaving":
             return f"Discharging to limit grid import{soc_str}"
         if inv.status == "holding_battery":
-            return f"Saving solar charge for tonight{soc_str}"
-        if inv.status == "holding_battery_cheap":
-            return f"Drawing from grid — electricity is cheap now{soc_str}"
+            rank_info = cheap_hold_rank(inp)
+            if rank_info is not None:
+                r, n = rank_info
+                return f"Drawing cheap grid{soc_str} ({r} of {n} cheap hours today)"
+            return f"Drawing cheap grid{soc_str}"
 
         # Action rows — derived from power balance
         battery_w = inp.pv_w + inp.grid_import_w - inp.house_load_w

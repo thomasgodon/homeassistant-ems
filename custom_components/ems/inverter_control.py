@@ -16,7 +16,6 @@ def decide(inputs: Inputs, *, commanded_ev_charge_w: float) -> InverterDecision:
         eod_suppress=strategy_module.is_eod_suppress_hour(inputs),
         max_grid_import_w=inputs.thresholds.max_grid_import_w,
         commanded_ev_charge_w=commanded_ev_charge_w,
-        cheap_for_inverter=_is_cheap_hour_for_inverter(inputs.prices_today, inputs.now.hour),
         battery_soc=inputs.battery_soc,
         battery_target_soc=inputs.battery_target_soc,
     )
@@ -33,7 +32,6 @@ def recompute(
     eod_suppress: bool = False,
     max_grid_import_w: float = 0.0,
     commanded_ev_charge_w: float = 0.0,
-    cheap_for_inverter: bool = False,
     battery_soc: float | None = None,
     battery_target_soc: float = 80.0,
 ) -> InverterDecision:
@@ -48,20 +46,12 @@ def recompute(
         eod_suppress=eod_suppress,
         max_grid_import_w=max_grid_import_w,
         commanded_ev_charge_w=commanded_ev_charge_w,
-        cheap_for_inverter=cheap_for_inverter,
         battery_soc=battery_soc,
         battery_target_soc=battery_target_soc,
     )
 
 
 # ── core logic ────────────────────────────────────────────────────────────────
-
-def _is_cheap_hour_for_inverter(prices_today: tuple[float, ...] | None, current_hour: int) -> bool:
-    if prices_today is None or len(prices_today) < 24:
-        return False
-    threshold = (min(prices_today) + max(prices_today)) / 2
-    return prices_today[current_hour] <= threshold
-
 
 def _compute(
     *,
@@ -74,7 +64,6 @@ def _compute(
     eod_suppress: bool,
     max_grid_import_w: float,
     commanded_ev_charge_w: float,
-    cheap_for_inverter: bool = False,
     battery_soc: float | None = None,
     battery_target_soc: float = 80.0,
 ) -> InverterDecision:
@@ -98,32 +87,25 @@ def _compute(
             status="peak_shaving",
         )
 
-    # Priority 2 — EOD suppress: hold battery during cheap daylight hours so
-    # PV charges the battery instead of battery discharging for house load.
-    if eod_suppress and pv_w > 0.0:
+    # Priority 2 — deficit hold: solar won't fill the battery today, so draw cheap
+    # grid for house load during the cheapest remaining hours to preserve the battery
+    # for the expensive evening.
+    # Bypass when PV alone covers the house — Self-Use handles it without EMS involvement.
+    # Bypass during EV sessions — the EV integrator already controls grid import;
+    # holding the battery simultaneously steals PV from the EV and causes grid draw.
+    if (
+        eod_suppress
+        and pv_w < house_load_w
+        and commanded_ev_charge_w == 0.0
+        and ev_power_w == 0.0
+    ):
         return InverterDecision(
             inverter_verb=mapping.power_control_option,
             active_power_w=0.0,
             status="holding_battery",
         )
 
-    # Priority 3 — cheap-hour hold: no EV activity, current hour is cheap, and battery
-    # is below target. Force active_power_w=0 to prevent battery drain; grid covers house.
-    # Skipped when battery is at/above target — no reason to grid-fill an already-full battery.
-    # When battery_soc is unknown (None), hold conservatively.
-    if (
-        commanded_ev_charge_w == 0.0
-        and ev_power_w == 0.0
-        and cheap_for_inverter
-        and (battery_soc is None or battery_soc < battery_target_soc)
-    ):
-        return InverterDecision(
-            inverter_verb=mapping.power_control_option,
-            active_power_w=0.0,
-            status="holding_battery_cheap",
-        )
-
-    # Priority 4 — idle: EMS is not commanding any charge and the EV is not
+    # Priority 3 — idle: EMS is not commanding any charge and the EV is not
     # drawing. Release inverter to its native Self-Use Mode; PV routing and
     # battery management happen autonomously without EMS involvement.
     if commanded_ev_charge_w == 0.0 and ev_power_w == 0.0:

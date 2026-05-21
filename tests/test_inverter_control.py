@@ -5,14 +5,13 @@ Priority ladder (inverter_strategy == "Control Inverter"):
                           AND ev_power_w == 0 (suppressed during EV sessions to prevent
                           double-correction with the EV integrator)
                           → verb=power_control, active_power=-(pv + excess), status=peak_shaving
-  2. EOD suppress       — eod_suppress=True AND pv>0
+  2. Deficit hold       — eod_suppress=True AND pv < house_load
+                          AND commanded_ev_charge_w == 0 AND ev_power_w == 0
+                          (skipped during EV sessions — hold would steal PV from EV)
                           → verb=power_control, active_power=0, status=holding_battery
-  3. Cheap-hour hold    — no EV AND cheap_for_inverter=True
-                          AND (battery_soc is None OR battery_soc < battery_target_soc)
-                          → verb=power_control, active_power=0, status=holding_battery_cheap
-  4. Idle               — commanded_ev_charge_w == 0 AND ev_power_w == 0
+  3. Idle               — commanded_ev_charge_w == 0 AND ev_power_w == 0
                           → verb=disabled_option, active_power=None, status=idle
-  5. Default            — commanded_ev_charge_w > 0 OR ev_power_w > 0
+  4. Default            — commanded_ev_charge_w > 0 OR ev_power_w > 0
                           → verb=power_control, active_power=-min(pv,house), status=controlling
 
 commanded_ev_charge_w is the smoothed EV target EMS will write this cycle.
@@ -53,7 +52,6 @@ def _decide(
     eod_suppress: bool = False,
     max_grid_import_w: float = 4500.0,
     commanded_ev_charge_w: float = 0.0,
-    cheap_for_inverter: bool = False,
     battery_soc: float | None = None,
     battery_target_soc: float = 80.0,
 ) -> InverterDecision:
@@ -67,7 +65,6 @@ def _decide(
         eod_suppress=eod_suppress,
         max_grid_import_w=max_grid_import_w,
         commanded_ev_charge_w=commanded_ev_charge_w,
-        cheap_for_inverter=cheap_for_inverter,
         battery_soc=battery_soc,
         battery_target_soc=battery_target_soc,
     )
@@ -322,35 +319,58 @@ def test_peak_shaving_active_power_always_negative() -> None:
     assert d.active_power_w <= 0.0
 
 
-# ── EOD suppress (holding_battery) ────────────────────────────────────────────
+# ── Deficit hold (holding_battery) ────────────────────────────────────────────
 
-def test_eod_suppress_with_pv_holds_battery() -> None:
-    """eod_suppress=True + pv>0 → active_power=0, status=holding_battery."""
-    d = _decide(pv_w=3000.0, eod_suppress=True)
+def test_deficit_hold_fires_when_pv_below_house() -> None:
+    """eod_suppress=True + pv < house_load → active_power=0, status=holding_battery."""
+    d = _decide(pv_w=1000.0, house_load_w=2000.0, eod_suppress=True)
     assert d.status == "holding_battery"
     assert d.inverter_verb == "power_control"
     assert d.active_power_w == pytest.approx(0.0)
 
 
-def test_eod_suppress_ignored_without_pv() -> None:
-    """eod_suppress but no PV (night) → idle, no write."""
-    d = _decide(pv_w=0.0, ev_power_w=0.0, eod_suppress=True)
-    assert d.status == "idle"
-
-
-def test_eod_suppress_with_ev_drawing_holds_battery() -> None:
-    """Battery hold takes priority over controlling when EOD suppress is active with PV."""
-    d = _decide(pv_w=3000.0, house_load_w=1500.0, ev_power_w=2000.0, eod_suppress=True)
+def test_deficit_hold_fires_at_night_when_pv_zero() -> None:
+    """eod_suppress + no PV but house draws at night → hold fires (pv=0 < house_load)."""
+    d = _decide(pv_w=0.0, house_load_w=2000.0, eod_suppress=True)
     assert d.status == "holding_battery"
     assert d.active_power_w == pytest.approx(0.0)
 
 
+def test_deficit_hold_bypassed_when_pv_covers_house() -> None:
+    """eod_suppress=True but pv >= house_load → Self-Use takes over, no hold."""
+    d = _decide(pv_w=3000.0, house_load_w=2000.0, eod_suppress=True)
+    assert d.status == "idle"
+
+
+def test_deficit_hold_skipped_when_ev_drawing() -> None:
+    """Deficit hold is skipped when EV is drawing — hold would steal PV from EV and cause grid draw."""
+    d = _decide(pv_w=1000.0, house_load_w=5000.0, ev_power_w=3000.0, eod_suppress=True)
+    assert d.status == "controlling"
+    assert d.active_power_w == pytest.approx(-min(1000.0, 5000.0))
+
+
+def test_deficit_hold_skipped_when_commanded_ev_charge() -> None:
+    """Deficit hold skipped on cycle 1 of EV session (commanded > 0, EV not yet drawing)."""
+    d = _decide(
+        pv_w=1000.0, house_load_w=5000.0, ev_power_w=0.0,
+        commanded_ev_charge_w=2000.0, eod_suppress=True,
+    )
+    assert d.status == "controlling"
+
+
+def test_eod_suppress_ignored_when_no_deficit() -> None:
+    """eod_suppress=False → no hold regardless of PV vs house."""
+    d = _decide(pv_w=0.0, house_load_w=2000.0, eod_suppress=False)
+    assert d.status == "idle"
+
+
 # ── Priority precedence ────────────────────────────────────────────────────────
 
-def test_priority_peak_shave_over_eod_suppress() -> None:
-    """Peak shaving beats EOD suppress when both conditions are met."""
+def test_priority_peak_shave_over_deficit_hold() -> None:
+    """Peak shaving beats deficit hold when both conditions are met."""
     d = _decide(
         pv_w=1000.0,
+        house_load_w=2000.0,
         grid_import_w=5500.0,
         eod_suppress=True,
         max_grid_import_w=4500.0,
@@ -358,141 +378,13 @@ def test_priority_peak_shave_over_eod_suppress() -> None:
     assert d.status == "peak_shaving"
 
 
-def test_priority_eod_suppress_over_idle() -> None:
-    """EOD suppress (pv>0) beats idle."""
-    d = _decide(pv_w=500.0, ev_power_w=0.0, eod_suppress=True)
+def test_priority_deficit_hold_over_idle() -> None:
+    """Deficit hold (pv < house) beats idle."""
+    d = _decide(pv_w=500.0, house_load_w=1000.0, ev_power_w=0.0, eod_suppress=True)
     assert d.status == "holding_battery"
 
 
-def test_priority_eod_suppress_over_controlling() -> None:
-    """EOD suppress beats the default controlling branch."""
-    d = _decide(pv_w=2000.0, ev_power_w=1000.0, eod_suppress=True)
+def test_priority_deficit_hold_over_controlling() -> None:
+    """Deficit hold beats the default controlling branch when EV is idle."""
+    d = _decide(pv_w=500.0, house_load_w=2000.0, ev_power_w=0.0, eod_suppress=True)
     assert d.status == "holding_battery"
-
-
-# ── Cheap-hour hold ───────────────────────────────────────────────────────────
-
-def test_cheap_hour_idle_holds_battery() -> None:
-    """Cheap hour + no EV → power_control, active_power=0, status=holding_battery_cheap."""
-    d = _decide(pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=True)
-    assert d.status == "holding_battery_cheap"
-    assert d.inverter_verb == "power_control"
-    assert d.active_power_w == pytest.approx(0.0)
-
-
-def test_expensive_hour_idle_releases_to_self_use() -> None:
-    """Expensive hour (cheap_for_inverter=False) + no EV → idle / Self-Use Mode."""
-    d = _decide(pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=False)
-    assert d.status == "idle"
-    assert d.inverter_verb == "disabled"
-    assert d.active_power_w is None
-
-
-def test_cheap_hour_ev_charging_unchanged() -> None:
-    """Cheap hour + EV drawing → cheap-hour hold does not preempt EV charging path."""
-    d = _decide(pv_w=3000.0, house_load_w=1500.0, ev_power_w=2000.0, cheap_for_inverter=True)
-    assert d.status == "controlling"
-    assert d.active_power_w == pytest.approx(-min(3000.0, 1500.0))
-
-
-def test_cheap_hour_commanded_ev_charge_unchanged() -> None:
-    """Cheap hour + commanded EV charge > 0 → controlling, not cheap hold."""
-    d = _decide(
-        pv_w=3000.0, house_load_w=1500.0, commanded_ev_charge_w=1000.0, cheap_for_inverter=True
-    )
-    assert d.status == "controlling"
-
-
-def test_peak_shaving_beats_cheap_hour_hold() -> None:
-    """Grid spike beats cheap-hour hold — peak shaving is Priority 1."""
-    d = _decide(
-        pv_w=1000.0,
-        grid_import_w=5500.0,
-        max_grid_import_w=4500.0,
-        cheap_for_inverter=True,
-    )
-    assert d.status == "peak_shaving"
-    assert d.active_power_w == pytest.approx(-2000.0)
-
-
-def test_eod_suppress_beats_cheap_hour_hold() -> None:
-    """EOD suppress (Priority 2) beats cheap-hour hold (Priority 3)."""
-    d = _decide(pv_w=3000.0, eod_suppress=True, cheap_for_inverter=True)
-    assert d.status == "holding_battery"
-
-
-def test_cheap_hour_hold_without_prices_falls_through() -> None:
-    """cheap_for_inverter=False (no prices) → idle, not cheap hold."""
-    d = _decide(pv_w=3000.0, cheap_for_inverter=False)
-    assert d.status == "idle"
-
-
-def test_cheap_hour_hold_fires_when_battery_soc_unknown() -> None:
-    """battery_soc=None + cheap hour → hold conservatively (no sensor to say it's full)."""
-    d = _decide(pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=True, battery_soc=None)
-    assert d.status == "holding_battery_cheap"
-
-
-def test_cheap_hour_hold_fires_when_battery_below_target() -> None:
-    """battery_soc < battery_target_soc + cheap hour → hold."""
-    d = _decide(
-        pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=True,
-        battery_soc=50.0, battery_target_soc=80.0,
-    )
-    assert d.status == "holding_battery_cheap"
-
-
-def test_cheap_hour_hold_skipped_when_battery_at_target() -> None:
-    """battery_soc == battery_target_soc + cheap hour → idle (battery already full)."""
-    d = _decide(
-        pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=True,
-        battery_soc=80.0, battery_target_soc=80.0,
-    )
-    assert d.status == "idle"
-    assert d.inverter_verb == "disabled"
-    assert d.active_power_w is None
-
-
-def test_cheap_hour_hold_skipped_when_battery_above_target() -> None:
-    """battery_soc > battery_target_soc + cheap hour → idle (no need to grid-fill)."""
-    d = _decide(
-        pv_w=3000.0, house_load_w=1500.0, cheap_for_inverter=True,
-        battery_soc=95.0, battery_target_soc=80.0,
-    )
-    assert d.status == "idle"
-    assert d.inverter_verb == "disabled"
-    assert d.active_power_w is None
-
-
-# ── _is_cheap_hour_for_inverter helper ───────────────────────────────────────
-
-def test_helper_none_prices_returns_false() -> None:
-    assert inverter_control_module._is_cheap_hour_for_inverter(None, 10) is False
-
-
-def test_helper_short_tuple_returns_false() -> None:
-    assert inverter_control_module._is_cheap_hour_for_inverter((1.0,) * 23, 10) is False
-
-
-def test_helper_threshold_is_midpoint() -> None:
-    """With prices 1.0×23 + 5.0, threshold=(1+5)/2=3.0; hour 23 is expensive, rest are cheap."""
-    prices = (1.0,) * 23 + (5.0,)
-    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 0) is True
-    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 22) is True
-    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 23) is False
-
-
-def test_helper_boundary_at_threshold_is_cheap() -> None:
-    """Price exactly at threshold → cheap (<=)."""
-    prices = tuple([1.0] * 12 + [5.0] * 12)
-    threshold = (1.0 + 5.0) / 2  # 3.0; price[0]=1.0≤3.0 cheap, price[12]=5.0>3.0 expensive
-    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 0) is True
-    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 12) is False
-    _ = threshold  # referenced for documentation only
-
-
-def test_helper_all_equal_prices_are_cheap() -> None:
-    """All prices equal → threshold equals price → all hours are cheap (<=)."""
-    prices = (3.0,) * 24
-    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 0) is True
-    assert inverter_control_module._is_cheap_hour_for_inverter(prices, 23) is True

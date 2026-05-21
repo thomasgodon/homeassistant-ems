@@ -89,26 +89,23 @@ Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS nev
 | Priority | Condition | `active_power_w` | Status |
 |---|---|---|---|
 | 1 | `grid_import_w > max_grid_import_w` AND `commanded_ev_charge_w == 0` AND `ev_power_w == 0` | `-(pv_w + (grid_import_w − max_grid_import_w))` | `peak_shaving` |
-| 2 | EOD suppress active AND `pv_w > 0` | `0` | `holding_battery` |
-| 3 | no EV AND current hour is cheap (`prices_today[now.hour] ≤ (min+max)/2`) AND `battery_soc < battery_target_soc` (or unknown) | `0` | `holding_battery_cheap` |
-| 4 | `commanded_ev_charge_w == 0` AND `ev_power_w == 0` | not written | `idle` |
-| 5 | otherwise (`commanded_ev_charge_w > 0` OR `ev_power_w > 0`) | `-min(pv_w, house_load_w)` | `controlling` |
+| 2 | EOD suppress active AND `pv_w < house_load_w` AND `commanded_ev_charge_w == 0` AND `ev_power_w == 0` | `0` | `holding_battery` |
+| 3 | `commanded_ev_charge_w == 0` AND `ev_power_w == 0` | not written | `idle` |
+| 4 | otherwise (`commanded_ev_charge_w > 0` OR `ev_power_w > 0`) | `-min(pv_w, house_load_w)` | `controlling` |
 
 `commanded_ev_charge_w` is the smoothed EV charge target EMS will write to the wallbox this cycle.
 
 **Peak shaving (priority 1):** when grid import spikes above the cap **and no EV session is active**, the battery discharges to cover the excess — protecting against sudden house-load events (appliances, etc.). During an EV charging session, peak shaving is suppressed: the closed-loop EV integrator already drives `grid_import → max_grid_import_w` by adjusting the EV charge target, and firing peak shaving simultaneously would double-correct (crashing the EV target to zero, stopping the EV, collapsing grid import, then winding the integrator back up to maximum — a sawtooth oscillation). Responds within 1 second via the fast loop.
 
-**EOD suppress (priority 2):** during cheap hours (identified from the hourly prices JSON) when solar forecast alone won't fill the battery to the target SoC, EMS sets `active_power_w = 0` so PV charges the battery instead of the battery discharging to cover house load. Only active during PV production. Peak shaving overrides it if a grid spike occurs.
+**Deficit hold (priority 2):** when solar forecast won't fill the battery to the target SoC by end of day, EMS selects the cheapest `ceil(deficit_kwh)` remaining hours and holds the battery during those hours (`active_power_w = 0`), so the house load is drawn from cheap grid instead of draining the battery. The battery is then available to cover the expensive evening. The hold is bypassed when PV alone covers the house load (`pv_w ≥ house_load_w`) — Self-Use Mode handles it without EMS involvement. The hold is also bypassed whenever an EV session is active (`commanded_ev_charge_w > 0` or `ev_power_w > 0`): during a session the EV integrator already manages grid import, and holding the battery simultaneously would divert PV into the battery while the EV draws from the grid. This means the hold can fire at night (when `pv_w = 0 < house_load_w` and no EV session is running). Peak shaving overrides it if a grid spike occurs.
 
-**Cheap-hour hold (priority 3):** when no EV session is active, the current hour's price is at or below the daily midpoint (`(min_price + max_price) / 2` over all 24 hours), and `battery_soc < battery_target_soc` (or battery SoC is unknown), EMS asserts Power Control with `active_power_w = 0`. Battery is held; PV charges the battery and grid covers house load at low cost. When `battery_soc ≥ battery_target_soc` the hold is skipped — the battery is already full enough and should be allowed to discharge normally in Self-Use Mode. Falls through to Self-Use Mode (priority 4) when prices are unconfigured or the current hour is expensive.
-
-**Idle (priority 4):** when EMS is not commanding an EV charge target and the EV is not drawing, EMS releases the inverter to its native Self-Use Mode. In Self-Use Mode the inverter autonomously discharges the battery to cover house load — this is the desired behaviour during expensive hours. This means expensive idle hours use battery, while cheap idle hours hold the battery (priority 3 above).
+**Idle (priority 3):** when EMS is not commanding an EV charge target and the EV is not drawing, EMS releases the inverter to its native Self-Use Mode. In Self-Use Mode the inverter autonomously discharges the battery to cover house load — this is the desired behaviour during expensive hours when the deficit hold is not active.
 
 **Controlling (default):** whenever EMS is commanding a charge target or the EV is still drawing (wind-down), EMS asserts `power_control` with `active_power_w = -min(pv_w, house_load_w)`. Power Control is asserted on cycle 1 of a session, before the first target is written. Battery is never drained for the EV (magnitude capped by `pv_w`) and never charged from AC (sign always ≤ 0).
 
 **Battery protection:** `active_power_w` is always ≤ 0. The inverter is held in `power_control` for the duration of a charging session; outside sessions, Self-Use Mode handles battery routing autonomously.
 
-**Observing physical battery flow:** the inverter status describes the EMS *control mode*, not the instantaneous battery direction. The separate `sensor.ems_battery_status` sensor surfaces this as human-readable prose, prioritising the *reason* (peak shaving, EOD hold, cheap-hour hold) before the raw power-balance action.
+**Observing physical battery flow:** the inverter status describes the EMS *control mode*, not the instantaneous battery direction. The separate `sensor.ems_battery_status` sensor surfaces this as human-readable prose, prioritising the *reason* (peak shaving, deficit hold) before the raw power-balance action.
 
 ### EOD battery fullness decision
 
@@ -116,7 +113,7 @@ Each 10-second cycle, `strategy.is_eod_suppress_hour(inputs)` determines whether
 
 1. Return `False` if any of `battery_soc`, `battery_capacity_kwh`, `solar_forecast_remaining_kwh`, or `prices_today` is `None` (feature disabled).
 2. `battery_gap_kwh = battery_capacity_kwh × max(0, (battery_target_soc − battery_soc) / 100)`.
-3. `effective_solar = solar_forecast_remaining_kwh − (house_load_forecast_remaining_kwh or 0)`.
+3. `effective_solar = max(0, solar_forecast_remaining_kwh − (house_load_forecast_remaining_kwh or 0))`. Clamped at zero so a day where solar can't cover the house load doesn't invent a phantom battery shortfall when the battery is already at target.
 4. If `effective_solar ≥ battery_gap_kwh` → solar will cover it; return `False`.
 5. `deficit_kwh = battery_gap_kwh − effective_solar`.
 6. Rank remaining hours (current hour..23) by price ascending; select cheapest `ceil(deficit_kwh)` hours.
@@ -170,8 +167,8 @@ All fields optional. When not configured the corresponding battery features are 
 |------------|------|-------------|
 | `battery_soc` | `sensor` | Current home battery state of charge (%) |
 | `battery_capacity` | `sensor` / `number` / `input_number` | Total usable battery capacity. EMS reads `unit_of_measurement` and converts automatically — use **Wh** or **kWh**. |
-| `solar_forecast_remaining` | `sensor` / `number` / `input_number` | Expected remaining solar generation today (kWh) — Solcast-style entity |
-| `house_load_forecast_remaining` | `sensor` / `number` / `input_number` | Expected remaining house load today (kWh); when absent house load is ignored in the forecast comparison |
+| `solar_forecast_remaining` | `sensor` / `number` / `input_number` | Expected remaining solar generation today. EMS reads `unit_of_measurement` and converts automatically — use **Wh** or **kWh**. |
+| `house_load_forecast_remaining` | `sensor` / `number` / `input_number` | Expected remaining house load today. EMS reads `unit_of_measurement` and converts automatically — use **Wh** or **kWh**. When absent, house load is ignored in the forecast comparison. |
 | `prices_json_entity` | `sensor` | Sensor whose **state** is a JSON list of 24 floats (€/kWh or €ct/kWh) indexed by hour 0..23. Must be exactly 24 elements. Example: `[0.08, 0.07, 0.07, 0.08, 0.10, 0.14, 0.18, 0.21, 0.20, 0.17, 0.15, 0.14, 0.13, 0.14, 0.15, 0.17, 0.21, 0.25, 0.24, 0.22, 0.19, 0.16, 0.13, 0.10]` (hour 0 = midnight, hour 23 = 23:00). Only relative ordering matters so any consistent unit works. |
 
 ### Step 4 — Grid
@@ -326,30 +323,28 @@ Active power and EV target are cached — a service call is skipped if the value
 |-------|---------|
 | `Controlling` | EV charging commanded; inverter in power-control mode, active power written |
 | `Peak shaving` | Grid import exceeded cap; battery discharging to cover excess |
-| `Holding battery` | EOD-suppress active with PV producing; discharge suppressed so PV charges battery |
-| `Holding battery (cheap hour)` | Cheap-priced hour, no EV activity, and battery below target SoC; battery is held and house load is drawn from the grid |
+| `Holding battery` | Deficit hold active; battery discharge suppressed so cheap grid covers house load |
 | `Idle` | No active condition; inverter set to its `disabled_option` |
 | `Disabled` | Inverter Control Mode is `Off`; EMS does not write to the inverter |
 | `Starting up` | Startup grace period; strategy computes but writes are suppressed |
 
 #### `sensor.ems_battery_status` messages (priority order)
 
-Reason rows (1–4) override the power-balance rows whenever EMS has an explicit control intent.
+Reason rows (1–3) override the power-balance rows whenever EMS has an explicit control intent.
 
 | Message | Priority | Condition |
 |---------|----------|-----------|
 | `Starting up…` | 1 | 60-second startup grace |
 | `Discharging to limit grid import · N%` | 2 | Inverter status is `peak_shaving` |
-| `Saving solar charge for tonight · N%` | 3 | Inverter status is `holding_battery` (EOD suppress) |
-| `Drawing from grid — electricity is cheap now · N%` | 4 | Inverter status is `holding_battery_cheap`; battery held, house load drawn from grid |
-| `Battery full — N% reached` | 5 | `battery_soc ≥ battery_target_soc` and power balance within 200 W |
-| `Charging from solar at N.N kW · N%` | 6 | `pv_w + grid_import_w − house_load_w > +200` |
-| `Powering house at N.N kW · N%` | 7 | `pv_w + grid_import_w − house_load_w < −200` |
-| `Idle · N%` | 8 | Power balance within ±200 W |
+| `Drawing cheap grid · N% (R of N cheap hours today)` | 3 | Inverter status is `holding_battery`; house load drawn from cheap grid to preserve battery |
+| `Battery full — N% reached` | 4 | `battery_soc ≥ battery_target_soc` and power balance within 200 W |
+| `Charging from solar at N.N kW · N%` | 5 | `pv_w + grid_import_w − house_load_w > +200` |
+| `Powering house at N.N kW · N%` | 6 | `pv_w + grid_import_w − house_load_w < −200` |
+| `Idle · N%` | 7 | Power balance within ±200 W |
 
-SoC suffix (` · N%`) is omitted when `battery_soc` is unavailable.
+SoC suffix (` · N%`) is omitted when `battery_soc` is unavailable. The `(R of N cheap hours today)` rank suffix is omitted when price data is unavailable.
 
-A `· solar short by X.X kWh` suffix is appended to rows 6–8 when the remaining solar forecast (minus forecast house load) won't fully charge the battery to `battery_target_soc`. Hidden when forecast inputs are unavailable or solar covers the gap.
+A `· solar short by X.X kWh` suffix is appended to rows 5–7 when the remaining solar forecast (minus forecast house load) won't fully charge the battery to `battery_target_soc`. Hidden when forecast inputs are unavailable or solar covers the gap.
 
 ---
 

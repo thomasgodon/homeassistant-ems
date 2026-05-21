@@ -130,36 +130,42 @@ def solar_shortfall_kwh(inputs: Inputs) -> float | None:
         0.0, (inputs.battery_target_soc - inputs.battery_soc) / 100.0
     )
     house_forecast = inputs.house_load_forecast_remaining_kwh or 0.0
-    effective_solar = inputs.solar_forecast_remaining_kwh - house_forecast
+    effective_solar = max(0.0, inputs.solar_forecast_remaining_kwh - house_forecast)
     return battery_gap_kwh - effective_solar
 
 
-def is_eod_suppress_hour(inputs: Inputs) -> bool:
-    """Return True if this hour should suppress battery discharge for EOD battery target.
+def _cheap_hold_hours(inputs: Inputs) -> list[int] | None:
+    """Return the cheapest remaining hours needed to cover the solar deficit, sorted by price.
 
-    Selects the cheapest remaining daylight hours needed to cover the forecast deficit,
-    each hour counted as saving 1 kWh from the battery (conservative approximation).
+    Each hour is assumed to save 1 kWh from the battery (conservative approximation).
+    Returns None when hold logic doesn't apply (missing data or no deficit).
     """
-    if (
-        inputs.prices_today is None
-        or len(inputs.prices_today) < 24
-    ):
-        return False
-
+    if inputs.prices_today is None or len(inputs.prices_today) < 24:
+        return None
     shortfall = solar_shortfall_kwh(inputs)
     if shortfall is None or shortfall <= 0.0:
-        return False
-
+        return None
     current_hour = inputs.now.hour
-
-    # Rank remaining hours (current hour inclusive) by price, pick cheapest N
-    # where N = number of hours needed to cover deficit (1 kWh assumed per hour).
-    remaining = [h for h in range(current_hour, 24)]
+    remaining = list(range(current_hour, 24))
     sorted_by_price = sorted(remaining, key=lambda h: inputs.prices_today[h])
-    n_hours = math.ceil(shortfall)
-    cheap_hours = set(sorted_by_price[:n_hours])
+    return sorted_by_price[: math.ceil(shortfall)]
 
-    return current_hour in cheap_hours
+
+def is_eod_suppress_hour(inputs: Inputs) -> bool:
+    """Return True if this hour should suppress battery discharge for EOD battery target."""
+    hours = _cheap_hold_hours(inputs)
+    return hours is not None and inputs.now.hour in set(hours)
+
+
+def cheap_hold_rank(inputs: Inputs) -> tuple[int, int] | None:
+    """Return (1-based rank, total) if the current hour is in the cheap-hold set, else None.
+
+    Rank 1 = cheapest hour in the set.
+    """
+    hours = _cheap_hold_hours(inputs)
+    if hours is None or inputs.now.hour not in set(hours):
+        return None
+    return (hours.index(inputs.now.hour) + 1, len(hours))
 
 
 def _energy_optimised_allows_ev(inputs: Inputs) -> bool:

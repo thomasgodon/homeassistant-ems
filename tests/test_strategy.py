@@ -708,3 +708,80 @@ def test_solar_shortfall_kwh_negative_when_battery_at_target() -> None:
         solar_forecast_remaining_kwh=5.0,
     )
     assert strategy_module.solar_shortfall_kwh(inp) == pytest.approx(-5.0)
+
+
+def test_solar_shortfall_clamps_effective_solar_at_zero() -> None:
+    # solar=1 kWh, house_forecast=4 kWh → effective_solar unclamped would be -3.
+    # battery_gap=0 (soc=98 >= target=80). Without clamp: shortfall = 0 - (-3) = 3 (WRONG).
+    # With clamp: effective_solar=max(0,-3)=0, shortfall = 0 - 0 = 0.
+    inp = _eod_inputs(
+        battery_soc=98.0,
+        battery_capacity_kwh=10.0,
+        battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=1.0,
+        house_load_forecast_remaining_kwh=4.0,
+    )
+    shortfall = strategy_module.solar_shortfall_kwh(inp)
+    assert shortfall is not None
+    assert shortfall <= 0.0
+
+
+def test_eod_suppress_disabled_when_battery_above_target_with_solar_short() -> None:
+    # Regression: battery at 98%, target 80%, solar < house forecast.
+    # Before the clamp fix, negative effective_solar made shortfall positive → hold fired.
+    inp = _eod_inputs(
+        now=_BASE_NOW,  # hour=12
+        battery_soc=98.0,
+        battery_capacity_kwh=10.0,
+        battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=1.0,
+        house_load_forecast_remaining_kwh=4.0,
+        prices_today=_PRICES_24,
+    )
+    assert strategy_module.is_eod_suppress_hour(inp) is False
+
+
+# ── cheap_hold_rank ───────────────────────────────────────────────────────────
+
+def test_cheap_hold_rank_returns_none_when_no_prices() -> None:
+    inp = _eod_inputs(
+        battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=0.0,
+    )
+    assert strategy_module.cheap_hold_rank(inp) is None
+
+
+def test_cheap_hold_rank_returns_none_when_no_deficit() -> None:
+    inp = _eod_inputs(
+        battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=10.0,  # solar covers gap → shortfall ≤ 0
+        prices_today=_PRICES_24,
+    )
+    assert strategy_module.cheap_hold_rank(inp) is None
+
+
+def test_cheap_hold_rank_returns_position_when_in_set() -> None:
+    # hour=12, gap=3 kWh, solar=0 → deficit=3 → cheapest 3 hours of [12..23]
+    # _PRICES_24 = (0,1,...,23): hours 12,13,14 are cheapest remaining → hour 12 = rank 1 of 3
+    inp = _eod_inputs(
+        now=_BASE_NOW,  # hour=12
+        battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=0.0,
+        prices_today=_PRICES_24,
+    )
+    result = strategy_module.cheap_hold_rank(inp)
+    assert result == (1, 3)
+
+
+def test_cheap_hold_rank_returns_none_when_outside_set() -> None:
+    # hour=22, gap=0.1 kWh → ceil(0.1)=1 cheap hour needed
+    # prices_cheap_early: hour 0 is most expensive, hour 23 is cheapest
+    # cheapest 1 hour of [22,23] is hour 23 → hour 22 is NOT in set
+    prices_cheap_early = tuple(23.0 - float(i) for i in range(24))
+    inp = _eod_inputs(
+        now=datetime.datetime(2026, 4, 27, 22, 0, 0, tzinfo=datetime.UTC),
+        battery_soc=79.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=0.0,
+        prices_today=prices_cheap_early,
+    )
+    assert strategy_module.cheap_hold_rank(inp) is None

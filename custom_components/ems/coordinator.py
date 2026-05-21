@@ -197,10 +197,10 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         battery_target_soc = _read_number(
             hass, "number.ems_battery_target_soc", DEFAULT_BATTERY_TARGET_SOC
         )
-        solar_forecast_remaining_kwh = _read_float_optional(
+        solar_forecast_remaining_kwh = _read_kwh_optional(
             hass, data.get(CONF_SOLAR_FORECAST_REMAINING)
         )
-        house_load_forecast_remaining_kwh = _read_float_optional(
+        house_load_forecast_remaining_kwh = _read_kwh_optional(
             hass, data.get(CONF_HOUSE_LOAD_FORECAST_REMAINING)
         )
         prices_today = _read_prices_json(hass, data.get(CONF_PRICES_JSON_ENTITY))
@@ -284,9 +284,6 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         )
         eod_suppress = strategy_module.is_eod_suppress_hour(fast_inputs_for_eod)
         energy_optimised_allowed = strategy_module._energy_optimised_allows_ev(fast_inputs_for_eod)
-        cheap_for_inverter = inverter_control_module._is_cheap_hour_for_inverter(
-            prior_inputs.prices_today, fast_inputs_for_eod.now.hour
-        )
 
         ev_fast = strategy_module.recompute(
             pv_w=pv_w,
@@ -335,7 +332,6 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             eod_suppress=eod_suppress,
             max_grid_import_w=prior_inputs.thresholds.max_grid_import_w,
             commanded_ev_charge_w=ev_fast.ev_charge_power_w,
-            cheap_for_inverter=cheap_for_inverter,
             battery_soc=prior_inputs.battery_soc,
             battery_target_soc=prior_inputs.battery_target_soc,
         )

@@ -286,7 +286,7 @@ def test_inverter_status_options_cover_all_states():
     sensor = EmsInverterStatusSensor(_make_coordinator(0.0))
     assert set(sensor.options) == {
         "Controlling", "Idle", "Disabled", "Starting up", "Peak shaving",
-        "Holding battery", "Holding battery (cheap hour)",
+        "Holding battery",
     }
 
 
@@ -363,18 +363,28 @@ def test_battery_status_peak_shaving_without_soc():
     assert sensor.native_value == "Discharging to limit grid import"
 
 
-def test_battery_status_holding_battery_eod():
+def test_battery_status_holding_battery_with_rank(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.cheap_hold_rank", lambda _: (1, 3))
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(0.0, inverter_status="holding_battery", battery_soc=60.0)
     )
-    assert sensor.native_value == "Saving solar charge for tonight · 60%"
+    assert sensor.native_value == "Drawing cheap grid · 60% (1 of 3 cheap hours today)"
 
 
-def test_battery_status_holding_battery_cheap():
+def test_battery_status_holding_battery_no_rank(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.cheap_hold_rank", lambda _: None)
     sensor = EmsBatteryStatusSensor(
-        _make_coordinator(0.0, inverter_status="holding_battery_cheap", battery_soc=45.0)
+        _make_coordinator(0.0, inverter_status="holding_battery", battery_soc=60.0)
     )
-    assert sensor.native_value == "Drawing from grid — electricity is cheap now · 45%"
+    assert sensor.native_value == "Drawing cheap grid · 60%"
+
+
+def test_battery_status_holding_battery_no_soc(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.cheap_hold_rank", lambda _: (2, 4))
+    sensor = EmsBatteryStatusSensor(
+        _make_coordinator(0.0, inverter_status="holding_battery", battery_soc=None)
+    )
+    assert sensor.native_value == "Drawing cheap grid (2 of 4 cheap hours today)"
 
 
 def test_battery_status_full():
