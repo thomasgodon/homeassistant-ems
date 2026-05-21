@@ -307,6 +307,14 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         if ev_strategy == "Off":
             self._ema_ev_w = None
             self._ema_active_w = None
+        elif ev_fast.strategy != "ev_charging":
+            # Strategy returned an idle decision (EV unplugged, outside cheap hours,
+            # target SoC reached, etc.). Snap the EMA to exactly 0.0 instead of
+            # smoothly decaying — the decay underflows to a denormalized double
+            # that fails the commanded_ev_charge_w == 0.0 check in inverter_control,
+            # keeping the inverter stuck in "controlling" indefinitely.
+            self._ema_ev_w = 0.0
+            ev_fast = replace(ev_fast, ev_charge_power_w=0.0)
         else:
             ev_alpha = _EV_SMOOTHING_ALPHA.get(
                 _read_select_state(self.hass, "select.ems_ev_smoothing", "Fast"), 0.3

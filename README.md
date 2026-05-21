@@ -93,7 +93,7 @@ Controlled by `select.ems_inverter_control_mode`. When set to **`Off`**, EMS nev
 | 3 | `commanded_ev_charge_w == 0` AND `ev_power_w == 0` | not written | `idle` |
 | 4 | otherwise (`commanded_ev_charge_w > 0` OR `ev_power_w > 0`) | `-min(pv_w, house_load_w)` | `controlling` |
 
-`commanded_ev_charge_w` is the smoothed EV charge target EMS will write to the wallbox this cycle.
+`commanded_ev_charge_w` is the EMA-smoothed EV charge target EMS will write to the wallbox this cycle. When strategy returns any idle decision (EV unplugged, outside cheap hours, target SoC reached, etc.), the EMA snaps to exactly `0.0` immediately — this ensures row 3 fires reliably and active-power writes stop as soon as the EV is no longer charging.
 
 **Peak shaving (priority 1):** when grid import spikes above the cap **and no EV session is active**, the battery discharges to cover the excess — protecting against sudden house-load events (appliances, etc.). During an EV charging session, peak shaving is suppressed: the closed-loop EV integrator already drives `grid_import → max_grid_import_w` by adjusting the EV charge target, and firing peak shaving simultaneously would double-correct (crashing the EV target to zero, stopping the EV, collapsing grid import, then winding the integrator back up to maximum — a sawtooth oscillation). Responds within 1 second via the fast loop.
 

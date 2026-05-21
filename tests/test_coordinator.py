@@ -639,6 +639,36 @@ async def test_fast_loop_off_mode_bypasses_ema_and_resets_state():
 
 
 @pytest.mark.asyncio
+async def test_fast_loop_idle_strategy_snaps_ema_to_zero():
+    """Regression: EV-target EMA decaying toward 0 underflows to a denormalized float
+    (~2.47e-323) rather than exactly 0.0, causing commanded_ev_charge_w == 0.0 to fail
+    in inverter_control._compute and keeping the inverter stuck in 'controlling'.
+    When strategy returns any idle decision, the EMA must snap to exactly 0.0 so the
+    idle branch fires and active_power is not written.
+    """
+    idle_ev = EvDecision(
+        strategy="ev_idle", ev_charge_power_w=0.0, charging_state="ev_not_connected"
+    )
+    idle_inv = InverterDecision(inverter_verb="disabled", active_power_w=None, status="idle")
+
+    coord = _make_fast_coordinator(_EV_STATES)
+    coord._state.last_result = _make_ladder_result()
+    coord._ema_ev_w = 2.47e-323  # simulates denormalized residual after long decay
+
+    with patch(_RECOMPUTE_EV, return_value=idle_ev), \
+         patch(_RECOMPUTE_INV, return_value=idle_inv), \
+         patch(_DT_UTIL) as mock_dt:
+        mock_dt.now.return_value = _NOW
+        await coord._async_update_data()
+
+    assert coord._ema_ev_w == 0.0
+    written_ev: EvDecision = coord._controller.write_fast.call_args[0][0]
+    written_inv: InverterDecision = coord._controller.write_fast.call_args[0][1]
+    assert written_ev.ev_charge_power_w == 0.0
+    assert written_inv.active_power_w is None
+
+
+@pytest.mark.asyncio
 async def test_fast_loop_inverter_off_mode_no_active_power_ema():
     """When inverter_strategy=Off, active_power EMA state is cleared and active_power is None."""
     ev = EvDecision(strategy="ev_charging", ev_charge_power_w=2000.0, charging_state="charging")

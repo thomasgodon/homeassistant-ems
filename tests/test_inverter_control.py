@@ -343,7 +343,7 @@ def test_deficit_hold_bypassed_when_pv_covers_house() -> None:
 
 
 def test_deficit_hold_skipped_when_ev_drawing() -> None:
-    """Deficit hold is skipped when EV is drawing — hold would steal PV from EV and cause grid draw."""
+    """Deficit hold is skipped when EV is drawing — would steal PV from EV and cause grid draw."""
     d = _decide(pv_w=1000.0, house_load_w=5000.0, ev_power_w=3000.0, eod_suppress=True)
     assert d.status == "controlling"
     assert d.active_power_w == pytest.approx(-min(1000.0, 5000.0))
