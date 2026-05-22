@@ -135,13 +135,21 @@ def _register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
         except Exception as exc:
             return {"error": str(exc)}
 
+        from . import inverter_control as inverter_control_module
         from . import strategy as strategy_module
-        decision = strategy_module.decide(inputs)
+
+        ev_decision = strategy_module.decide(inputs)
+        inverter_decision = inverter_control_module.decide(
+            inputs, commanded_ev_charge_w=ev_decision.ev_charge_power_w
+        )
 
         return {
-            "strategy": decision.strategy,
-            "active_power_w": decision.active_power_w,
-            "ev_charge_power_w": decision.ev_charge_power_w,
+            "strategy": ev_decision.strategy,
+            "ev_charge_power_w": ev_decision.ev_charge_power_w,
+            "charging_state": ev_decision.charging_state,
+            "inverter_verb": inverter_decision.inverter_verb,
+            "active_power_w": inverter_decision.active_power_w,
+            "inverter_status": inverter_decision.status,
             "computed_at": inputs.now.isoformat(),
         }
 

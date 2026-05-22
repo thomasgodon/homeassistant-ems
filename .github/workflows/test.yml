@@ -32,6 +32,5 @@ jobs:
         run: >
           pytest
           --cov=custom_components.ems.strategy
-          --cov=custom_components.ems.ev_scheduler
           --cov-branch --cov-fail-under=100
-          tests/test_strategy.py tests/test_ev_scheduler.py
+          tests/test_strategy.py

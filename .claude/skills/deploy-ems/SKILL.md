@@ -10,6 +10,15 @@ allowed-tools: PowerShell
 
 Copy the `custom_components/ems/` tree from the repo into `/config/custom_components/ems/` on the Home Assistant instance, then restart HA and verify the integration loaded without errors.
 
+## Configuration
+
+Set these environment variables before running (do not commit values — store them in your private `~/.claude/CLAUDE.md`):
+
+| Variable | Description |
+|---|---|
+| `$env:EMS_HA_HOST` | Hostname or IP of the HA instance |
+| `$env:EMS_HA_USER` | SSH user on the HA instance (typically `root`) |
+
 ## Workflow
 
 ### 1. Verify source
@@ -39,11 +48,11 @@ This step runs before the remote wipe, so a test failure leaves the previously-d
 
 ### 3. Resolve connection details
 
-Defaults (from the `home-assistant-manager` skill):
+Connection details (from environment variables — see Configuration section above):
 
-| Setting | Default |
+| Setting | Value |
 |---|---|
-| SSH host | `root@192.168.0.12` |
+| SSH host | `$env:EMS_HA_USER@$env:EMS_HA_HOST` |
 | Remote path | `/config/custom_components/` |
 
 Override only if the user specified a different host or path in their request.
@@ -51,7 +60,7 @@ Override only if the user specified a different host or path in their request.
 ### 4. Wipe remote integration directory
 
 ```powershell
-ssh root@192.168.0.12 "rm -rf /config/custom_components/ems"
+ssh $env:EMS_HA_USER@$env:EMS_HA_HOST "rm -rf /config/custom_components/ems"
 ```
 
 This matches HACS update behavior — clean replace ensures no stale `.py`, `.pyc`, or `__pycache__/` entries survive from a previous deploy.
@@ -59,7 +68,7 @@ This matches HACS update behavior — clean replace ensures no stale `.py`, `.py
 ### 5. Copy source tree
 
 ```powershell
-scp -r custom_components/ems root@192.168.0.12:/config/custom_components/
+scp -r custom_components/ems $env:EMS_HA_USER@$env:EMS_HA_HOST:/config/custom_components/
 ```
 
 Check exit code. If non-zero, abort and report:
@@ -69,7 +78,7 @@ Check exit code. If non-zero, abort and report:
 ### 6. Validate configuration
 
 ```powershell
-ssh root@192.168.0.12 "ha core check"
+ssh $env:EMS_HA_USER@$env:EMS_HA_HOST "ha core check"
 ```
 
 If exit code is non-zero, **abort before restarting**. Surface the full stderr. The previous version remains running.
@@ -79,7 +88,7 @@ If exit code is non-zero, **abort before restarting**. Surface the full stderr. 
 ### 7. Restart Home Assistant
 
 ```powershell
-ssh root@192.168.0.12 "ha core restart"
+ssh $env:EMS_HA_USER@$env:EMS_HA_HOST "ha core restart"
 ```
 
 Custom integrations require a full restart — they cannot be reloaded.
@@ -92,7 +101,7 @@ Poll `ha core info` until the supervisor responds, with a 180s cap. Fail the dep
 $deadline = (Get-Date).AddSeconds(180)
 do {
   Start-Sleep -Seconds 3
-  ssh root@192.168.0.12 "ha core info" *> $null
+  ssh $env:EMS_HA_USER@$env:EMS_HA_HOST "ha core info" *> $null
   $ready = ($LASTEXITCODE -eq 0)
 } until ($ready -or (Get-Date) -gt $deadline)
 if (-not $ready) { throw "Home Assistant did not come back up within 180s after restart" }
@@ -103,11 +112,11 @@ if (-not $ready) { throw "Home Assistant did not come back up within 180s after 
 Run both in sequence:
 
 ```powershell
-ssh root@192.168.0.12 "ha core logs | grep -i 'ems' | tail -30"
+ssh $env:EMS_HA_USER@$env:EMS_HA_HOST "ha core logs | grep -i 'ems' | tail -30"
 ```
 
 ```powershell
-ssh root@192.168.0.12 "ha core logs | grep -iE 'error|traceback' | tail -20"
+ssh $env:EMS_HA_USER@$env:EMS_HA_HOST "ha core logs | grep -iE 'error|traceback' | tail -20"
 ```
 
 Scan output for lines mentioning `custom_components.ems` or `homeassistant.components.ems`. Surface any ERROR or traceback lines.

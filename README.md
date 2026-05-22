@@ -1,5 +1,9 @@
 <p align="center"><img src="brand/logo.png" alt="EMS" height="96"></p>
 
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/thomasgodon/homeassistant-ems/actions/workflows/test.yml/badge.svg)](https://github.com/thomasgodon/homeassistant-ems/actions/workflows/test.yml)
+
 # EMS — Energy Management System
 
 A brand-agnostic Home Assistant custom integration for **EV charging and battery management**. It decides how many watts your EV should charge at every second using solar surplus and available grid headroom, enforces a maximum grid import cap, prevents battery power from flowing to the EV, shaves grid import peaks with battery discharge, and steers the home battery toward a target SoC by end of day.
@@ -366,4 +370,4 @@ pytest tests/test_strategy.py `
 python -m ruff check custom_components/ems tests  # Lint
 ```
 
-CI runs `hassfest` via GitHub Actions (`.github/workflows/validate.yml`).
+CI runs lint + tests (`.github/workflows/test.yml`) and `hassfest` (`.github/workflows/validate.yml`) via GitHub Actions.

@@ -40,8 +40,6 @@ omit = [
     "custom_components/ems/number.py",
     "custom_components/ems/select.py",
     "custom_components/ems/sensor.py",
-    "custom_components/ems/switch.py",
-    "custom_components/ems/time.py",
 ]
 
 [tool.coverage.run]
@@ -54,6 +52,4 @@ omit = [
     "custom_components/ems/number.py",
     "custom_components/ems/select.py",
     "custom_components/ems/sensor.py",
-    "custom_components/ems/switch.py",
-    "custom_components/ems/time.py",
 ]
