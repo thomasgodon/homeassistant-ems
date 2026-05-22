@@ -785,3 +785,102 @@ def test_cheap_hold_rank_returns_none_when_outside_set() -> None:
         prices_today=prices_cheap_early,
     )
     assert strategy_module.cheap_hold_rank(inp) is None
+
+
+# ── should_plug_in_now ────────────────────────────────────────────────────────
+
+# Prices ascending hour 0..23: hour 0 cheapest, hour 23 most expensive.
+_PRICES_ASCENDING = tuple(float(i) for i in range(24))
+# Prices descending: hour 0 most expensive, hour 23 cheapest.
+_PRICES_DESCENDING = tuple(23.0 - float(i) for i in range(24))
+
+
+def _hint_inputs(builder, **overrides) -> Inputs:
+    return builder.build(
+        is_cheap_hour=overrides.pop("is_cheap_hour", False),
+        ev_plugged=overrides.pop("ev_plugged", False),
+        **overrides,
+    )
+
+
+class TestShouldAdviseEvCharge:
+    def test_returns_false_when_ev_plugged(self, builder) -> None:
+        inp = _hint_inputs(builder, ev_plugged=True, is_cheap_hour=True)
+        assert strategy_module.should_advise_ev_charge(inp) is False
+
+    def test_returns_true_when_is_cheap_hour(self, builder) -> None:
+        inp = _hint_inputs(builder, is_cheap_hour=True)
+        assert strategy_module.should_advise_ev_charge(inp) is True
+
+    def test_returns_false_when_no_prices_and_not_cheap_hour(self, builder) -> None:
+        inp = _hint_inputs(builder, is_cheap_hour=False, prices_today=None)
+        assert strategy_module.should_advise_ev_charge(inp) is False
+
+    def test_returns_true_when_current_hour_in_cheapest_n(self, builder) -> None:
+        # hour 12, ascending prices → hours 12..23 remain; cheapest 4 are 12,13,14,15
+        thresholds = Thresholds(
+            max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=1400.0,
+            ev_charge_advised_cheap_hours=4,
+        )
+        inp = _hint_inputs(
+            builder,
+            now=datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC),
+            prices_today=_PRICES_ASCENDING,
+            thresholds=thresholds,
+        )
+        assert strategy_module.should_advise_ev_charge(inp) is True
+
+    def test_returns_false_when_current_hour_outside_cheapest_n(self, builder) -> None:
+        # hour 12, descending prices (hour 0=23.0, hour 23=0.0) → hours 12..23 remain
+        # cheapest 4 of remaining are hours 20,21,22,23 (prices 3,2,1,0)
+        # hour 12 has price 11.0, NOT in the cheapest 4
+        thresholds = Thresholds(
+            max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=1400.0,
+            ev_charge_advised_cheap_hours=4,
+        )
+        inp = _hint_inputs(
+            builder,
+            now=datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC),
+            prices_today=_PRICES_DESCENDING,
+            thresholds=thresholds,
+        )
+        assert strategy_module.should_advise_ev_charge(inp) is False
+
+    def test_returns_true_with_n1_cheapest_remaining(self, builder) -> None:
+        # hour 22, descending prices → hours 22,23 remain; cheapest 1 = hour 23
+        # hour 22 is NOT the cheapest 1 when prices descend
+        # use ascending: cheapest 1 of [22,23] is hour 22
+        thresholds = Thresholds(
+            max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=1400.0,
+            ev_charge_advised_cheap_hours=1,
+        )
+        inp = _hint_inputs(
+            builder,
+            now=datetime.datetime(2026, 4, 27, 22, 0, 0, tzinfo=datetime.UTC),
+            prices_today=_PRICES_ASCENDING,
+            thresholds=thresholds,
+        )
+        assert strategy_module.should_advise_ev_charge(inp) is True
+
+    def test_is_cheap_hour_takes_priority_over_rank(self, builder) -> None:
+        # Even without prices, is_cheap_hour=True fires the hint
+        thresholds = Thresholds(
+            max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=1400.0,
+            ev_charge_advised_cheap_hours=1,
+        )
+        inp = _hint_inputs(
+            builder,
+            is_cheap_hour=True,
+            prices_today=None,
+            thresholds=thresholds,
+        )
+        assert strategy_module.should_advise_ev_charge(inp) is True
+
+    def test_ev_plugged_overrides_cheap_hour(self, builder) -> None:
+        inp = _hint_inputs(
+            builder,
+            ev_plugged=True,
+            is_cheap_hour=True,
+            prices_today=_PRICES_ASCENDING,
+        )
+        assert strategy_module.should_advise_ev_charge(inp) is False

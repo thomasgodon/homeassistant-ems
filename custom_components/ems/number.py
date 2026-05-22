@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import DOMAIN
+from .const import DEFAULT_EV_CHARGE_ADVISED_CHEAP_HOURS, DOMAIN
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,16 @@ _NUMBERS: tuple[EmsNumberDescription, ...] = (
         native_step=1,
         default_value=80,
         icon="mdi:battery-charging-80",
+    ),
+    EmsNumberDescription(
+        key="ems_ev_charge_advised_cheap_hours",
+        name="EMS EV Charge Advised Cheap Hours",
+        native_unit_of_measurement="h",
+        native_min_value=1,
+        native_max_value=12,
+        native_step=1,
+        default_value=DEFAULT_EV_CHARGE_ADVISED_CHEAP_HOURS,
+        icon="mdi:clock-outline",
     ),
 )
 

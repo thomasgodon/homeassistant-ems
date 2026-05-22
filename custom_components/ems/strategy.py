@@ -168,6 +168,24 @@ def cheap_hold_rank(inputs: Inputs) -> tuple[int, int] | None:
     return (hours.index(inputs.now.hour) + 1, len(hours))
 
 
+def should_advise_ev_charge(inputs: Inputs) -> bool:
+    """Return True when EV is not plugged in but it's a good time to charge by price.
+
+    Mode-agnostic: fires regardless of ev_strategy setting.
+    """
+    if inputs.ev_plugged:
+        return False
+    if inputs.is_cheap_hour:
+        return True
+    if inputs.prices_today is None or len(inputs.prices_today) < 24:
+        return False
+    n = max(1, inputs.thresholds.ev_charge_advised_cheap_hours)
+    current_hour = inputs.now.hour
+    remaining = list(range(current_hour, 24))
+    cheapest = set(sorted(remaining, key=lambda h: inputs.prices_today[h])[:n])
+    return current_hour in cheapest
+
+
 def _energy_optimised_allows_ev(inputs: Inputs) -> bool:
     """Allow EV charging in Energy-optimised mode only when forecast surplus exceeds battery gap."""
     shortfall = solar_shortfall_kwh(inputs)

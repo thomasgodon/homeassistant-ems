@@ -33,6 +33,7 @@ Works with any inverter that exposes a `select` entity for operating modes and a
   - [Select entities](#select-entities)
   - [Number entities](#number-entities-numberems_)
   - [Sensor entities](#sensor-entities-sensorems_)
+  - [Binary sensor entities](#binary-sensor-entities-binary_sensorems_)
 - [Development](#development)
 
 ---
@@ -203,7 +204,7 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | `solar_forecast_remaining_kwh` | `solar_forecast_remaining` entity (kWh) or `None` |
 | `house_load_forecast_remaining_kwh` | `house_load_forecast_remaining` entity (kWh) or `None` |
 | `prices_today` | `prices_json_entity` state parsed as 24-float tuple, or `None` |
-| `thresholds` | `max_grid_import_w` entity; `ev_target_soc` entity; `ev_min_charge_w` from `number.ems_ev_min_charge_w`; `max_ev_charge_w` entity |
+| `thresholds` | `max_grid_import_w` entity; `ev_target_soc` entity; `ev_min_charge_w` from `number.ems_ev_min_charge_w`; `max_ev_charge_w` entity; `ev_charge_advised_cheap_hours` from `number.ems_ev_charge_advised_cheap_hours` |
 | `mapping` | Inverter select + active power + EV charge target entities from config |
 
 The 1-second fast loop re-reads: `pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`, `ev_plugged`, `ev_strategy`, `inverter_strategy`, `is_cheap_hour`; battery fields are carried from the last slow-loop result.
@@ -221,6 +222,7 @@ Every configured input entity and every `select.ems_*` / `number.ems_*` entity i
 | Config flow Step 2 (entity selector) | `ev_max_charge_w` | — | W | Physical maximum output of the EV charger; uncapped when not set |
 | `number.ems_ev_min_charge_w` | — | 1400 | W | Minimum EV charge target; below this the EV stays idle |
 | `number.ems_battery_target_soc` | — | 80 | % | Target home battery SoC to reach by end of day; used by EOD suppress and `Energy-optimised` EV gate |
+| `number.ems_ev_charge_advised_cheap_hours` | — | 4 | h | How many of the cheapest remaining hours of today count as "good time to charge" for the plug-in hint sensor |
 
 ---
 
@@ -291,6 +293,12 @@ Active power and EV target are cached — a service call is skipped if the value
 |--------|---------|------|-------------|
 | `number.ems_ev_min_charge_w` | 1400 | W | Minimum EV charge power; below this the EV stays idle |
 | `number.ems_battery_target_soc` | 80 | % | Target home battery SoC to reach by end of day |
+
+### Binary sensor entities (`binary_sensor.ems_*`)
+
+| Entity | On when | Off when | Description |
+|--------|---------|----------|-------------|
+| `binary_sensor.ems_ev_charge_advised` | EV is **not** plugged in AND (`price_signal_entity` is `on` OR current hour is among the cheapest `ems_ev_charge_advised_cheap_hours` of remaining hours today) | EV is plugged in, or it's not a cheap hour | Mode-agnostic advisory — fires regardless of `select.ems_ev_charging_mode`. Requires `price_signal_entity` or `prices_json_entity` to evaluate cheapness; if both are absent the sensor stays off. |
 
 ### Sensor entities (`sensor.ems_*`)
 

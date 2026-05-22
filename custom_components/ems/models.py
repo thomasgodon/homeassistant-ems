@@ -20,6 +20,7 @@ class Thresholds:
     ev_target_soc: float
     ev_min_charge_w: float
     max_ev_charge_w: float | None = None
+    ev_charge_advised_cheap_hours: int = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,3 +84,4 @@ class LadderResult:
     inverter_decision: InverterDecision
     inputs: Inputs
     computed_at: datetime
+    should_advise_ev_charge: bool = False

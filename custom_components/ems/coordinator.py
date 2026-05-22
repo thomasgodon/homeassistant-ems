@@ -34,6 +34,7 @@ from .const import (
     CONF_PV_POWER,
     CONF_SOLAR_FORECAST_REMAINING,
     DEFAULT_BATTERY_TARGET_SOC,
+    DEFAULT_EV_CHARGE_ADVISED_CHEAP_HOURS,
     DEFAULT_EV_TARGET_SOC,
     DEFAULT_MAX_GRID_IMPORT_W,
     DOMAIN,
@@ -92,6 +93,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             "select.ems_ev_smoothing",
             "number.ems_ev_min_charge_w",
             "number.ems_battery_target_soc",
+            "number.ems_ev_charge_advised_cheap_hours",
         ]
         data = self._entry.data
         for key in (
@@ -145,6 +147,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             inverter_decision=inverter_decision,
             inputs=inputs,
             computed_at=inputs.now,
+            should_advise_ev_charge=strategy_module.should_advise_ev_charge(inputs),
         )
         self._state.last_result = result
         return result
@@ -176,6 +179,10 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             ),
             ev_min_charge_w=_read_number(hass, "number.ems_ev_min_charge_w", 1400.0),
             max_ev_charge_w=_read_float_optional(hass, data.get(CONF_EV_MAX_CHARGE_W)),
+            ev_charge_advised_cheap_hours=int(_read_number(
+                hass, "number.ems_ev_charge_advised_cheap_hours",
+                DEFAULT_EV_CHARGE_ADVISED_CHEAP_HOURS,
+            )),
         )
 
         mapping = VerbMapping(
@@ -366,6 +373,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             inverter_decision=inverter_fast,
             inputs=fast_inputs,
             computed_at=now,
+            should_advise_ev_charge=strategy_module.should_advise_ev_charge(fast_inputs),
         )
         self._state.last_result = result
         return result
