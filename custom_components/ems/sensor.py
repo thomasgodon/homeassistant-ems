@@ -163,8 +163,6 @@ class EmsEvStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity)
             return "EV battery full"
         if state == "outside_cheap_hours":
             return "Waiting for cheap hours"
-        if state == "awaiting_solar_surplus":
-            return "Waiting for solar surplus"
         if state == "not_enough_power":
             return "Not enough surplus to charge"
         # state == "charging"

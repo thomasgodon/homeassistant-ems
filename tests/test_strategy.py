@@ -44,7 +44,7 @@ def recompute(builder, **overrides) -> EvDecision:
         is_cheap_hour=inp.is_cheap_hour,
         thresholds=inp.thresholds,
         last_ev_target_w=inp.last_ev_target_w,
-        energy_optimised_allowed=strategy_module._energy_optimised_allows_ev(inp),
+        energy_optimised_scale=strategy_module._energy_optimised_scale(inp),
     )
 
 
@@ -567,35 +567,84 @@ def test_eod_suppress_house_load_forecast_reduces_surplus(builder) -> None:
 
 # ── Energy-optimised EV mode ──────────────────────────────────────────────────
 
-def test_energy_optimised_blocked_when_no_forecast(builder) -> None:
-    d = decide(builder, ev_plugged=True, ev_strategy="Energy-optimised", grid_import_w=-2000.0)
-    assert d.strategy == "ev_idle"
-    assert d.charging_state == "awaiting_solar_surplus"
+# _energy_optimised_scale branch coverage
+
+def test_energy_optimised_scale_missing_battery_soc() -> None:
+    inp = _eod_inputs(battery_capacity_kwh=10.0, solar_forecast_remaining_kwh=5.0)
+    assert strategy_module._energy_optimised_scale(inp) == pytest.approx(1.0)
 
 
-def test_energy_optimised_blocked_when_solar_insufficient(builder) -> None:
-    # gap=3 kWh, solar=2 kWh → not enough
+def test_energy_optimised_scale_missing_capacity() -> None:
+    inp = _eod_inputs(battery_soc=50.0, solar_forecast_remaining_kwh=5.0)
+    assert strategy_module._energy_optimised_scale(inp) == pytest.approx(1.0)
+
+
+def test_energy_optimised_scale_missing_solar_forecast() -> None:
+    inp = _eod_inputs(battery_soc=50.0, battery_capacity_kwh=10.0)
+    assert strategy_module._energy_optimised_scale(inp) == pytest.approx(1.0)
+
+
+def test_energy_optimised_scale_battery_at_target() -> None:
+    # battery_soc == battery_target_soc → already at target → scale=1
+    inp = _eod_inputs(battery_soc=80.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+                      solar_forecast_remaining_kwh=0.0)
+    assert strategy_module._energy_optimised_scale(inp) == pytest.approx(1.0)
+
+
+def test_energy_optimised_scale_battery_above_target() -> None:
+    # battery_soc > target → scale=1
+    inp = _eod_inputs(battery_soc=90.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+                      solar_forecast_remaining_kwh=0.0)
+    assert strategy_module._energy_optimised_scale(inp) == pytest.approx(1.0)
+
+
+def test_energy_optimised_scale_prediction_meets_target() -> None:
+    # battery_soc=50, capacity=10, target=80, solar=3 kWh → predicted=50+30=80 → scale=1
+    inp = _eod_inputs(battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+                      solar_forecast_remaining_kwh=3.0)
+    assert strategy_module._energy_optimised_scale(inp) == pytest.approx(1.0)
+
+
+def test_energy_optimised_scale_prediction_exceeds_target() -> None:
+    # battery_soc=50, capacity=10, target=80, solar=10 kWh → predicted=50+100=150 → scale=1
+    inp = _eod_inputs(battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+                      solar_forecast_remaining_kwh=10.0)
+    assert strategy_module._energy_optimised_scale(inp) == pytest.approx(1.0)
+
+
+def test_energy_optimised_scale_prediction_below_current_soc() -> None:
+    # battery_soc=50, solar-house=-0.5 kWh net → predicted=50-5=45 < floor=50 → scale=0
+    inp = _eod_inputs(battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+                      solar_forecast_remaining_kwh=0.5, house_load_forecast_remaining_kwh=1.0)
+    assert strategy_module._energy_optimised_scale(inp) == pytest.approx(0.0)
+
+
+def test_energy_optimised_scale_partial() -> None:
+    # battery_soc=50, capacity=10, target=80, net_solar=1.5 kWh → predicted=50+15=65
+    # scale = (65-50)/(80-50) = 15/30 = 0.5
+    inp = _eod_inputs(battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+                      solar_forecast_remaining_kwh=1.5)
+    assert strategy_module._energy_optimised_scale(inp) == pytest.approx(0.5)
+
+
+def test_energy_optimised_scale_house_forecast_reduces_net_solar() -> None:
+    # battery_soc=50, capacity=10, target=80, solar=3, house=1.5 → net_solar=1.5 → predicted=65
+    # scale = (65-50)/(80-50) = 0.5
+    inp = _eod_inputs(battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+                      solar_forecast_remaining_kwh=3.0, house_load_forecast_remaining_kwh=1.5)
+    assert strategy_module._energy_optimised_scale(inp) == pytest.approx(0.5)
+
+
+# decide() integration tests for Energy-optimised
+
+def test_energy_optimised_charges_full_surplus_when_battery_will_fill(builder) -> None:
+    # scale=1 (solar=10 → predicted>>target); pv=4000, house_non_ev=2000 → surplus=2000
     d = decide(
         builder,
         ev_plugged=True,
         ev_strategy="Energy-optimised",
-        grid_import_w=-2000.0,
-        battery_soc=50.0,
-        battery_capacity_kwh=10.0,
-        battery_target_soc=80.0,
-        solar_forecast_remaining_kwh=2.0,
-    )
-    assert d.strategy == "ev_idle"
-    assert d.charging_state == "awaiting_solar_surplus"
-
-
-def test_energy_optimised_charges_when_surplus_exists(builder) -> None:
-    # gap=3, solar=10 → surplus=7 > 3 → allowed; grid_import=-2000 → EV target=2000
-    d = decide(
-        builder,
-        ev_plugged=True,
-        ev_strategy="Energy-optimised",
-        grid_import_w=-2000.0,
+        pv_w=4000.0,
+        house_load_w=2000.0,
         ev_power_w=0.0,
         battery_soc=50.0,
         battery_capacity_kwh=10.0,
@@ -605,43 +654,125 @@ def test_energy_optimised_charges_when_surplus_exists(builder) -> None:
     )
     assert d.strategy == "ev_charging"
     assert d.charging_state == "charging"
-    # formula: max(0, 0 - (-2000) + 0) = 2000
     assert d.ev_charge_power_w == pytest.approx(2000.0)
 
 
-def test_energy_optimised_drives_to_zero_grid_import(builder) -> None:
-    # When grid is importing (not exporting), target drops
-    # grid_import=500, last_target=0 → ev_target = max(0, 0-500+0) = 0 → not_enough_power
+def test_energy_optimised_charges_full_surplus_when_no_forecast_data(builder) -> None:
+    # scale=1 (missing data); pv=4000, house=2000 → surplus=2000
     d = decide(
         builder,
         ev_plugged=True,
         ev_strategy="Energy-optimised",
-        grid_import_w=500.0,
+        pv_w=4000.0,
+        house_load_w=2000.0,
         ev_power_w=0.0,
-        last_ev_target_w=None,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.charging_state == "charging"
+    assert d.ev_charge_power_w == pytest.approx(2000.0)
+
+
+def test_energy_optimised_blocks_ev_when_battery_wont_advance(builder) -> None:
+    # scale=0 (net_solar negative → predicted < floor); surplus=3000 but 3000*0=0 → not_enough_power
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        pv_w=5000.0,
+        house_load_w=2000.0,
+        ev_power_w=0.0,
         battery_soc=50.0,
         battery_capacity_kwh=10.0,
         battery_target_soc=80.0,
-        solar_forecast_remaining_kwh=10.0,
+        solar_forecast_remaining_kwh=0.5,
+        house_load_forecast_remaining_kwh=1.0,
         thresholds=_THRESHOLDS,
     )
     assert d.strategy == "ev_idle"
     assert d.charging_state == "not_enough_power"
 
 
-def test_energy_optimised_respects_min_charge_floor(builder) -> None:
-    # grid_import=-1000 → ev_target=1000, below 1400 min → not_enough_power
+def test_energy_optimised_partial_scale_reduces_target(builder) -> None:
+    # scale=0.5; pv=5000, house_non_ev=1000 → surplus=4000, target=4000*0.5=2000
     d = decide(
         builder,
         ev_plugged=True,
         ev_strategy="Energy-optimised",
-        grid_import_w=-1000.0,
+        pv_w=5000.0,
+        house_load_w=1000.0,
         ev_power_w=0.0,
-        last_ev_target_w=None,
         battery_soc=50.0,
         battery_capacity_kwh=10.0,
         battery_target_soc=80.0,
-        solar_forecast_remaining_kwh=10.0,
+        solar_forecast_remaining_kwh=1.5,  # net_solar=1.5 → predicted=65 → scale=0.5
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.charging_state == "charging"
+    assert d.ev_charge_power_w == pytest.approx(2000.0)
+
+
+def test_energy_optimised_ev_draw_excluded_from_surplus(builder) -> None:
+    # house_load=5000, ev_power=3000 → house_non_ev=2000; pv=5000 → surplus=3000; scale=1
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        pv_w=5000.0,
+        house_load_w=5000.0,
+        ev_power_w=3000.0,
+        battery_soc=80.0,  # at target → scale=1
+        battery_capacity_kwh=10.0,
+        battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=5.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.ev_charge_power_w == pytest.approx(3000.0)
+
+
+def test_energy_optimised_respects_min_charge_floor(builder) -> None:
+    # surplus=1000 (below ev_min_charge_w=1400) → not_enough_power
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        pv_w=2500.0,
+        house_load_w=1500.0,
+        ev_power_w=0.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "not_enough_power"
+
+
+def test_energy_optimised_respects_max_charge_cap(builder) -> None:
+    # surplus=10000, max_ev_charge_w=7400 → capped at 7400
+    capped = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0,
+                        ev_min_charge_w=1400.0, max_ev_charge_w=7400.0)
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        pv_w=12000.0,
+        house_load_w=2000.0,
+        ev_power_w=0.0,
+        thresholds=capped,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.ev_charge_power_w == pytest.approx(7400.0)
+
+
+def test_energy_optimised_no_surplus_when_pv_below_house_load(builder) -> None:
+    # pv=500 < house_non_ev=1500 → surplus=0 → not_enough_power
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Energy-optimised",
+        pv_w=500.0,
+        house_load_w=1500.0,
+        ev_power_w=0.0,
         thresholds=_THRESHOLDS,
     )
     assert d.strategy == "ev_idle"

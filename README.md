@@ -65,25 +65,47 @@ Always runs once the integration is active. Re-reads `pv_w`, `house_load_w`, `ev
 
 ```
 house_non_ev   = max(0, house_load_w − ev_power_w)
-feedback_w     = last_ev_target_w  ← last value commanded to wallbox (ev_power_w on cold start)
-grid_target    = 0  (Energy-optimised) or max_grid_import_w (all other modes)
-ev_target_w    = max(0, grid_target − grid_import_w + feedback_w)
-ev_target_w    = min(ev_target_w, max_ev_charge_w)  ← if max_ev_charge_w is configured
 
 # Hard gates → idle (evaluated in priority order)
 if ev_strategy == "Off":                                                    → charging_disabled
 if not ev_plugged:                                                          → ev_not_connected
 if ev_strategy == "Price-optimised" and not is_cheap_hour:                  → outside_cheap_hours
-if ev_strategy == "Energy-optimised" and not forecast_surplus > battery_gap:→ awaiting_solar_surplus
 if ev_soc is not None and ev_soc ≥ ev_target_soc:                          → target_soc_reached
 
+# EV target
+if ev_strategy == "Energy-optimised":
+    surplus_w    = max(0, pv_w − house_non_ev)         ← PV minus non-EV house load
+    scale        = _energy_optimised_scale(inputs)     ← 0..1 battery priority factor (see below)
+    ev_target_w  = surplus_w × scale
+else:  # Grid-optimised / Price-optimised — integrating closed-loop
+    feedback_w   = last_ev_target_w  ← last commanded target (ev_power_w on cold start)
+    ev_target_w  = max(0, max_grid_import_w − grid_import_w + feedback_w)
+
+ev_target_w    = min(ev_target_w, max_ev_charge_w)  ← if max_ev_charge_w is configured
+
 # Below minimum → idle
-elif ev_target_w < ev_min_charge_w:                                         → not_enough_power
+if ev_target_w < ev_min_charge_w:                                           → not_enough_power
 
 # Charge
 else:
     → ev_charging (ev_target_w)
 ```
+
+**Battery priority scale (Energy-optimised only):**
+
+```
+net_solar_kwh      = solar_forecast_remaining_kwh − (house_load_forecast_remaining_kwh or 0)
+predicted_end_soc  = battery_soc + net_solar_kwh × 100 / battery_capacity_kwh
+floor              = battery_soc   ← scale = 0 when forecast won't advance SoC at all
+target             = battery_target_soc
+
+scale = clamp((predicted_end_soc − floor) / (target − floor), 0, 1)
+      = 1.0  when battery already at/above target, OR prediction meets/exceeds target
+      = 0.0  when prediction will not advance SoC from its current level
+      = 1.0  when any required input is missing (best-effort full surplus)
+```
+
+The `active_power_w` write (`−min(pv_w, house_load_w)`) naturally ensures whatever fraction of the surplus is not given to the EV stays available for the battery via the inverter's own self-use logic.
 
 Integrating closed-loop: using the last commanded target (`last_ev_target_w`) as feedback makes the formula a pure integrator on grid error — it keeps nudging the EV target until `grid_import_w = grid_target`, regardless of wallbox current quantisation or ramp lag.
 
@@ -225,7 +247,7 @@ Every configured input entity and every `select.ems_*` / `number.ems_*` entity i
 | Config flow Step 2 (entity selector) | `ev_target_soc` | 80 | % | EV SoC at which charging stops |
 | Config flow Step 2 (entity selector) | `ev_max_charge_w` | — | W | Physical maximum output of the EV charger; uncapped when not set |
 | `number.ems_ev_min_charge_w` | — | 1400 | W | Minimum EV charge target; below this the EV stays idle |
-| `number.ems_battery_target_soc` | — | 80 | % | Target home battery SoC to reach by end of day; used by EOD suppress and `Energy-optimised` EV gate |
+| `number.ems_battery_target_soc` | — | 80 | % | Target home battery SoC to reach by end of day; used by EOD suppress logic and the `Energy-optimised` battery priority scale |
 | `number.ems_ev_charge_advised_cheap_hours` | — | 4 | h | How many of the cheapest remaining hours of today count as "good time to charge" for the plug-in hint sensor |
 
 ---
@@ -243,10 +265,10 @@ Every configured input entity and every `select.ems_*` / `number.ems_*` entity i
 |------|----------------|---------|
 | `Grid-optimised` | Grid headroom available (`max_grid_import_w − grid_import_w + last_target > ev_min_charge_w`) | Best-effort (may not reach target SoC) |
 | `Price-optimised` | Same as Grid-optimised AND `price_signal_entity` is `on` | Best-effort |
-| `Energy-optimised` | Solar forecast surplus exceeds battery gap AND real-time export (grid is exporting) ≥ 1400 W | **Prioritised** — EV only charges when surplus above battery need |
+| `Energy-optimised` | Instantaneous PV surplus (`pv − non_ev_load`) × battery priority scale ≥ `ev_min_charge_w` | **Prioritised** — scale 0..1 based on predicted EOD battery SoC |
 | `Off` | Never | Best-effort (EV writes 0 W to charger) |
 
-`Energy-optimised` drives the closed loop with `grid_target = 0` W (absorbs solar export only). EV charges during peak solar hours and stops automatically as forecast surplus narrows to cover the battery gap.
+`Energy-optimised` charges from real-time PV surplus scaled by how confident EMS is that the home battery will reach `battery_target_soc` by end of day. If the forecast predicts the battery will fill comfortably, the EV gets 100% of surplus. As the gap widens (less solar remaining, more battery needed), the scale reduces linearly down to 0. When any forecast/battery input is missing, scale defaults to 1.0 (full surplus).
 
 ---
 

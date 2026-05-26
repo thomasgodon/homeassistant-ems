@@ -60,7 +60,6 @@ EvChargingState = Literal[
     "not_enough_power",
     "starting_up",
     "outside_cheap_hours",
-    "awaiting_solar_surplus",
 ]
 
 

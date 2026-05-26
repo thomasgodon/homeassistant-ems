@@ -176,11 +176,6 @@ def test_ev_status_outside_cheap_hours():
     assert sensor.native_value == "Waiting for cheap hours"
 
 
-def test_ev_status_awaiting_solar_surplus():
-    sensor = EmsEvStatusSensor(_make_coordinator(0.0, charging_state="awaiting_solar_surplus"))
-    assert sensor.native_value == "Waiting for solar surplus"
-
-
 def test_ev_status_not_enough_power():
     sensor = EmsEvStatusSensor(_make_coordinator(0.0, charging_state="not_enough_power"))
     assert sensor.native_value == "Not enough surplus to charge"

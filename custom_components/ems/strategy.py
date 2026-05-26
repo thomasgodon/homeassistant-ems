@@ -9,6 +9,7 @@ def decide(inputs: Inputs) -> EvDecision:
     """Compute EV charge target. Never raises."""
     house_non_ev = max(0.0, inputs.house_load_w - inputs.ev_power_w)
     return _make_decision(
+        pv_w=inputs.pv_w,
         house_non_ev=house_non_ev,
         grid_import_w=inputs.grid_import_w,
         ev_power_w=inputs.ev_power_w,
@@ -18,7 +19,7 @@ def decide(inputs: Inputs) -> EvDecision:
         ev_strategy=inputs.ev_strategy,
         is_cheap_hour=inputs.is_cheap_hour,
         thresholds=inputs.thresholds,
-        energy_optimised_allowed=_energy_optimised_allows_ev(inputs),
+        energy_optimised_scale=_energy_optimised_scale(inputs),
     )
 
 
@@ -34,11 +35,12 @@ def recompute(
     is_cheap_hour: bool,
     thresholds: Thresholds,
     last_ev_target_w: float | None = None,
-    energy_optimised_allowed: bool = False,
+    energy_optimised_scale: float = 1.0,
 ) -> EvDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
     house_non_ev = max(0.0, house_load_w - ev_power_w)
     return _make_decision(
+        pv_w=pv_w,
         house_non_ev=house_non_ev,
         grid_import_w=grid_import_w,
         ev_power_w=ev_power_w,
@@ -48,7 +50,7 @@ def recompute(
         ev_strategy=ev_strategy,
         is_cheap_hour=is_cheap_hour,
         thresholds=thresholds,
-        energy_optimised_allowed=energy_optimised_allowed,
+        energy_optimised_scale=energy_optimised_scale,
     )
 
 
@@ -56,6 +58,7 @@ def recompute(
 
 def _make_decision(
     *,
+    pv_w: float,
     house_non_ev: float,
     grid_import_w: float,
     ev_power_w: float,
@@ -65,7 +68,7 @@ def _make_decision(
     ev_strategy: str,
     is_cheap_hour: bool,
     thresholds: Thresholds,
-    energy_optimised_allowed: bool,
+    energy_optimised_scale: float,
 ) -> EvDecision:
     # Hard gates — evaluated in priority order
     if ev_strategy == "Off":
@@ -74,20 +77,21 @@ def _make_decision(
         return _idle("ev_not_connected")
     if ev_strategy == "Price-optimised" and not is_cheap_hour:
         return _idle("outside_cheap_hours")
-    if ev_strategy == "Energy-optimised" and not energy_optimised_allowed:
-        return _idle("awaiting_solar_surplus")
     if ev_soc is not None and ev_soc >= thresholds.ev_target_soc:
         return _idle("target_soc_reached")
 
-    # Integrating closed-loop: use last commanded target as feedback so the
-    # integrator drives total grid import to the target regardless of
-    # wallbox quantisation or ramp lag. Falls back to ev_power_w on cold start.
-    feedback_w = last_ev_target_w if last_ev_target_w is not None else ev_power_w
-
-    # Energy-optimised drives toward zero grid import (absorbs solar export only).
-    # Grid-optimised and Price-optimised drive toward max_grid_import_w.
-    grid_target_w = 0.0 if ev_strategy == "Energy-optimised" else thresholds.max_grid_import_w
-    ev_target_w = max(0.0, grid_target_w - grid_import_w + feedback_w)
+    if ev_strategy == "Energy-optimised":
+        # Charge from instantaneous PV surplus scaled by predicted EOD battery success.
+        # surplus = PV minus non-EV house load; EV's own draw is excluded so the EV
+        # can absorb the headroom it creates as it ramps up.
+        surplus_w = max(0.0, pv_w - house_non_ev)
+        ev_target_w = surplus_w * energy_optimised_scale
+    else:
+        # Integrating closed-loop: drives total grid import to max_grid_import_w.
+        # Uses last commanded target as feedback to eliminate static error from
+        # wallbox quantisation or ramp lag. Falls back to ev_power_w on cold start.
+        feedback_w = last_ev_target_w if last_ev_target_w is not None else ev_power_w
+        ev_target_w = max(0.0, thresholds.max_grid_import_w - grid_import_w + feedback_w)
 
     if thresholds.max_ev_charge_w is not None:
         ev_target_w = min(ev_target_w, thresholds.max_ev_charge_w)
@@ -186,9 +190,31 @@ def should_advise_ev_charge(inputs: Inputs) -> bool:
     return current_hour in cheapest
 
 
-def _energy_optimised_allows_ev(inputs: Inputs) -> bool:
-    """Allow EV charging in Energy-optimised mode only when forecast surplus exceeds battery gap."""
-    shortfall = solar_shortfall_kwh(inputs)
-    if shortfall is None:
-        return False
-    return shortfall < 0.0
+def _energy_optimised_scale(inputs: Inputs) -> float:
+    """Return 0..1 scale for EV surplus based on predicted EOD battery SoC.
+
+    1.0 = full surplus to EV (battery will fill, or data is missing).
+    0.0 = no EV charging (battery won't advance from current SoC).
+    Intermediate values when battery is predicted to partially fill.
+    """
+    if (
+        inputs.battery_soc is None
+        or inputs.battery_capacity_kwh is None
+        or inputs.solar_forecast_remaining_kwh is None
+    ):
+        return 1.0
+
+    house_forecast = inputs.house_load_forecast_remaining_kwh or 0.0
+    net_solar_kwh = inputs.solar_forecast_remaining_kwh - house_forecast
+    predicted_end_soc = inputs.battery_soc + net_solar_kwh * 100.0 / inputs.battery_capacity_kwh
+
+    floor = inputs.battery_soc
+    target = inputs.battery_target_soc
+
+    if target <= floor:
+        return 1.0  # battery already at/above target
+    if predicted_end_soc >= target:
+        return 1.0
+    if predicted_end_soc <= floor:
+        return 0.0
+    return (predicted_end_soc - floor) / (target - floor)
