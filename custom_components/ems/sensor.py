@@ -8,43 +8,15 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import EmsFastLoopCoordinator
-from .strategy import cheap_hold_rank, solar_shortfall_kwh
-
-_INVERTER_STATUS_LABELS: dict[str, str] = {
-    "controlling": "Controlling",
-    "idle": "Idle",
-    "disabled": "Disabled",
-    "starting_up": "Starting up",
-    "peak_shaving": "Peak shaving",
-    "holding_battery": "Holding battery",
-    "battery_priority": "Battery priority",
-}
-
-_BATTERY_POWER_DEADBAND_W = 200.0
-
-_INVERTER_STATUS_REASONS: dict[str, str] = {
-    "idle": (
-        "No EV draw. Inverter set to its disabled option;"
-        " EMS leaves inverter to manage itself."
-    ),
-    "disabled": "Inverter Control Mode is set to Off. EMS does not write to the inverter.",
-    "starting_up": (
-        "Startup grace (60 s). Strategy still computing,"
-        " but writes are suppressed while sensors stabilize."
-    ),
-    "peak_shaving": (
-        "Grid import exceeded the cap. Battery is discharging to cover the excess."
-    ),
-    "holding_battery": (
-        "Solar can't fill the battery today;"
-        " draining cheap grid for the house during the cheapest remaining hours"
-        " to preserve battery for the expensive evening."
-    ),
-    "battery_priority": (
-        "Solar forecast won't fill the battery today and EV is charging —"
-        " directing PV to house load and battery; EV is supplied from the grid."
-    ),
-}
+from .strategy import (
+    battery_focus,
+    cheap_hold_rank,
+    expected_eod_soc,
+    grid_focus,
+    pv_destinations,
+    pv_focus,
+    solar_shortfall_kwh,
+)
 
 
 async def async_setup_entry(
@@ -58,8 +30,9 @@ async def async_setup_entry(
         EmsEvCurrentSensor(coordinator),
         EmsEvStatusSensor(coordinator),
         EmsInverterActivePowerSensor(coordinator),
-        EmsInverterStatusSensor(coordinator),
         EmsBatteryStatusSensor(coordinator),
+        EmsPvStatusSensor(coordinator),
+        EmsGridStatusSensor(coordinator),
     ])
 
 
@@ -183,102 +156,8 @@ class EmsEvStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity)
         return self.coordinator.data is not None
 
 
-class EmsInverterStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
-    _attr_unique_id = "ems_inverter_status"
-    _attr_name = "EMS Inverter Status"
-    _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = list(_INVERTER_STATUS_LABELS.values())
-
-    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
-        super().__init__(coordinator)
-
-    @property
-    def device_info(self):
-        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
-
-    @property
-    def native_value(self) -> str | None:
-        if self.coordinator.data is None:
-            return None
-        return _INVERTER_STATUS_LABELS.get(self.coordinator.data.inverter_decision.status)
-
-    @property
-    def extra_state_attributes(self) -> dict | None:
-        if self.coordinator.data is None:
-            return None
-        data = self.coordinator.data
-        inv = data.inverter_decision
-        inp = data.inputs
-        pv = inp.pv_w
-        house = inp.house_load_w
-        ev = inp.ev_power_w
-        house_non_ev = max(0.0, house - ev)
-
-        if inv.status == "controlling":
-            ap = inv.active_power_w
-            reason = (
-                f"EV drawing {ev:.0f} W. Inverter set to power-control mode;"
-                " directing PV to AC (battery neither charged nor drained)."
-            )
-            formula = (
-                f"active_power = -min(pv_w, house_load_w)"
-                f" = -min({pv:.0f}, {house:.0f}) = {ap:.0f} W"
-            )
-        elif inv.status == "battery_priority":
-            ap = inv.active_power_w
-            reason = _INVERTER_STATUS_REASONS["battery_priority"]
-            formula = (
-                f"active_power = -max(0, house_load_w - ev_power_w)"
-                f" = -max(0, {house:.0f} - {ev:.0f}) = {ap:.0f} W"
-            )
-        elif inv.status == "peak_shaving":
-            ap = inv.active_power_w
-            grid = inp.grid_import_w
-            max_imp = inp.thresholds.max_grid_import_w
-            reason = _INVERTER_STATUS_REASONS["peak_shaving"]
-            formula = (
-                f"active_power = -(pv_w + (grid_import_w - max_grid_import_w))"
-                f" = -({pv:.0f} + ({grid:.0f} - {max_imp:.0f})) = {ap:.0f} W"
-            )
-        elif inv.status == "holding_battery":
-            ap = 0.0
-            rank_info = cheap_hold_rank(inp)
-            base_reason = _INVERTER_STATUS_REASONS["holding_battery"]
-            if rank_info is not None:
-                r, n = rank_info
-                reason = base_reason + f" (this hour ranked {r} of {n} cheapest)"
-            else:
-                reason = base_reason
-            formula = "active_power = 0 W (battery discharge suppressed)"
-        elif inv.status == "starting_up":
-            ap = -min(pv, house)
-            reason = _INVERTER_STATUS_REASONS["starting_up"]
-            formula = (
-                f"Would write: -min({pv:.0f}, {house:.0f})"
-                f" = {ap:.0f} W (suppressed during startup)"
-            )
-        else:
-            ap = None
-            reason = _INVERTER_STATUS_REASONS.get(inv.status, "")
-            formula = "Not writing active_power."
-
-        return {
-            "reason": reason,
-            "formula": formula,
-            "pv_w": pv,
-            "house_load_w": house,
-            "ev_power_w": ev,
-            "house_non_ev_w": house_non_ev,
-            "active_power_w": ap,
-        }
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data is not None
-
-
 class EmsBatteryStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
-    """Prose status for the battery — Reason > Action > SoC priority ordering."""
+    """Prose status for the battery — focus, EOD forecast, shortfall."""
 
     _attr_unique_id = "ems_battery_status"
     _attr_name = "EMS Battery Status"
@@ -297,44 +176,197 @@ class EmsBatteryStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEn
         inv = self.coordinator.data.inverter_decision
         inp = self.coordinator.data.inputs
 
-        soc_str = f" · {round(inp.battery_soc)}%" if inp.battery_soc is not None else ""
+        focus = battery_focus(inp, inv)
+        battery_w = inp.pv_w + inp.grid_import_w - inp.house_load_w
+        soc = inp.battery_soc
+        eod = expected_eod_soc(inp)
+        shortfall = solar_shortfall_kwh(inp)
 
-        # Reason rows — override power-balance when EMS has an explicit intent
-        if inv.status == "starting_up":
+        soc_str = f" · {round(soc)}%" if soc is not None else ""
+        if eod is not None and shortfall is not None:
+            eod_str = (
+                f" · forecast EOD {round(eod)}%, short {shortfall:.1f} kWh"
+                if shortfall > 0.0
+                else f" · forecast EOD {round(eod)}%"
+            )
+        else:
+            eod_str = ""
+
+        if focus == "starting_up":
             return "Starting up…"
-        if inv.status == "peak_shaving":
+        if focus == "unavailable":
+            return "Battery SoC unavailable"
+        if focus == "peak_shaving":
             return f"Discharging to limit grid import{soc_str}"
-        if inv.status == "holding_battery":
+        if focus == "holding_for_evening":
             rank_info = cheap_hold_rank(inp)
             if rank_info is not None:
                 r, n = rank_info
-                return f"Drawing cheap grid{soc_str} ({r} of {n} cheap hours today)"
-            return f"Drawing cheap grid{soc_str}"
+                return f"Holding for evening{soc_str} ({r} of {n} cheap hours today){eod_str}"
+            return f"Holding for evening{soc_str}{eod_str}"
+        if focus == "prioritising_battery":
+            return f"Prioritising battery — EV charging from grid{soc_str}{eod_str}"
+        if focus == "full":
+            return f"Battery full — {round(soc)}% reached"
+        if focus == "charging_from_solar":
+            kw = round(abs(battery_w) / 1000, 1)
+            return f"Charging from solar at {kw} kW{soc_str}{eod_str}"
+        if focus == "discharging_to_house":
+            kw = round(abs(battery_w) / 1000, 1)
+            return f"Powering house at {kw} kW{soc_str}{eod_str}"
+        return f"Idle{soc_str}{eod_str}"
 
-        # Action rows — derived from power balance
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        if self.coordinator.data is None:
+            return None
+        inv = self.coordinator.data.inverter_decision
+        inp = self.coordinator.data.inputs
         battery_w = inp.pv_w + inp.grid_import_w - inp.house_load_w
-
-        if (
-            inp.battery_soc is not None
-            and inp.battery_soc >= inp.battery_target_soc
-            and abs(battery_w) <= _BATTERY_POWER_DEADBAND_W
-        ):
-            return f"Battery full — {round(inp.battery_soc)}% reached"
-
+        eod = expected_eod_soc(inp)
         shortfall = solar_shortfall_kwh(inp)
-        shortfall_str = (
-            f" · solar short by {shortfall:.1f} kWh"
-            if shortfall is not None and shortfall > 0.0
-            else ""
-        )
+        focus = battery_focus(inp, inv)
+        will_reach = (eod >= inp.battery_target_soc) if eod is not None else None
+        return {
+            "focus": focus,
+            "power_w": battery_w,
+            "soc": inp.battery_soc,
+            "target_soc": inp.battery_target_soc,
+            "expected_eod_soc": eod,
+            "shortfall_kwh": shortfall,
+            "will_reach_target": will_reach,
+        }
 
-        if battery_w > _BATTERY_POWER_DEADBAND_W:
-            kw = round(abs(battery_w) / 1000, 1)
-            return f"Charging from solar at {kw} kW{soc_str}{shortfall_str}"
-        if battery_w < -_BATTERY_POWER_DEADBAND_W:
-            kw = round(abs(battery_w) / 1000, 1)
-            return f"Powering house at {kw} kW{soc_str}{shortfall_str}"
-        return f"Idle{soc_str}{shortfall_str}"
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None
+
+
+class EmsPvStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    """Prose status for solar PV — where it's going and why."""
+
+    _attr_unique_id = "ems_pv_status"
+    _attr_name = "EMS PV Status"
+
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data is None:
+            return None
+        inv = self.coordinator.data.inverter_decision
+        inp = self.coordinator.data.inputs
+
+        dest = pv_destinations(inp, inv)
+        focus = pv_focus(dest, inv)
+        pv_kw = round(inp.pv_w / 1000, 1)
+
+        if focus == "starting_up":
+            return "Starting up…"
+        if focus == "no_production":
+            return "No solar production"
+        if focus == "to_house":
+            return f"Powering the house at {pv_kw} kW"
+        if focus == "to_ev":
+            return f"Charging the EV at {pv_kw} kW"
+        if focus == "to_battery":
+            return f"Charging the battery at {pv_kw} kW"
+        if focus == "exporting":
+            return f"Exporting {pv_kw} kW to grid"
+        # mixed
+        parts = []
+        threshold_kw = 0.1
+        if dest.to_house_w / 1000 >= threshold_kw:
+            parts.append(f"house {round(dest.to_house_w / 1000, 1)} kW")
+        if dest.to_battery_w / 1000 >= threshold_kw:
+            parts.append(f"battery {round(dest.to_battery_w / 1000, 1)} kW")
+        if dest.to_ev_w / 1000 >= threshold_kw:
+            parts.append(f"EV {round(dest.to_ev_w / 1000, 1)} kW")
+        if dest.to_grid_w / 1000 >= threshold_kw:
+            parts.append(f"grid {round(dest.to_grid_w / 1000, 1)} kW")
+        detail = ", ".join(parts) if parts else "all below threshold"
+        return f"Producing {pv_kw} kW: {detail}"
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        if self.coordinator.data is None:
+            return None
+        inv = self.coordinator.data.inverter_decision
+        inp = self.coordinator.data.inputs
+        dest = pv_destinations(inp, inv)
+        focus = pv_focus(dest, inv)
+        return {
+            "focus": focus,
+            "pv_w": inp.pv_w,
+            "to_house_w": dest.to_house_w,
+            "to_ev_w": dest.to_ev_w,
+            "to_battery_w": dest.to_battery_w,
+            "to_grid_w": dest.to_grid_w,
+        }
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None
+
+
+class EmsGridStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    """Prose status for the grid connection — import, export, peak shaving."""
+
+    _attr_unique_id = "ems_grid_status"
+    _attr_name = "EMS Grid Status"
+
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data is None:
+            return None
+        inv = self.coordinator.data.inverter_decision
+        inp = self.coordinator.data.inputs
+
+        focus = grid_focus(inp, inv)
+        g = inp.grid_import_w
+        cap = inp.thresholds.max_grid_import_w
+        kw = round(abs(g) / 1000, 1)
+        cap_kw = round(cap / 1000, 1)
+        headroom_kw = round((cap - g) / 1000, 1)
+
+        if focus == "starting_up":
+            return "Starting up…"
+        if focus == "exporting":
+            return f"Exporting {kw} kW to grid"
+        if focus == "balanced":
+            return "Balanced (neither importing nor exporting)"
+        if focus == "peak_shaving_active":
+            return f"At cap — battery discharging to limit import ({kw} kW)"
+        if focus == "at_peak_cap":
+            return f"At import cap of {cap_kw} kW"
+        return f"Importing {kw} kW (cap {cap_kw} kW, headroom {headroom_kw} kW)"
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        if self.coordinator.data is None:
+            return None
+        inv = self.coordinator.data.inverter_decision
+        inp = self.coordinator.data.inputs
+        focus = grid_focus(inp, inv)
+        cap = inp.thresholds.max_grid_import_w
+        return {
+            "focus": focus,
+            "import_w": inp.grid_import_w,
+            "max_import_w": cap,
+            "headroom_w": cap - inp.grid_import_w,
+        }
 
     @property
     def available(self) -> bool:

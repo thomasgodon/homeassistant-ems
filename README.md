@@ -86,7 +86,7 @@ EMS integrates grid import toward the configured cap. The EV draws up to the cap
 
 **When the battery forecast is fine:** EMS sets the inverter to cover the full house load including the EV from PV. Whatever PV exceeds the combined load trickles into the battery. The battery charges naturally once the EV has reached its cap.
 
-**When the battery forecast is short:** EMS keeps PV away from the EV. The inverter is instructed to cover only the non-EV house load from PV; the remainder of PV goes directly into the battery. The EV draws its power from grid within the cap. `sensor.ems_inverter_status` shows *Battery priority*.
+**When the battery forecast is short:** EMS keeps PV away from the EV. The inverter is instructed to cover only the non-EV house load from PV; the remainder of PV goes directly into the battery. The EV draws its power from grid within the cap. `sensor.ems_battery_status` shows *Prioritising battery — EV charging from grid*.
 
 **Example (battery fine):** Grid cap 4.5 kW, battery gap 2 kWh, net solar forecast 6 kWh — plenty. PV producing 4 kW, non-EV house load 1 kW, EV drawing 3 kW, grid import 0 kW. EMS sets active power so PV covers house and EV; any PV above total load goes to the battery.
 
@@ -296,11 +296,12 @@ Active power and EV target are cached — a service call is skipped if the value
 | Entity | Values | Description |
 |--------|--------|-------------|
 | `sensor.ems_ev_status` | prose string | Priority-ordered EV status with kW values and reason. Updated every second. |
+| `sensor.ems_battery_status` | prose string | What the battery is focused on — includes expected EOD SoC and shortfall kWh when forecast data is available. Attributes: `focus`, `power_w`, `soc`, `target_soc`, `expected_eod_soc`, `shortfall_kwh`, `will_reach_target`. |
+| `sensor.ems_pv_status` | prose string | Where solar PV is going right now and why. Attributes: `focus`, `pv_w`, `to_house_w`, `to_ev_w`, `to_battery_w`, `to_grid_w`. |
+| `sensor.ems_grid_status` | prose string | Whether EMS is importing within cap, exporting, or peak-shaving. Attributes: `focus`, `import_w`, `max_import_w`, `headroom_w`. |
 | `sensor.ems_inverter_mode` | `power_control`, `disabled`, or `None` | Current inverter verb from the last `InverterDecision`. |
 | `sensor.ems_ev_current_w` | float (W) | Computed EV charge target EMS is writing to `ev_charge_target_entity`. `0` when idle. |
 | `sensor.ems_inverter_active_power` | float (W) | Active power EMS is writing to `active_power_entity`. |
-| `sensor.ems_inverter_status` | see below | Explains why and how EMS is (or isn't) controlling the inverter. Attributes include `reason`, `formula`, `pv_w`, `house_load_w`, `ev_power_w`, `house_non_ev_w`, `active_power_w`. |
-| `sensor.ems_battery_status` | prose string | Priority-ordered battery status (Reason > Action > SoC). Surfaces peak shaving, EOD hold, and cheap-hour hold before raw power-balance action. |
 
 #### `sensor.ems_ev_status` messages (priority order)
 
@@ -316,35 +317,54 @@ Active power and EV target are cached — a service call is skipped if the value
 | `Charging EV at N.N kW from solar surplus` | Actively charging; grid import ≤ 0 (exporting or balanced) |
 | `Charging EV at N.N kW with grid headroom` | Actively charging; grid import > 0 (using allowed headroom) |
 
-#### `sensor.ems_inverter_status` values
-
-| Value | Meaning |
-|-------|---------|
-| `Controlling` | EV charging in Grid/Price-optimised mode and battery forecast is fine; PV directed to AC load |
-| `Battery priority` | EV charging in Grid/Price-optimised mode and battery forecast is short; PV reserved for non-EV house load and battery |
-| `Peak shaving` | Grid import exceeded cap; battery discharging to cover excess |
-| `Holding battery` | Deficit hold active; battery discharge suppressed so cheap grid covers house load |
-| `Idle` | No active EV session; inverter set to its `disabled_option` (Self-Use mode) |
-| `Disabled` | Inverter Control Mode is `Off`; EMS does not write to the inverter |
-| `Starting up` | Startup grace period; strategy computes but writes are suppressed |
-
 #### `sensor.ems_battery_status` messages (priority order)
 
-Reason rows (1–3) override the power-balance rows whenever EMS has an explicit control intent.
+Inverter-intent rows (1–5) override power-balance rows whenever EMS has an explicit control intent.
 
 | Message | Priority | Condition |
 |---------|----------|-----------|
 | `Starting up…` | 1 | 60-second startup grace |
-| `Discharging to limit grid import · N%` | 2 | Inverter status is `peak_shaving` |
-| `Drawing cheap grid · N% (R of N cheap hours today)` | 3 | Inverter status is `holding_battery`; house load drawn from cheap grid to preserve battery |
-| `Battery full — N% reached` | 4 | `battery_soc ≥ battery_target_soc` and power balance within 200 W |
-| `Charging from solar at N.N kW · N%` | 5 | `pv_w + grid_import_w − house_load_w > +200` |
-| `Powering house at N.N kW · N%` | 6 | `pv_w + grid_import_w − house_load_w < −200` |
-| `Idle · N%` | 7 | Power balance within ±200 W |
+| `Battery SoC unavailable` | 2 | `battery_soc` is `None` |
+| `Discharging to limit grid import · N%` | 3 | Inverter status is `peak_shaving` |
+| `Holding for evening · N% (R of N cheap hours today) · forecast EOD N%, short X.X kWh` | 4 | Inverter status is `holding_battery`; house load drawn from cheap grid to preserve battery |
+| `Prioritising battery — EV charging from grid · N% · forecast EOD N%, short X.X kWh` | 5 | Inverter status is `battery_priority`; PV reserved for battery, EV feeds from grid |
+| `Battery full — N% reached` | 6 | `battery_soc ≥ battery_target_soc` and power balance within 200 W |
+| `Charging from solar at N.N kW · N% · forecast EOD N%` | 7 | `pv_w + grid_import_w − house_load_w > +200` |
+| `Powering house at N.N kW · N% · forecast EOD N%` | 8 | `pv_w + grid_import_w − house_load_w < −200` |
+| `Idle · N% · forecast EOD N%` | 9 | Power balance within ±200 W |
 
-SoC suffix (` · N%`) is omitted when `battery_soc` is unavailable. The `(R of N cheap hours today)` rank suffix is omitted when price data is unavailable.
+SoC suffix (` · N%`) is omitted when `battery_soc` is unavailable. The `(R of N cheap hours today)` rank suffix on row 4 is omitted when price data is unavailable.
 
-A `· solar short by X.X kWh` suffix is appended to rows 5–7 when the remaining solar forecast (minus forecast house load) won't fully charge the battery to `battery_target_soc`. Hidden when forecast inputs are unavailable or solar covers the gap.
+The ` · forecast EOD N%` suffix appears on rows 4–9 when `battery_soc`, `battery_capacity_kwh`, and `solar_forecast_remaining_kwh` are all available. When the forecast is short of the target, `, short X.X kWh` is appended to the EOD suffix. Both are hidden when any required input is unavailable or when solar is forecast to fully cover the gap (shortfall ≤ 0).
+
+#### `sensor.ems_pv_status` messages (priority order)
+
+| Message | Condition |
+|---------|-----------|
+| `Starting up…` | 60-second startup grace |
+| `No solar production` | PV generating less than 100 W |
+| `Powering the house at N.N kW` | ≥ 70 % of PV going to house load |
+| `Charging the EV at N.N kW` | ≥ 70 % of PV going to EV |
+| `Charging the battery at N.N kW` | ≥ 70 % of PV going to battery |
+| `Exporting N.N kW to grid` | ≥ 70 % of PV exported |
+| `Producing N.N kW: house H kW, battery B kW, EV E kW, grid G kW` | No single destination ≥ 70 %; destinations < 0.1 kW omitted |
+
+#### `sensor.ems_grid_status` messages (priority order)
+
+| Message | Condition |
+|---------|-----------|
+| `Starting up…` | 60-second startup grace |
+| `Exporting N.N kW to grid` | Grid flow is negative (exporting) |
+| `Balanced (neither importing nor exporting)` | Grid flow within ±100 W |
+| `At cap — battery discharging to limit import (N.N kW)` | Inverter status is `peak_shaving` |
+| `At import cap of N.N kW` | Grid import within 200 W of `max_grid_import_w` |
+| `Importing N.N kW (cap N.N kW, headroom N.N kW)` | Importing below cap |
+
+---
+
+## Migration note
+
+**Removed in this release:** `sensor.ems_inverter_status` has been split into `sensor.ems_pv_status` and `sensor.ems_grid_status`. After upgrading, delete the orphaned entity from **Settings → Devices & Services → EMS → Entities**.
 
 ---
 

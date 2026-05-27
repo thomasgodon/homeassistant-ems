@@ -5,14 +5,21 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.ems.models import EvDecision, InverterDecision, LadderResult
+from custom_components.ems.models import EvDecision, InverterDecision, LadderResult, Thresholds
 from custom_components.ems.sensor import (
     EmsBatteryStatusSensor,
     EmsEvCurrentSensor,
     EmsEvStatusSensor,
+    EmsGridStatusSensor,
     EmsInverterActivePowerSensor,
     EmsInverterModeSensor,
-    EmsInverterStatusSensor,
+    EmsPvStatusSensor,
+)
+
+_DEFAULT_THRESHOLDS = Thresholds(
+    max_grid_import_w=4500.0,
+    ev_target_soc=80.0,
+    ev_min_charge_w=1400.0,
 )
 
 
@@ -28,6 +35,11 @@ def _make_coordinator(
     battery_soc: float | None = None,
     battery_target_soc: float = 80.0,
     ev_soc: float | None = None,
+    thresholds: Thresholds = _DEFAULT_THRESHOLDS,
+    prices_today=None,
+    battery_capacity_kwh: float | None = None,
+    solar_forecast_remaining_kwh: float | None = None,
+    house_load_forecast_remaining_kwh: float | None = None,
 ) -> MagicMock:
     coordinator = MagicMock()
     if ev_charge_power_w is None:
@@ -42,8 +54,10 @@ def _make_coordinator(
         inverter_decision = InverterDecision(
             inverter_verb="power_control" if ev_power_w > 0.0 else "disabled",
             active_power_w=active_power_w,
-            status=inverter_status or default_status,
+            status=inverter_status or default_status,  # type: ignore[arg-type]
         )
+        mock_thresholds = MagicMock()
+        mock_thresholds.max_grid_import_w = thresholds.max_grid_import_w
         coordinator.data = LadderResult(
             ev_decision=ev_decision,
             inverter_decision=inverter_decision,
@@ -55,11 +69,11 @@ def _make_coordinator(
                 battery_soc=battery_soc,
                 battery_target_soc=battery_target_soc,
                 ev_soc=ev_soc,
-                # Forecast fields default to None so solar_shortfall_kwh returns None
-                # (no shortfall suffix) unless the test explicitly monkeypatches the helper.
-                battery_capacity_kwh=None,
-                solar_forecast_remaining_kwh=None,
-                house_load_forecast_remaining_kwh=None,
+                thresholds=mock_thresholds,
+                prices_today=prices_today,
+                battery_capacity_kwh=battery_capacity_kwh,
+                solar_forecast_remaining_kwh=solar_forecast_remaining_kwh,
+                house_load_forecast_remaining_kwh=house_load_forecast_remaining_kwh,
             ),
             computed_at=datetime.datetime(2026, 5, 4, 12, 0, 0, tzinfo=datetime.UTC),
         )
@@ -79,7 +93,6 @@ def test_shows_power_control_when_charging():
 
 
 def test_shows_disabled_when_ev_not_yet_drawing():
-    # Strategy wants to charge but EV hasn't started drawing — inverter still disabled
     sensor = EmsInverterModeSensor(_make_coordinator(3500.0, ev_power_w=0.0))
     assert sensor.native_value == "disabled"
 
@@ -182,26 +195,17 @@ def test_ev_status_not_enough_power():
 
 
 def test_ev_status_charging_from_solar_surplus():
-    # grid_import_w <= 0 → solar surplus
-    sensor = EmsEvStatusSensor(
-        _make_coordinator(3500.0, grid_import_w=0.0)
-    )
+    sensor = EmsEvStatusSensor(_make_coordinator(3500.0, grid_import_w=0.0))
     assert sensor.native_value == "Charging EV at 3.5 kW from solar surplus"
 
 
 def test_ev_status_charging_with_grid_headroom():
-    # grid_import_w > 0 → grid headroom
-    sensor = EmsEvStatusSensor(
-        _make_coordinator(3500.0, grid_import_w=500.0)
-    )
+    sensor = EmsEvStatusSensor(_make_coordinator(3500.0, grid_import_w=500.0))
     assert sensor.native_value == "Charging EV at 3.5 kW with grid headroom"
 
 
 def test_ev_status_charging_negative_grid_is_solar():
-    # Exporting to grid — definitely on solar surplus
-    sensor = EmsEvStatusSensor(
-        _make_coordinator(3500.0, grid_import_w=-200.0)
-    )
+    sensor = EmsEvStatusSensor(_make_coordinator(3500.0, grid_import_w=-200.0))
     assert sensor.native_value == "Charging EV at 3.5 kW from solar surplus"
 
 
@@ -216,6 +220,11 @@ def test_ev_status_unique_id():
     assert sensor.unique_id == "ems_ev_status"
 
 
+def test_ev_status_battery_short():
+    sensor = EmsEvStatusSensor(_make_coordinator(0.0, charging_state="battery_short"))
+    assert sensor.native_value == "Solar reserved for home battery"
+
+
 # ── EmsInverterActivePowerSensor ──────────────────────────────────────────────
 
 def test_active_power_shows_zero_when_no_data():
@@ -224,7 +233,6 @@ def test_active_power_shows_zero_when_no_data():
 
 
 def test_active_power_shows_zero_when_none():
-    """active_power_w=None (not writing) shows 0 in the sensor."""
     sensor = EmsInverterActivePowerSensor(_make_coordinator(0.0, active_power_w=None))
     assert sensor.native_value == 0.0
 
@@ -236,105 +244,6 @@ def test_active_power_shows_value_when_set():
     assert sensor.native_value == 1500.0
 
 
-# ── EmsInverterStatusSensor ───────────────────────────────────────────────────
-
-def test_inverter_status_controlling():
-    sensor = EmsInverterStatusSensor(
-        _make_coordinator(3500.0, ev_power_w=3500.0, active_power_w=4500.0,
-                          inverter_status="controlling", pv_w=6000.0, house_load_w=5500.0)
-    )
-    assert sensor.native_value == "Controlling"
-
-
-def test_inverter_status_idle():
-    sensor = EmsInverterStatusSensor(_make_coordinator(0.0, inverter_status="idle"))
-    assert sensor.native_value == "Idle"
-
-
-def test_inverter_status_disabled():
-    sensor = EmsInverterStatusSensor(_make_coordinator(0.0, inverter_status="disabled"))
-    assert sensor.native_value == "Disabled"
-
-
-def test_inverter_status_starting_up():
-    sensor = EmsInverterStatusSensor(_make_coordinator(0.0, inverter_status="starting_up"))
-    assert sensor.native_value == "Starting up"
-
-
-def test_inverter_status_none_when_no_data():
-    sensor = EmsInverterStatusSensor(_make_coordinator(None))
-    assert sensor.native_value is None
-    assert sensor.available is False
-
-
-def test_inverter_status_available_when_data_present():
-    sensor = EmsInverterStatusSensor(_make_coordinator(0.0))
-    assert sensor.available is True
-
-
-def test_inverter_status_unique_id():
-    sensor = EmsInverterStatusSensor(_make_coordinator(0.0))
-    assert sensor.unique_id == "ems_inverter_status"
-
-
-def test_inverter_status_options_cover_all_states():
-    sensor = EmsInverterStatusSensor(_make_coordinator(0.0))
-    assert set(sensor.options) == {
-        "Controlling", "Idle", "Disabled", "Starting up", "Peak shaving",
-        "Holding battery", "Battery priority",
-    }
-
-
-def test_inverter_status_attributes_none_when_no_data():
-    sensor = EmsInverterStatusSensor(_make_coordinator(None))
-    assert sensor.extra_state_attributes is None
-
-
-def test_inverter_status_attributes_controlling():
-    sensor = EmsInverterStatusSensor(
-        _make_coordinator(3500.0, ev_power_w=3500.0, active_power_w=4500.0,
-                          inverter_status="controlling", pv_w=6000.0, house_load_w=5500.0)
-    )
-    attrs = sensor.extra_state_attributes
-    assert attrs["pv_w"] == 6000.0
-    assert attrs["house_load_w"] == 5500.0
-    assert attrs["ev_power_w"] == 3500.0
-    assert attrs["house_non_ev_w"] == max(0.0, 5500.0 - 3500.0)
-    assert attrs["active_power_w"] == 4500.0
-    assert "EV drawing 3500 W" in attrs["reason"]
-    assert "-min(" in attrs["formula"]
-    assert "4500" in attrs["formula"]
-
-
-def test_inverter_status_attributes_idle():
-    sensor = EmsInverterStatusSensor(
-        _make_coordinator(0.0, inverter_status="idle", pv_w=3000.0, house_load_w=1000.0)
-    )
-    attrs = sensor.extra_state_attributes
-    assert attrs["active_power_w"] is None
-    assert attrs["formula"] == "Not writing active_power."
-    assert "No EV draw" in attrs["reason"]
-
-
-def test_inverter_status_attributes_disabled():
-    sensor = EmsInverterStatusSensor(
-        _make_coordinator(0.0, inverter_status="disabled")
-    )
-    attrs = sensor.extra_state_attributes
-    assert attrs["active_power_w"] is None
-    assert "Off" in attrs["reason"]
-
-
-def test_inverter_status_attributes_starting_up():
-    sensor = EmsInverterStatusSensor(
-        _make_coordinator(0.0, inverter_status="starting_up", pv_w=5000.0, house_load_w=1000.0)
-    )
-    attrs = sensor.extra_state_attributes
-    assert "startup" in attrs["formula"].lower() or "suppressed" in attrs["formula"]
-    assert "Startup grace" in attrs["reason"]
-    assert attrs["active_power_w"] == pytest.approx(-min(5000.0, 1000.0))
-
-
 # ── EmsBatteryStatusSensor ────────────────────────────────────────────────────
 
 def test_battery_status_starting_up():
@@ -342,6 +251,15 @@ def test_battery_status_starting_up():
         _make_coordinator(0.0, inverter_status="starting_up", battery_soc=60.0)
     )
     assert sensor.native_value == "Starting up…"
+
+
+def test_battery_status_unavailable():
+    # battery_soc=None and not starting_up → "Battery SoC unavailable"
+    sensor = EmsBatteryStatusSensor(
+        _make_coordinator(0.0, inverter_status="idle", battery_soc=None,
+                          pv_w=1000.0, house_load_w=1000.0, grid_import_w=100.0)
+    )
+    assert sensor.native_value == "Battery SoC unavailable"
 
 
 def test_battery_status_peak_shaving_with_soc():
@@ -352,38 +270,48 @@ def test_battery_status_peak_shaving_with_soc():
 
 
 def test_battery_status_peak_shaving_without_soc():
+    # battery_soc=None → unavailable takes priority over peak_shaving
+    # (starting_up → unavailable → peak_shaving in that order)
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(0.0, inverter_status="peak_shaving", battery_soc=None)
     )
-    assert sensor.native_value == "Discharging to limit grid import"
+    assert sensor.native_value == "Battery SoC unavailable"
 
 
-def test_battery_status_holding_battery_with_rank(monkeypatch):
+def test_battery_status_holding_for_evening_with_rank(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.cheap_hold_rank", lambda _: (1, 3))
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(0.0, inverter_status="holding_battery", battery_soc=60.0)
     )
-    assert sensor.native_value == "Drawing cheap grid · 60% (1 of 3 cheap hours today)"
+    assert sensor.native_value == "Holding for evening · 60% (1 of 3 cheap hours today)"
 
 
-def test_battery_status_holding_battery_no_rank(monkeypatch):
+def test_battery_status_holding_for_evening_no_rank(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.cheap_hold_rank", lambda _: None)
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(0.0, inverter_status="holding_battery", battery_soc=60.0)
     )
-    assert sensor.native_value == "Drawing cheap grid · 60%"
+    assert sensor.native_value == "Holding for evening · 60%"
 
 
-def test_battery_status_holding_battery_no_soc(monkeypatch):
+def test_battery_status_holding_for_evening_no_soc(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.cheap_hold_rank", lambda _: (2, 4))
+    # battery_soc=None → "unavailable" beats "holding_for_evening"
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(0.0, inverter_status="holding_battery", battery_soc=None)
     )
-    assert sensor.native_value == "Drawing cheap grid (2 of 4 cheap hours today)"
+    assert sensor.native_value == "Battery SoC unavailable"
+
+
+def test_battery_status_prioritising_battery():
+    sensor = EmsBatteryStatusSensor(
+        _make_coordinator(0.0, inverter_status="battery_priority", battery_soc=60.0)
+    )
+    assert sensor.native_value == "Prioritising battery — EV charging from grid · 60%"
 
 
 def test_battery_status_full():
-    # pv=2000, grid=0, house=2100 → balance=-100 W (within ±200 deadband)
+    # pv=2000, grid=0, house=2100 → balance=-100 W (within ±200 deadband), soc=80 >= target=80
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(
             0.0, inverter_status="idle",
@@ -431,7 +359,7 @@ def test_battery_status_idle_with_soc():
 
 
 def test_battery_status_idle_without_soc():
-    # Same power balance, battery_soc=None
+    # battery_soc=None → "Battery SoC unavailable" before idle can show
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(
             0.0, inverter_status="idle",
@@ -439,7 +367,7 @@ def test_battery_status_idle_without_soc():
             battery_soc=None,
         )
     )
-    assert sensor.native_value == "Idle"
+    assert sensor.native_value == "Battery SoC unavailable"
 
 
 def test_battery_status_reason_overrides_power_balance():
@@ -470,9 +398,10 @@ def test_battery_status_unique_id():
     assert sensor.unique_id == "ems_battery_status"
 
 
-def test_battery_status_shortfall_suffix_charging(monkeypatch):
-    # pv=5000, grid=-1000, house=1000 → battery_w=+3000 > 200 → "Charging from solar..."
+def test_battery_status_eod_suffix_with_shortfall(monkeypatch):
+    # Monkeypatch both helpers to simulate "forecast available, short 1.2 kWh, EOD 76%"
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 1.2)
+    monkeypatch.setattr("custom_components.ems.sensor.expected_eod_soc", lambda _: 76.0)
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(
             0.0, inverter_status="idle",
@@ -480,12 +409,27 @@ def test_battery_status_shortfall_suffix_charging(monkeypatch):
             battery_soc=60.0, battery_target_soc=80.0,
         )
     )
-    assert sensor.native_value == "Charging from solar at 3.0 kW · 60% · solar short by 1.2 kWh"
+    expected = "Charging from solar at 3.0 kW · 60% · forecast EOD 76%, short 1.2 kWh"
+    assert sensor.native_value == expected
 
 
-def test_battery_status_shortfall_suffix_idle(monkeypatch):
-    # pv=1000, grid=0, house=900 → battery_w=+100 (within deadband)
-    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 2.5)
+def test_battery_status_eod_suffix_without_shortfall(monkeypatch):
+    # Solar covers the gap → eod_str = " · forecast EOD N%" without "short"
+    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: -0.5)
+    monkeypatch.setattr("custom_components.ems.sensor.expected_eod_soc", lambda _: 85.0)
+    sensor = EmsBatteryStatusSensor(
+        _make_coordinator(
+            0.0, inverter_status="idle",
+            pv_w=5000.0, grid_import_w=-1000.0, house_load_w=1000.0,
+            battery_soc=60.0, battery_target_soc=80.0,
+        )
+    )
+    assert sensor.native_value == "Charging from solar at 3.0 kW · 60% · forecast EOD 85%"
+
+
+def test_battery_status_no_eod_suffix_when_forecast_missing(monkeypatch):
+    # expected_eod_soc returns None → no suffix
+    monkeypatch.setattr("custom_components.ems.sensor.expected_eod_soc", lambda _: None)
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(
             0.0, inverter_status="idle",
@@ -493,12 +437,13 @@ def test_battery_status_shortfall_suffix_idle(monkeypatch):
             battery_soc=50.0, battery_target_soc=80.0,
         )
     )
-    assert sensor.native_value == "Idle · 50% · solar short by 2.5 kWh"
+    assert "forecast" not in sensor.native_value
 
 
-def test_battery_status_no_shortfall_suffix_when_battery_full(monkeypatch):
-    # battery_soc >= target and within deadband → "Battery full" row, no suffix
+def test_battery_status_no_eod_suffix_on_battery_full(monkeypatch):
+    # battery_full row never shows eod_str
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 9.9)
+    monkeypatch.setattr("custom_components.ems.sensor.expected_eod_soc", lambda _: 100.0)
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(
             0.0, inverter_status="idle",
@@ -509,70 +454,173 @@ def test_battery_status_no_shortfall_suffix_when_battery_full(monkeypatch):
     assert sensor.native_value == "Battery full — 80% reached"
 
 
-def test_battery_status_no_shortfall_suffix_when_reason_row(monkeypatch):
-    # holding_battery is a reason row — suffix must not appear
-    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 3.0)
-    sensor = EmsBatteryStatusSensor(
-        _make_coordinator(0.0, inverter_status="holding_battery", battery_soc=60.0)
-    )
-    assert "solar short" not in sensor.native_value
-
-
-def test_battery_status_no_shortfall_suffix_when_helper_returns_none(monkeypatch):
-    # missing forecast inputs → helper returns None → no suffix
-    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: None)
+def test_battery_status_attributes_present():
     sensor = EmsBatteryStatusSensor(
         _make_coordinator(
             0.0, inverter_status="idle",
-            pv_w=1000.0, grid_import_w=0.0, house_load_w=900.0,
-            battery_soc=50.0, battery_target_soc=80.0,
+            pv_w=5000.0, grid_import_w=-1000.0, house_load_w=1000.0,
+            battery_soc=60.0, battery_target_soc=80.0,
         )
-    )
-    assert "solar short" not in sensor.native_value
-
-
-def test_battery_status_no_shortfall_suffix_when_solar_covers(monkeypatch):
-    # helper returns negative → no shortfall, no suffix
-    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: -0.5)
-    sensor = EmsBatteryStatusSensor(
-        _make_coordinator(
-            0.0, inverter_status="idle",
-            pv_w=1000.0, grid_import_w=0.0, house_load_w=900.0,
-            battery_soc=50.0, battery_target_soc=80.0,
-        )
-    )
-    assert "solar short" not in sensor.native_value
-
-
-# ── battery_short EV state ────────────────────────────────────────────────────
-
-def test_ev_status_battery_short():
-    sensor = EmsEvStatusSensor(
-        _make_coordinator(0.0, charging_state="battery_short")
-    )
-    assert sensor.native_value == "Solar reserved for home battery"
-
-
-# ── battery_priority inverter status ─────────────────────────────────────────
-
-def test_inverter_status_label_battery_priority():
-    sensor = EmsInverterStatusSensor(
-        _make_coordinator(2000.0, ev_power_w=2000.0, active_power_w=-1000.0,
-                          inverter_status="battery_priority",
-                          pv_w=4000.0, house_load_w=3000.0)
-    )
-    assert sensor.native_value == "Battery priority"
-
-
-def test_inverter_status_attributes_battery_priority():
-    sensor = EmsInverterStatusSensor(
-        _make_coordinator(2000.0, ev_power_w=2000.0, active_power_w=-1000.0,
-                          inverter_status="battery_priority",
-                          pv_w=4000.0, house_load_w=3000.0)
     )
     attrs = sensor.extra_state_attributes
-    # house_non_ev = max(0, 3000 - 2000) = 1000
-    assert attrs["house_non_ev_w"] == pytest.approx(1000.0)
-    assert attrs["active_power_w"] == pytest.approx(-1000.0)
-    assert "-max(0," in attrs["formula"]
-    assert "Solar forecast" in attrs["reason"]
+    assert attrs["focus"] == "charging_from_solar"
+    assert attrs["power_w"] == pytest.approx(3000.0)
+    assert attrs["soc"] == 60.0
+    assert attrs["target_soc"] == 80.0
+
+
+def test_battery_status_attributes_none_when_no_data():
+    sensor = EmsBatteryStatusSensor(_make_coordinator(None))
+    assert sensor.extra_state_attributes is None
+
+
+# ── EmsPvStatusSensor ─────────────────────────────────────────────────────────
+
+def test_pv_status_starting_up():
+    sensor = EmsPvStatusSensor(
+        _make_coordinator(0.0, inverter_status="starting_up", pv_w=3000.0, house_load_w=1000.0)
+    )
+    assert sensor.native_value == "Starting up…"
+
+
+def test_pv_status_no_production():
+    sensor = EmsPvStatusSensor(
+        _make_coordinator(0.0, pv_w=50.0, house_load_w=1000.0, grid_import_w=950.0)
+    )
+    assert sensor.native_value == "No solar production"
+
+
+def test_pv_status_to_house():
+    # pv=3000, house=3000, battery_w=0 → pv split: to_house=3000 → 100% to_house
+    sensor = EmsPvStatusSensor(
+        _make_coordinator(0.0, pv_w=3000.0, house_load_w=3000.0, ev_power_w=0.0, grid_import_w=0.0)
+    )
+    assert sensor.native_value == "Powering the house at 3.0 kW"
+
+
+def test_pv_status_to_battery():
+    # pv=5000, house=1000, grid=-4000 → battery_w=0 but pv>house so to_grid=4000 (80%)
+    # Hmm, 4000/5000=80%≥70% → exporting. Let me think.
+    # pv=5000, house=1000, grid=0 → battery_w=5000+0-1000=4000 → to_battery=4000 (80%)
+    sensor = EmsPvStatusSensor(
+        _make_coordinator(0.0, pv_w=5000.0, house_load_w=1000.0, ev_power_w=0.0, grid_import_w=0.0)
+    )
+    assert sensor.native_value == "Charging the battery at 5.0 kW"
+
+
+def test_pv_status_exporting():
+    # pv=5000, house=500, grid=-4500 → battery_w=0; pv→house=500, rest→grid=4500 (90%)
+    sensor = EmsPvStatusSensor(
+        _make_coordinator(0.0, pv_w=5000.0, house_load_w=500.0, ev_power_w=0.0,
+                          grid_import_w=-4500.0)
+    )
+    assert sensor.native_value == "Exporting 5.0 kW to grid"
+
+
+def test_pv_status_mixed():
+    # pv=3000, house=1000, battery_w=1000, grid=-1000 → each ~33% → mixed
+    sensor = EmsPvStatusSensor(
+        _make_coordinator(0.0, pv_w=3000.0, house_load_w=1000.0, ev_power_w=0.0,
+                          grid_import_w=-1000.0)
+    )
+    # to_house=1000(33%), to_battery=min(2000,1000)=1000(33%), to_grid=1000(33%) → mixed
+    assert "Producing 3.0 kW:" in sensor.native_value
+
+
+def test_pv_status_none_when_no_data():
+    sensor = EmsPvStatusSensor(_make_coordinator(None))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_pv_status_unique_id():
+    sensor = EmsPvStatusSensor(_make_coordinator(0.0))
+    assert sensor.unique_id == "ems_pv_status"
+
+
+def test_pv_status_attributes_present():
+    sensor = EmsPvStatusSensor(
+        _make_coordinator(0.0, pv_w=5000.0, house_load_w=1000.0, ev_power_w=0.0, grid_import_w=0.0)
+    )
+    attrs = sensor.extra_state_attributes
+    assert attrs["focus"] == "to_battery"
+    assert attrs["pv_w"] == 5000.0
+    assert attrs["to_house_w"] == pytest.approx(1000.0)
+    assert attrs["to_battery_w"] == pytest.approx(4000.0)
+
+
+def test_pv_status_attributes_none_when_no_data():
+    sensor = EmsPvStatusSensor(_make_coordinator(None))
+    assert sensor.extra_state_attributes is None
+
+
+# ── EmsGridStatusSensor ───────────────────────────────────────────────────────
+
+def test_grid_status_starting_up():
+    sensor = EmsGridStatusSensor(
+        _make_coordinator(0.0, inverter_status="starting_up", grid_import_w=1000.0)
+    )
+    assert sensor.native_value == "Starting up…"
+
+
+def test_grid_status_exporting():
+    sensor = EmsGridStatusSensor(
+        _make_coordinator(0.0, inverter_status="idle", grid_import_w=-500.0)
+    )
+    assert sensor.native_value == "Exporting 0.5 kW to grid"
+
+
+def test_grid_status_balanced():
+    sensor = EmsGridStatusSensor(
+        _make_coordinator(0.0, inverter_status="idle", grid_import_w=50.0)
+    )
+    assert sensor.native_value == "Balanced (neither importing nor exporting)"
+
+
+def test_grid_status_peak_shaving_active():
+    sensor = EmsGridStatusSensor(
+        _make_coordinator(0.0, inverter_status="peak_shaving", grid_import_w=5000.0)
+    )
+    assert sensor.native_value == "At cap — battery discharging to limit import (5.0 kW)"
+
+
+def test_grid_status_at_peak_cap():
+    # cap=4500, import=4400 → within 200 W proximity
+    sensor = EmsGridStatusSensor(
+        _make_coordinator(0.0, inverter_status="idle", grid_import_w=4400.0)
+    )
+    assert sensor.native_value == "At import cap of 4.5 kW"
+
+
+def test_grid_status_importing():
+    sensor = EmsGridStatusSensor(
+        _make_coordinator(0.0, inverter_status="idle", grid_import_w=1000.0)
+    )
+    assert sensor.native_value == "Importing 1.0 kW (cap 4.5 kW, headroom 3.5 kW)"
+
+
+def test_grid_status_none_when_no_data():
+    sensor = EmsGridStatusSensor(_make_coordinator(None))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_grid_status_unique_id():
+    sensor = EmsGridStatusSensor(_make_coordinator(0.0))
+    assert sensor.unique_id == "ems_grid_status"
+
+
+def test_grid_status_attributes_present():
+    sensor = EmsGridStatusSensor(
+        _make_coordinator(0.0, inverter_status="idle", grid_import_w=1000.0)
+    )
+    attrs = sensor.extra_state_attributes
+    assert attrs["focus"] == "importing"
+    assert attrs["import_w"] == 1000.0
+    assert attrs["max_import_w"] == 4500.0
+    assert attrs["headroom_w"] == pytest.approx(3500.0)
+
+
+def test_grid_status_attributes_none_when_no_data():
+    sensor = EmsGridStatusSensor(_make_coordinator(None))
+    assert sensor.extra_state_attributes is None

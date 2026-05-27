@@ -64,6 +64,37 @@ EvChargingState = Literal[
     "battery_short",
 ]
 
+BatteryFocus = Literal[
+    "starting_up",
+    "unavailable",
+    "full",
+    "peak_shaving",
+    "holding_for_evening",
+    "prioritising_battery",
+    "charging_from_solar",
+    "discharging_to_house",
+    "idle",
+]
+
+PvFocus = Literal[
+    "starting_up",
+    "no_production",
+    "to_battery",
+    "to_ev",
+    "to_house",
+    "exporting",
+    "mixed",
+]
+
+GridFocus = Literal[
+    "starting_up",
+    "exporting",
+    "balanced",
+    "peak_shaving_active",
+    "at_peak_cap",
+    "importing",
+]
+
 
 @dataclass(frozen=True, slots=True)
 class EvDecision:
@@ -77,6 +108,15 @@ class InverterDecision:
     inverter_verb: str | None  # None = do not write inverter select
     active_power_w: float | None  # None = do not write active power
     status: InverterStatus = "idle"
+
+
+@dataclass(frozen=True, slots=True)
+class PvDestinations:
+    pv_w: float
+    to_house_w: float    # ≥ 0
+    to_ev_w: float       # ≥ 0
+    to_battery_w: float  # ≥ 0  (PV→battery share; does not include grid→battery)
+    to_grid_w: float     # ≥ 0  (exported PV; 0 when importing)
 
 
 @dataclass(frozen=True, slots=True)

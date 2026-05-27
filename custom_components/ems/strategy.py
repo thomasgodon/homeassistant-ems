@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import math
 
-from .models import EvChargingState, EvDecision, Inputs, Thresholds
+from .models import (
+    BatteryFocus,
+    EvChargingState,
+    EvDecision,
+    GridFocus,
+    Inputs,
+    InverterDecision,
+    PvDestinations,
+    PvFocus,
+    Thresholds,
+)
 
 
 def decide(inputs: Inputs) -> EvDecision:
@@ -201,5 +211,150 @@ def should_advise_ev_charge(inputs: Inputs) -> bool:
     remaining = list(range(current_hour, 24))
     cheapest = set(sorted(remaining, key=lambda h: inputs.prices_today[h])[:n])
     return current_hour in cheapest
+
+
+# ── status-surface helpers ─────────────────────────────────────────────────────
+
+_BATTERY_POWER_DEADBAND_W = 200.0
+_PV_DEADBAND_W = 100.0
+_GRID_DEADBAND_W = 100.0
+_PV_DOMINANT_FRACTION = 0.70
+_PEAK_CAP_PROXIMITY_W = 200.0
+
+
+def expected_eod_soc(inputs: Inputs) -> float | None:
+    """Return the projected battery SoC (%) at end of day given the solar forecast.
+
+    Uses the same formula and None semantics as solar_shortfall_kwh().
+    Returns None if any required input is missing.
+    """
+    if (
+        inputs.battery_soc is None
+        or inputs.battery_capacity_kwh is None
+        or inputs.solar_forecast_remaining_kwh is None
+    ):
+        return None
+    house_forecast = inputs.house_load_forecast_remaining_kwh or 0.0
+    effective_solar = max(0.0, inputs.solar_forecast_remaining_kwh - house_forecast)
+    delta_soc = (effective_solar / inputs.battery_capacity_kwh) * 100.0
+    return min(100.0, inputs.battery_soc + delta_soc)
+
+
+def battery_focus(inputs: Inputs, inverter_decision: InverterDecision) -> BatteryFocus:
+    """Return what the battery is focused on right now.
+
+    Priority order: inverter intent overrides raw power balance.
+    """
+    battery_w = inputs.pv_w + inputs.grid_import_w - inputs.house_load_w
+
+    if inverter_decision.status == "starting_up":
+        return "starting_up"
+    if inputs.battery_soc is None:
+        return "unavailable"
+    if inverter_decision.status == "peak_shaving":
+        return "peak_shaving"
+    if inverter_decision.status == "holding_battery":
+        return "holding_for_evening"
+    if inverter_decision.status == "battery_priority":
+        return "prioritising_battery"
+    if (
+        inputs.battery_soc >= inputs.battery_target_soc
+        and abs(battery_w) <= _BATTERY_POWER_DEADBAND_W
+    ):
+        return "full"
+    if battery_w > _BATTERY_POWER_DEADBAND_W:
+        return "charging_from_solar"
+    if battery_w < -_BATTERY_POWER_DEADBAND_W:
+        return "discharging_to_house"
+    return "idle"
+
+
+def pv_destinations(inputs: Inputs, inverter_decision: InverterDecision) -> PvDestinations:
+    """Allocate PV generation across house, EV, battery, and grid export.
+
+    Conservation invariant: to_house + to_ev + to_battery + to_grid == max(0, pv_w).
+    Battery flow is inferred (no direct battery sensor):
+    battery_w = pv_w + grid_import_w - house_load_w.
+    Priority order depends on inverter intent:
+    - battery_priority: house_non_ev first, then battery, then EV (EV is cut off from PV).
+    - all other modes: whole-house first, then battery, then remainder.
+    """
+    available = max(0.0, inputs.pv_w)
+    if available == 0.0:
+        return PvDestinations(
+            pv_w=inputs.pv_w, to_house_w=0.0, to_ev_w=0.0, to_battery_w=0.0, to_grid_w=0.0
+        )
+
+    battery_charging_w = max(0.0, inputs.pv_w + inputs.grid_import_w - inputs.house_load_w)
+    house_non_ev = max(0.0, inputs.house_load_w - inputs.ev_power_w)
+    remaining = available
+    to_house = to_ev = to_battery = 0.0
+
+    if inverter_decision.status == "battery_priority":
+        # PV reserved for house (non-EV) and battery; EV is fed from grid.
+        take = min(remaining, house_non_ev)
+        to_house = take
+        remaining -= take
+        take = min(remaining, battery_charging_w)
+        to_battery = take
+        remaining -= take
+        # to_ev stays 0 — PV is explicitly withheld from the EV.
+    else:
+        # Default: whole-house load (including EV) is covered first.
+        take = min(remaining, inputs.house_load_w)
+        to_house = take
+        remaining -= take
+        take = min(remaining, battery_charging_w)
+        to_battery = take
+        remaining -= take
+        # Split the house bucket proportionally to expose the EV share.
+        if to_house > 0.0 and inputs.house_load_w > 0.0:
+            ev_share = to_house * (inputs.ev_power_w / inputs.house_load_w)
+            to_ev = ev_share
+            to_house -= ev_share
+
+    to_grid = remaining  # exported PV
+    return PvDestinations(
+        pv_w=inputs.pv_w,
+        to_house_w=to_house,
+        to_ev_w=to_ev,
+        to_battery_w=to_battery,
+        to_grid_w=to_grid,
+    )
+
+
+def pv_focus(destinations: PvDestinations, inverter_decision: InverterDecision) -> PvFocus:
+    """Return the dominant PV destination, or 'mixed' when no single destination dominates."""
+    if inverter_decision.status == "starting_up":
+        return "starting_up"
+    if destinations.pv_w < _PV_DEADBAND_W:
+        return "no_production"
+    buckets: dict[PvFocus, float] = {
+        "to_battery": destinations.to_battery_w,
+        "to_ev": destinations.to_ev_w,
+        "to_house": destinations.to_house_w,
+        "exporting": destinations.to_grid_w,
+    }
+    top_name = max(buckets, key=lambda k: buckets[k])
+    if buckets[top_name] / destinations.pv_w >= _PV_DOMINANT_FRACTION:
+        return top_name
+    return "mixed"
+
+
+def grid_focus(inputs: Inputs, inverter_decision: InverterDecision) -> GridFocus:
+    """Return what the grid connection is doing right now."""
+    if inverter_decision.status == "starting_up":
+        return "starting_up"
+    if inverter_decision.status == "peak_shaving":
+        return "peak_shaving_active"
+    g = inputs.grid_import_w
+    cap = inputs.thresholds.max_grid_import_w
+    if g < -_GRID_DEADBAND_W:
+        return "exporting"
+    if abs(g) <= _GRID_DEADBAND_W:
+        return "balanced"
+    if abs(g - cap) <= _PEAK_CAP_PROXIMITY_W:
+        return "at_peak_cap"
+    return "importing"
 
 

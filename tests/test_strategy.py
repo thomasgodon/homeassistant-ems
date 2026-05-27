@@ -16,7 +16,13 @@ import datetime
 import pytest
 
 from custom_components.ems import strategy as strategy_module
-from custom_components.ems.models import EvDecision, Inputs, Thresholds
+from custom_components.ems.models import (
+    EvDecision,
+    Inputs,
+    InverterDecision,
+    PvDestinations,
+    Thresholds,
+)
 
 # ── fixtures / helpers ────────────────────────────────────────────────────────
 
@@ -1011,3 +1017,311 @@ class TestShouldAdviseEvCharge:
             prices_today=_PRICES_ASCENDING,
         )
         assert strategy_module.should_advise_ev_charge(inp) is False
+
+
+# ── expected_eod_soc ──────────────────────────────────────────────────────────
+
+def test_expected_eod_soc_covers_gap(builder) -> None:
+    # gap=3 kWh (50→80% on 10 kWh), effective_solar=5 kWh → delta=50% → EOD=100% (capped)
+    inp = builder.build(
+        battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=5.0,
+    )
+    result = strategy_module.expected_eod_soc(inp)
+    assert result == pytest.approx(100.0)
+
+
+def test_expected_eod_soc_short(builder) -> None:
+    # gap=3 kWh, effective_solar=1 kWh → delta=10% → EOD=60%
+    inp = builder.build(
+        battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=1.0,
+    )
+    result = strategy_module.expected_eod_soc(inp)
+    assert result == pytest.approx(60.0)
+
+
+def test_expected_eod_soc_uses_house_forecast(builder) -> None:
+    # solar=6 kWh, house=4 kWh → effective=2 kWh → delta=20% → EOD=70%
+    inp = builder.build(
+        battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=6.0, house_load_forecast_remaining_kwh=4.0,
+    )
+    result = strategy_module.expected_eod_soc(inp)
+    assert result == pytest.approx(70.0)
+
+
+def test_expected_eod_soc_none_when_house_forecast_missing_defaults_to_zero(builder) -> None:
+    # house_forecast=None treated as 0 → effective_solar=5 kWh
+    inp = builder.build(
+        battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=5.0, house_load_forecast_remaining_kwh=None,
+    )
+    result = strategy_module.expected_eod_soc(inp)
+    assert result is not None and result > 50.0
+
+
+@pytest.mark.parametrize("missing_field,overrides", [
+    ("battery_soc",          {"battery_capacity_kwh": 10.0, "solar_forecast_remaining_kwh": 5.0}),
+    ("battery_capacity_kwh", {"battery_soc": 50.0,          "solar_forecast_remaining_kwh": 5.0}),
+    ("solar_forecast",       {"battery_soc": 50.0,          "battery_capacity_kwh": 10.0}),
+])
+def test_expected_eod_soc_none_when_input_missing(builder, missing_field, overrides) -> None:
+    inp = builder.build(**overrides)
+    assert strategy_module.expected_eod_soc(inp) is None
+
+
+# ── battery_focus ──────────────────────────────────────────────────────────────
+
+def _inv(status: str) -> InverterDecision:
+    return InverterDecision(inverter_verb=None, active_power_w=None, status=status)  # type: ignore[arg-type]
+
+
+def test_battery_focus_starting_up(builder) -> None:
+    inp = builder.build(battery_soc=60.0, pv_w=2000.0, house_load_w=1000.0, grid_import_w=0.0)
+    assert strategy_module.battery_focus(inp, _inv("starting_up")) == "starting_up"
+
+
+def test_battery_focus_starting_up_overrides_unavailable(builder) -> None:
+    # starting_up takes priority over battery_soc=None (unavailable)
+    inp = builder.build(battery_soc=None, pv_w=2000.0, house_load_w=1000.0, grid_import_w=0.0)
+    assert strategy_module.battery_focus(inp, _inv("starting_up")) == "starting_up"
+
+
+def test_battery_focus_unavailable_when_no_soc(builder) -> None:
+    inp = builder.build(battery_soc=None, pv_w=1000.0, house_load_w=1000.0, grid_import_w=0.0)
+    assert strategy_module.battery_focus(inp, _inv("idle")) == "unavailable"
+
+
+def test_battery_focus_peak_shaving(builder) -> None:
+    inp = builder.build(battery_soc=60.0, pv_w=1000.0, house_load_w=1000.0, grid_import_w=0.0)
+    assert strategy_module.battery_focus(inp, _inv("peak_shaving")) == "peak_shaving"
+
+
+def test_battery_focus_holding_for_evening(builder) -> None:
+    inp = builder.build(battery_soc=60.0, pv_w=1000.0, house_load_w=1000.0, grid_import_w=0.0)
+    assert strategy_module.battery_focus(inp, _inv("holding_battery")) == "holding_for_evening"
+
+
+def test_battery_focus_prioritising_battery(builder) -> None:
+    inp = builder.build(battery_soc=60.0, pv_w=1000.0, house_load_w=1000.0, grid_import_w=0.0)
+    assert strategy_module.battery_focus(inp, _inv("battery_priority")) == "prioritising_battery"
+
+
+def test_battery_focus_full(builder) -> None:
+    # soc=80 >= target=80, battery_w = 1000 + 0 - 1000 = 0 (within 200 W deadband)
+    inp = builder.build(
+        battery_soc=80.0, battery_target_soc=80.0,
+        pv_w=1000.0, house_load_w=1000.0, grid_import_w=0.0,
+    )
+    assert strategy_module.battery_focus(inp, _inv("idle")) == "full"
+
+
+def test_battery_focus_charging_from_solar(builder) -> None:
+    # battery_w = 3000 + 0 - 1000 = +2000 > 200
+    inp = builder.build(
+        battery_soc=60.0, battery_target_soc=80.0,
+        pv_w=3000.0, house_load_w=1000.0, grid_import_w=0.0,
+    )
+    assert strategy_module.battery_focus(inp, _inv("idle")) == "charging_from_solar"
+
+
+def test_battery_focus_discharging_to_house(builder) -> None:
+    # battery_w = 500 + 0 - 2000 = -1500 < -200
+    inp = builder.build(
+        battery_soc=60.0, battery_target_soc=80.0,
+        pv_w=500.0, house_load_w=2000.0, grid_import_w=0.0,
+    )
+    assert strategy_module.battery_focus(inp, _inv("idle")) == "discharging_to_house"
+
+
+def test_battery_focus_idle(builder) -> None:
+    # battery_w = 1000 + 100 - 1000 = +100, within ±200 deadband
+    inp = builder.build(
+        battery_soc=60.0, battery_target_soc=80.0,
+        pv_w=1000.0, house_load_w=1000.0, grid_import_w=100.0,
+    )
+    assert strategy_module.battery_focus(inp, _inv("idle")) == "idle"
+
+
+# ── pv_destinations ───────────────────────────────────────────────────────────
+
+def _pv_inp(builder, **overrides) -> Inputs:
+    return builder.build(
+        pv_w=overrides.pop("pv_w", 3000.0),
+        house_load_w=overrides.pop("house_load_w", 1000.0),
+        ev_power_w=overrides.pop("ev_power_w", 0.0),
+        grid_import_w=overrides.pop("grid_import_w", -2000.0),
+        **overrides,
+    )
+
+
+def _check_conservation(d: PvDestinations) -> None:
+    total = d.to_house_w + d.to_ev_w + d.to_battery_w + d.to_grid_w
+    assert total == pytest.approx(max(0.0, d.pv_w), abs=1e-6)
+
+
+def test_pv_destinations_surplus_goes_to_grid(builder) -> None:
+    # pv=3000, house=1000, battery_charging=0 (grid_import=-2000: battery_w=3000-2000-1000=0)
+    # → to_house=1000, to_battery=0, to_grid=2000
+    inp = _pv_inp(builder, pv_w=3000.0, house_load_w=1000.0, ev_power_w=0.0, grid_import_w=-2000.0)
+    d = strategy_module.pv_destinations(inp, _inv("idle"))
+    assert d.to_house_w == pytest.approx(1000.0)
+    assert d.to_ev_w == pytest.approx(0.0)
+    assert d.to_battery_w == pytest.approx(0.0)
+    assert d.to_grid_w == pytest.approx(2000.0)
+    _check_conservation(d)
+
+
+def test_pv_destinations_pv_less_than_house(builder) -> None:
+    # pv=500 < house=1000 → to_house=500, everything else 0
+    inp = _pv_inp(builder, pv_w=500.0, house_load_w=1000.0, ev_power_w=0.0, grid_import_w=500.0)
+    d = strategy_module.pv_destinations(inp, _inv("idle"))
+    assert d.to_house_w == pytest.approx(500.0)
+    assert d.to_battery_w == pytest.approx(0.0)
+    assert d.to_grid_w == pytest.approx(0.0)
+    _check_conservation(d)
+
+
+def test_pv_destinations_zero_pv(builder) -> None:
+    inp = _pv_inp(builder, pv_w=0.0, house_load_w=1000.0, ev_power_w=0.0, grid_import_w=1000.0)
+    d = strategy_module.pv_destinations(inp, _inv("idle"))
+    assert d.to_house_w == pytest.approx(0.0)
+    assert d.to_ev_w == pytest.approx(0.0)
+    assert d.to_battery_w == pytest.approx(0.0)
+    assert d.to_grid_w == pytest.approx(0.0)
+    _check_conservation(d)
+
+
+def test_pv_destinations_battery_priority_cuts_ev(builder) -> None:
+    # pv=3000, house_non_ev=500 (house=1500, ev=1000), battery_w=3000+0-1500=1500
+    inp = _pv_inp(builder, pv_w=3000.0, house_load_w=1500.0, ev_power_w=1000.0, grid_import_w=0.0)
+    d = strategy_module.pv_destinations(inp, _inv("battery_priority"))
+    assert d.to_ev_w == pytest.approx(0.0)
+    assert d.to_house_w == pytest.approx(500.0)  # only house_non_ev
+    assert d.to_battery_w == pytest.approx(1500.0)
+    assert d.to_grid_w == pytest.approx(1000.0)
+    _check_conservation(d)
+
+
+def test_pv_destinations_battery_priority_battery_discharging(builder) -> None:
+    # battery_w = 500 - 2000 + 0 = -1500 < 0 → battery_charging_w = 0 → to_battery=0
+    inp = _pv_inp(builder, pv_w=500.0, house_load_w=2000.0, ev_power_w=1000.0, grid_import_w=0.0)
+    d = strategy_module.pv_destinations(inp, _inv("battery_priority"))
+    assert d.to_battery_w == pytest.approx(0.0)
+    assert d.to_ev_w == pytest.approx(0.0)
+    _check_conservation(d)
+
+
+def test_pv_destinations_ev_share_proportional_in_default_mode(builder) -> None:
+    # house=2000, ev=1000 (50% of house); pv=2000 covers all → split: to_ev=1000, to_house=1000
+    # battery_w = 0 → to_battery = 0
+    inp = _pv_inp(builder, pv_w=2000.0, house_load_w=2000.0, ev_power_w=1000.0, grid_import_w=0.0)
+    d = strategy_module.pv_destinations(inp, _inv("idle"))
+    assert d.to_ev_w == pytest.approx(1000.0)
+    assert d.to_house_w == pytest.approx(1000.0)
+    assert d.to_battery_w == pytest.approx(0.0)
+    _check_conservation(d)
+
+
+def test_pv_destinations_battery_charges_after_house(builder) -> None:
+    # pv=4000, house=1000, battery_w=4000+0-1000=3000 → to_battery=min(3000,3000)=3000
+    # to_grid=0
+    inp = _pv_inp(builder, pv_w=4000.0, house_load_w=1000.0, ev_power_w=0.0, grid_import_w=0.0)
+    d = strategy_module.pv_destinations(inp, _inv("controlling"))
+    assert d.to_house_w == pytest.approx(1000.0)
+    assert d.to_battery_w == pytest.approx(3000.0)
+    assert d.to_grid_w == pytest.approx(0.0)
+    _check_conservation(d)
+
+
+@pytest.mark.parametrize("pv,house,ev,grid,status", [
+    (3000.0, 1000.0, 0.0,    -2000.0, "idle"),
+    (0.0,    1000.0, 0.0,    1000.0,  "idle"),
+    (4000.0, 1500.0, 1000.0, 0.0,     "battery_priority"),
+    (500.0,  2000.0, 500.0,  1500.0,  "controlling"),
+    (2500.0, 1000.0, 500.0,  0.0,     "idle"),
+])
+def test_pv_destinations_conservation_invariant(builder, pv, house, ev, grid, status) -> None:
+    inp = _pv_inp(builder, pv_w=pv, house_load_w=house, ev_power_w=ev, grid_import_w=grid)
+    d = strategy_module.pv_destinations(inp, _inv(status))
+    _check_conservation(d)
+
+
+# ── pv_focus ──────────────────────────────────────────────────────────────────
+
+def _dest(pv, house=0.0, ev=0.0, battery=0.0, grid=0.0) -> PvDestinations:
+    return PvDestinations(
+        pv_w=pv, to_house_w=house, to_ev_w=ev, to_battery_w=battery, to_grid_w=grid
+    )
+
+
+def test_pv_focus_starting_up(builder) -> None:
+    d = _dest(3000.0, house=3000.0)
+    assert strategy_module.pv_focus(d, _inv("starting_up")) == "starting_up"
+
+
+def test_pv_focus_no_production(builder) -> None:
+    d = _dest(50.0)
+    assert strategy_module.pv_focus(d, _inv("idle")) == "no_production"
+
+
+def test_pv_focus_to_battery(builder) -> None:
+    d = _dest(3000.0, house=300.0, battery=2700.0)
+    assert strategy_module.pv_focus(d, _inv("idle")) == "to_battery"
+
+
+def test_pv_focus_to_house(builder) -> None:
+    d = _dest(3000.0, house=2700.0, battery=300.0)
+    assert strategy_module.pv_focus(d, _inv("idle")) == "to_house"
+
+
+def test_pv_focus_to_ev(builder) -> None:
+    # EV accounts for 100% of PV → clearly dominant
+    d = _dest(3000.0, ev=3000.0)
+    assert strategy_module.pv_focus(d, _inv("idle")) == "to_ev"
+
+
+def test_pv_focus_exporting(builder) -> None:
+    d = _dest(3000.0, house=300.0, grid=2700.0)
+    assert strategy_module.pv_focus(d, _inv("idle")) == "exporting"
+
+
+def test_pv_focus_mixed(builder) -> None:
+    # 40/30/30 split — no single destination ≥ 70%
+    d = _dest(3000.0, house=1200.0, battery=900.0, grid=900.0)
+    assert strategy_module.pv_focus(d, _inv("idle")) == "mixed"
+
+
+# ── grid_focus ────────────────────────────────────────────────────────────────
+
+def test_grid_focus_starting_up(builder) -> None:
+    inp = builder.build(grid_import_w=1000.0, thresholds=_THRESHOLDS)
+    assert strategy_module.grid_focus(inp, _inv("starting_up")) == "starting_up"
+
+
+def test_grid_focus_peak_shaving_active(builder) -> None:
+    inp = builder.build(grid_import_w=5000.0, thresholds=_THRESHOLDS)
+    assert strategy_module.grid_focus(inp, _inv("peak_shaving")) == "peak_shaving_active"
+
+
+def test_grid_focus_exporting(builder) -> None:
+    inp = builder.build(grid_import_w=-500.0, thresholds=_THRESHOLDS)
+    assert strategy_module.grid_focus(inp, _inv("idle")) == "exporting"
+
+
+def test_grid_focus_balanced(builder) -> None:
+    inp = builder.build(grid_import_w=50.0, thresholds=_THRESHOLDS)
+    assert strategy_module.grid_focus(inp, _inv("idle")) == "balanced"
+
+
+def test_grid_focus_at_peak_cap(builder) -> None:
+    # cap=4500, import=4400 → |4400-4500|=100 ≤ 200 (proximity) → at_peak_cap
+    inp = builder.build(grid_import_w=4400.0, thresholds=_THRESHOLDS)
+    assert strategy_module.grid_focus(inp, _inv("idle")) == "at_peak_cap"
+
+
+def test_grid_focus_importing(builder) -> None:
+    # import=1000, cap=4500 → |1000-4500|=3500 > 200 → importing
+    inp = builder.build(grid_import_w=1000.0, thresholds=_THRESHOLDS)
+    assert strategy_module.grid_focus(inp, _inv("idle")) == "importing"
