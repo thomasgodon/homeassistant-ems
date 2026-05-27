@@ -18,6 +18,8 @@ def decide(inputs: Inputs, *, commanded_ev_charge_w: float) -> InverterDecision:
         commanded_ev_charge_w=commanded_ev_charge_w,
         battery_soc=inputs.battery_soc,
         battery_target_soc=inputs.battery_target_soc,
+        ev_strategy=inputs.ev_strategy,
+        solar_shortfall_kwh_result=strategy_module.solar_shortfall_kwh(inputs),
     )
 
 
@@ -34,6 +36,8 @@ def recompute(
     commanded_ev_charge_w: float = 0.0,
     battery_soc: float | None = None,
     battery_target_soc: float = 80.0,
+    ev_strategy: str = "Off",
+    solar_shortfall_kwh_result: float | None = None,
 ) -> InverterDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
     return _compute(
@@ -48,6 +52,8 @@ def recompute(
         commanded_ev_charge_w=commanded_ev_charge_w,
         battery_soc=battery_soc,
         battery_target_soc=battery_target_soc,
+        ev_strategy=ev_strategy,
+        solar_shortfall_kwh_result=solar_shortfall_kwh_result,
     )
 
 
@@ -66,11 +72,23 @@ def _compute(
     commanded_ev_charge_w: float,
     battery_soc: float | None = None,
     battery_target_soc: float = 80.0,
+    ev_strategy: str = "Off",
+    solar_shortfall_kwh_result: float | None = None,
 ) -> InverterDecision:
     if inverter_strategy == "Off":
         return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
 
-    # Priority 1 — peak shaving: grid spike above cap, only when EV is idle.
+    # Priority 1 — Energy-optimised mode never touches the inverter. The strategy
+    # caps EV to live PV surplus so the battery is inherently protected without
+    # power-control — Self-Use handles routing autonomously.
+    if ev_strategy == "Energy-optimised":
+        return InverterDecision(
+            inverter_verb=mapping.disabled_option,
+            active_power_w=None,
+            status="idle",
+        )
+
+    # Priority 2 — peak shaving: grid spike above cap, only when EV is idle.
     # During an EV session the closed-loop EV integrator already drives
     # grid_import → max_grid_import_w; firing peak shaving simultaneously
     # causes double-correction that crashes ev_target to 0, stops the EV,
@@ -87,7 +105,7 @@ def _compute(
             status="peak_shaving",
         )
 
-    # Priority 2 — deficit hold: solar won't fill the battery today, so draw cheap
+    # Priority 3 — deficit hold: solar won't fill the battery today, so draw cheap
     # grid for house load during the cheapest remaining hours to preserve the battery
     # for the expensive evening.
     # Bypass when PV alone covers the house — Self-Use handles it without EMS involvement.
@@ -105,7 +123,22 @@ def _compute(
             status="holding_battery",
         )
 
-    # Priority 3 — idle: EMS is not commanding any charge and the EV is not
+    # Priority 4 — battery priority: solar forecast won't fill the battery and an EV
+    # session is active. PV is reserved for house (non-EV) load and battery charging;
+    # the EV is fed from the grid only.
+    if (
+        solar_shortfall_kwh_result is not None
+        and solar_shortfall_kwh_result > 0.0
+        and (commanded_ev_charge_w > 0.0 or ev_power_w > 0.0)
+    ):
+        house_non_ev = max(0.0, house_load_w - ev_power_w)
+        return InverterDecision(
+            inverter_verb=mapping.power_control_option,
+            active_power_w=-house_non_ev,
+            status="battery_priority",
+        )
+
+    # Priority 5 — idle: EMS is not commanding any charge and the EV is not
     # drawing. Release inverter to its native Self-Use Mode; PV routing and
     # battery management happen autonomously without EMS involvement.
     if commanded_ev_charge_w == 0.0 and ev_power_w == 0.0:
@@ -115,9 +148,9 @@ def _compute(
             status="idle",
         )
 
-    # Default — EMS is actively charging the EV (or EV is winding down).
-    # Direct available PV to AC; battery never drained for EV (magnitude
-    # capped by pv_w), never charged from AC (sign always ≤ 0).
+    # Default — EMS is actively charging the EV (or EV is winding down) and the
+    # battery forecast is fine. Direct available PV to AC; battery never drained for
+    # EV (magnitude capped by pv_w), never charged from AC (sign always ≤ 0).
     return InverterDecision(
         inverter_verb=mapping.power_control_option,
         active_power_w=-min(pv_w, house_load_w),

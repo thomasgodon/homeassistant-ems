@@ -290,7 +290,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             ev_plugged=ev_plugged,
         )
         eod_suppress = strategy_module.is_eod_suppress_hour(fast_inputs_for_eod)
-        energy_optimised_scale = strategy_module._energy_optimised_scale(fast_inputs_for_eod)
+        shortfall_kwh = strategy_module.solar_shortfall_kwh(fast_inputs_for_eod)
 
         ev_fast = strategy_module.recompute(
             pv_w=pv_w,
@@ -303,7 +303,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             is_cheap_hour=is_cheap_hour,
             thresholds=prior_inputs.thresholds,
             last_ev_target_w=self._ema_ev_w,
-            energy_optimised_scale=energy_optimised_scale,
+            shortfall_kwh=shortfall_kwh,
         )
 
         session_start = self._prev_ev_power_w == 0.0 and ev_power_w > 0.0
@@ -349,6 +349,8 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             commanded_ev_charge_w=ev_fast.ev_charge_power_w,
             battery_soc=prior_inputs.battery_soc,
             battery_target_soc=prior_inputs.battery_target_soc,
+            ev_strategy=ev_strategy,
+            solar_shortfall_kwh_result=shortfall_kwh,
         )
 
         if ev_strategy != "Off":

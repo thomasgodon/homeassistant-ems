@@ -17,6 +17,7 @@ _INVERTER_STATUS_LABELS: dict[str, str] = {
     "starting_up": "Starting up",
     "peak_shaving": "Peak shaving",
     "holding_battery": "Holding battery",
+    "battery_priority": "Battery priority",
 }
 
 _BATTERY_POWER_DEADBAND_W = 200.0
@@ -38,6 +39,10 @@ _INVERTER_STATUS_REASONS: dict[str, str] = {
         "Solar can't fill the battery today;"
         " draining cheap grid for the house during the cheapest remaining hours"
         " to preserve battery for the expensive evening."
+    ),
+    "battery_priority": (
+        "Solar forecast won't fill the battery today and EV is charging —"
+        " directing PV to house load and battery; EV is supplied from the grid."
     ),
 }
 
@@ -163,6 +168,8 @@ class EmsEvStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity)
             return "EV battery full"
         if state == "outside_cheap_hours":
             return "Waiting for cheap hours"
+        if state == "battery_short":
+            return "Solar reserved for home battery"
         if state == "not_enough_power":
             return "Not enough surplus to charge"
         # state == "charging"
@@ -216,6 +223,13 @@ class EmsInverterStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorE
             formula = (
                 f"active_power = -min(pv_w, house_load_w)"
                 f" = -min({pv:.0f}, {house:.0f}) = {ap:.0f} W"
+            )
+        elif inv.status == "battery_priority":
+            ap = inv.active_power_w
+            reason = _INVERTER_STATUS_REASONS["battery_priority"]
+            formula = (
+                f"active_power = -max(0, house_load_w - ev_power_w)"
+                f" = -max(0, {house:.0f} - {ev:.0f}) = {ap:.0f} W"
             )
         elif inv.status == "peak_shaving":
             ap = inv.active_power_w

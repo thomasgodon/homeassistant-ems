@@ -19,7 +19,7 @@ def decide(inputs: Inputs) -> EvDecision:
         ev_strategy=inputs.ev_strategy,
         is_cheap_hour=inputs.is_cheap_hour,
         thresholds=inputs.thresholds,
-        energy_optimised_scale=_energy_optimised_scale(inputs),
+        shortfall_kwh=solar_shortfall_kwh(inputs),
     )
 
 
@@ -35,7 +35,7 @@ def recompute(
     is_cheap_hour: bool,
     thresholds: Thresholds,
     last_ev_target_w: float | None = None,
-    energy_optimised_scale: float = 1.0,
+    shortfall_kwh: float | None = None,
 ) -> EvDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
     house_non_ev = max(0.0, house_load_w - ev_power_w)
@@ -50,7 +50,7 @@ def recompute(
         ev_strategy=ev_strategy,
         is_cheap_hour=is_cheap_hour,
         thresholds=thresholds,
-        energy_optimised_scale=energy_optimised_scale,
+        shortfall_kwh=shortfall_kwh,
     )
 
 
@@ -68,7 +68,7 @@ def _make_decision(
     ev_strategy: str,
     is_cheap_hour: bool,
     thresholds: Thresholds,
-    energy_optimised_scale: float,
+    shortfall_kwh: float | None,
 ) -> EvDecision:
     # Hard gates — evaluated in priority order
     if ev_strategy == "Off":
@@ -81,11 +81,24 @@ def _make_decision(
         return _idle("target_soc_reached")
 
     if ev_strategy == "Energy-optimised":
-        # Charge from instantaneous PV surplus scaled by predicted EOD battery success.
+        # Binary budget: EV charges only when today's solar forecast has leftover
+        # after covering house load and battery target. No grid, no battery drain.
+        if shortfall_kwh is not None and shortfall_kwh > 0.0:
+            return _idle("battery_short")
+        # Forecast OK (or missing — assume fine). EV gets the full live PV surplus.
         # surplus = PV minus non-EV house load; EV's own draw is excluded so the EV
         # can absorb the headroom it creates as it ramps up.
         surplus_w = max(0.0, pv_w - house_non_ev)
-        ev_target_w = surplus_w * energy_optimised_scale
+        ev_target_w = surplus_w
+        # Apply charger cap before hysteresis check so threshold comparison is accurate.
+        if thresholds.max_ev_charge_w is not None:
+            ev_target_w = min(ev_target_w, thresholds.max_ev_charge_w)
+        # Hysteresis: raise start threshold to 110% of minimum to prevent chattering
+        # when PV surplus hovers near the minimum charge power.
+        was_charging = last_ev_target_w is not None and last_ev_target_w > 0.0
+        if not was_charging and ev_target_w < thresholds.ev_min_charge_w * 1.1:
+            return _idle("not_enough_power")
+        # was_charging case: fall through to common min check (stop = ev_min_charge_w)
     else:
         # Integrating closed-loop: drives total grid import to max_grid_import_w.
         # Uses last commanded target as feedback to eliminate static error from
@@ -190,31 +203,3 @@ def should_advise_ev_charge(inputs: Inputs) -> bool:
     return current_hour in cheapest
 
 
-def _energy_optimised_scale(inputs: Inputs) -> float:
-    """Return 0..1 scale for EV surplus based on predicted EOD battery SoC.
-
-    1.0 = full surplus to EV (battery will fill, or data is missing).
-    0.0 = no EV charging (battery won't advance from current SoC).
-    Intermediate values when battery is predicted to partially fill.
-    """
-    if (
-        inputs.battery_soc is None
-        or inputs.battery_capacity_kwh is None
-        or inputs.solar_forecast_remaining_kwh is None
-    ):
-        return 1.0
-
-    house_forecast = inputs.house_load_forecast_remaining_kwh or 0.0
-    net_solar_kwh = inputs.solar_forecast_remaining_kwh - house_forecast
-    predicted_end_soc = inputs.battery_soc + net_solar_kwh * 100.0 / inputs.battery_capacity_kwh
-
-    floor = inputs.battery_soc
-    target = inputs.battery_target_soc
-
-    if target <= floor:
-        return 1.0  # battery already at/above target
-    if predicted_end_soc >= target:
-        return 1.0
-    if predicted_end_soc <= floor:
-        return 0.0
-    return (predicted_end_soc - floor) / (target - floor)

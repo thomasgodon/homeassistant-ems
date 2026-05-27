@@ -54,6 +54,8 @@ def _decide(
     commanded_ev_charge_w: float = 0.0,
     battery_soc: float | None = None,
     battery_target_soc: float = 80.0,
+    ev_strategy: str = "Grid-optimised",
+    solar_shortfall_kwh_result: float | None = None,
 ) -> InverterDecision:
     return inverter_control_module.recompute(
         pv_w=pv_w,
@@ -67,6 +69,8 @@ def _decide(
         commanded_ev_charge_w=commanded_ev_charge_w,
         battery_soc=battery_soc,
         battery_target_soc=battery_target_soc,
+        ev_strategy=ev_strategy,
+        solar_shortfall_kwh_result=solar_shortfall_kwh_result,
     )
 
 
@@ -254,6 +258,7 @@ def test_recompute_matches_decide(builder) -> None:
         mapping=inp.mapping,
         max_grid_import_w=inp.thresholds.max_grid_import_w,
         commanded_ev_charge_w=commanded,
+        ev_strategy=inp.ev_strategy,
     )
     assert d1 == d2
 
@@ -388,3 +393,94 @@ def test_priority_deficit_hold_over_controlling() -> None:
     """Deficit hold beats the default controlling branch when EV is idle."""
     d = _decide(pv_w=500.0, house_load_w=2000.0, ev_power_w=0.0, eod_suppress=True)
     assert d.status == "holding_battery"
+
+
+# ── Energy-optimised: hands-off branch ───────────────────────────────────────
+
+def test_energy_optimised_returns_idle_when_ev_idle() -> None:
+    """Energy-optimised never touches the inverter — returns disabled verb, status=idle."""
+    d = _decide(ev_strategy="Energy-optimised", pv_w=3000.0, house_load_w=1000.0)
+    assert d.status == "idle"
+    assert d.inverter_verb == "disabled"
+    assert d.active_power_w is None
+
+
+def test_energy_optimised_returns_idle_when_ev_charging() -> None:
+    """Energy-optimised leaves inverter in Self-Use even when EV is drawing."""
+    d = _decide(
+        ev_strategy="Energy-optimised",
+        pv_w=4000.0, house_load_w=1500.0,
+        ev_power_w=2000.0, commanded_ev_charge_w=2000.0,
+    )
+    assert d.status == "idle"
+    assert d.inverter_verb == "disabled"
+    assert d.active_power_w is None
+
+
+def test_energy_optimised_overrides_shortfall_branch() -> None:
+    """Energy-optimised fires before battery-priority — shortfall must not trigger controlling."""
+    d = _decide(
+        ev_strategy="Energy-optimised",
+        pv_w=4000.0, house_load_w=1500.0,
+        ev_power_w=2000.0, commanded_ev_charge_w=2000.0,
+        solar_shortfall_kwh_result=2.0,
+    )
+    assert d.status == "idle"
+
+
+# ── Battery priority: new shortfall branch ────────────────────────────────────
+
+def test_battery_priority_fires_when_shortfall_and_ev_drawing() -> None:
+    """shortfall > 0 + EV drawing → power_control, active_power=-house_non_ev."""
+    d = _decide(
+        pv_w=4000.0,
+        house_load_w=3000.0,
+        ev_power_w=2000.0,
+        commanded_ev_charge_w=2000.0,
+        solar_shortfall_kwh_result=1.5,
+    )
+    assert d.status == "battery_priority"
+    assert d.inverter_verb == "power_control"
+    # house_non_ev = max(0, 3000 - 2000) = 1000
+    assert d.active_power_w == pytest.approx(-1000.0)
+
+
+def test_battery_priority_fires_when_commanded_but_no_draw_yet() -> None:
+    """Battery priority also fires on cycle 1 (commanded > 0, EV not yet drawing)."""
+    d = _decide(
+        pv_w=4000.0,
+        house_load_w=1500.0,
+        ev_power_w=0.0,
+        commanded_ev_charge_w=2000.0,
+        solar_shortfall_kwh_result=1.5,
+    )
+    assert d.status == "battery_priority"
+    # house_non_ev = max(0, 1500 - 0) = 1500
+    assert d.active_power_w == pytest.approx(-1500.0)
+
+
+def test_battery_priority_not_fired_when_ev_idle() -> None:
+    """No EV draw and commanded=0 → shortfall does not trigger battery_priority."""
+    d = _decide(
+        pv_w=4000.0, house_load_w=1500.0, ev_power_w=0.0, commanded_ev_charge_w=0.0,
+        solar_shortfall_kwh_result=2.0,
+    )
+    assert d.status == "idle"
+
+
+def test_battery_priority_not_fired_when_shortfall_zero() -> None:
+    """shortfall=0 → falls through to default controlling branch."""
+    d = _decide(
+        pv_w=4000.0, house_load_w=3000.0, ev_power_w=2000.0,
+        commanded_ev_charge_w=2000.0, solar_shortfall_kwh_result=0.0,
+    )
+    assert d.status == "controlling"
+
+
+def test_battery_priority_not_fired_when_shortfall_none() -> None:
+    """shortfall=None (missing forecast) → falls through to default controlling branch."""
+    d = _decide(
+        pv_w=4000.0, house_load_w=3000.0, ev_power_w=2000.0,
+        commanded_ev_charge_w=2000.0, solar_shortfall_kwh_result=None,
+    )
+    assert d.status == "controlling"

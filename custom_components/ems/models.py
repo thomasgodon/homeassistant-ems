@@ -50,6 +50,7 @@ StrategyLabel = Literal["ev_charging", "ev_idle"]
 
 InverterStatus = Literal[
     "controlling", "idle", "disabled", "starting_up", "peak_shaving", "holding_battery",
+    "battery_priority",
 ]
 
 EvChargingState = Literal[
@@ -60,6 +61,7 @@ EvChargingState = Literal[
     "not_enough_power",
     "starting_up",
     "outside_cheap_hours",
+    "battery_short",
 ]
 
 

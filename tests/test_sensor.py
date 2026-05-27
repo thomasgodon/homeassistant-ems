@@ -281,7 +281,7 @@ def test_inverter_status_options_cover_all_states():
     sensor = EmsInverterStatusSensor(_make_coordinator(0.0))
     assert set(sensor.options) == {
         "Controlling", "Idle", "Disabled", "Starting up", "Peak shaving",
-        "Holding battery",
+        "Holding battery", "Battery priority",
     }
 
 
@@ -542,3 +542,37 @@ def test_battery_status_no_shortfall_suffix_when_solar_covers(monkeypatch):
         )
     )
     assert "solar short" not in sensor.native_value
+
+
+# ── battery_short EV state ────────────────────────────────────────────────────
+
+def test_ev_status_battery_short():
+    sensor = EmsEvStatusSensor(
+        _make_coordinator(0.0, charging_state="battery_short")
+    )
+    assert sensor.native_value == "Solar reserved for home battery"
+
+
+# ── battery_priority inverter status ─────────────────────────────────────────
+
+def test_inverter_status_label_battery_priority():
+    sensor = EmsInverterStatusSensor(
+        _make_coordinator(2000.0, ev_power_w=2000.0, active_power_w=-1000.0,
+                          inverter_status="battery_priority",
+                          pv_w=4000.0, house_load_w=3000.0)
+    )
+    assert sensor.native_value == "Battery priority"
+
+
+def test_inverter_status_attributes_battery_priority():
+    sensor = EmsInverterStatusSensor(
+        _make_coordinator(2000.0, ev_power_w=2000.0, active_power_w=-1000.0,
+                          inverter_status="battery_priority",
+                          pv_w=4000.0, house_load_w=3000.0)
+    )
+    attrs = sensor.extra_state_attributes
+    # house_non_ev = max(0, 3000 - 2000) = 1000
+    assert attrs["house_non_ev_w"] == pytest.approx(1000.0)
+    assert attrs["active_power_w"] == pytest.approx(-1000.0)
+    assert "-max(0," in attrs["formula"]
+    assert "Solar forecast" in attrs["reason"]
