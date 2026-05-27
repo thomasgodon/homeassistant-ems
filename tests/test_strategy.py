@@ -781,6 +781,58 @@ def test_energy_optimised_hysteresis_stops_below_min(builder) -> None:
     assert d.charging_state == "not_enough_power"
 
 
+# ── battery_gap_kwh ───────────────────────────────────────────────────────────
+
+def test_battery_gap_kwh_none_when_soc_missing() -> None:
+    inp = _eod_inputs(battery_capacity_kwh=10.0)
+    assert strategy_module.battery_gap_kwh(inp) is None
+
+
+def test_battery_gap_kwh_none_when_capacity_missing() -> None:
+    inp = _eod_inputs(battery_soc=50.0)
+    assert strategy_module.battery_gap_kwh(inp) is None
+
+
+def test_battery_gap_kwh_positive_when_below_target() -> None:
+    # 10 kWh * (80 - 50) / 100 = 3 kWh
+    inp = _eod_inputs(battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0)
+    assert strategy_module.battery_gap_kwh(inp) == pytest.approx(3.0)
+
+
+def test_battery_gap_kwh_zero_when_at_target() -> None:
+    inp = _eod_inputs(battery_soc=80.0, battery_capacity_kwh=10.0, battery_target_soc=80.0)
+    assert strategy_module.battery_gap_kwh(inp) == pytest.approx(0.0)
+
+
+def test_battery_gap_kwh_zero_when_above_target() -> None:
+    inp = _eod_inputs(battery_soc=95.0, battery_capacity_kwh=10.0, battery_target_soc=80.0)
+    assert strategy_module.battery_gap_kwh(inp) == pytest.approx(0.0)
+
+
+# ── effective_solar_remaining_kwh ─────────────────────────────────────────────
+
+def test_effective_solar_remaining_none_when_solar_missing() -> None:
+    inp = _eod_inputs(house_load_forecast_remaining_kwh=3.0)
+    assert strategy_module.effective_solar_remaining_kwh(inp) is None
+
+
+def test_effective_solar_remaining_positive_when_solar_exceeds_house() -> None:
+    # 8 - 3 = 5 kWh
+    inp = _eod_inputs(solar_forecast_remaining_kwh=8.0, house_load_forecast_remaining_kwh=3.0)
+    assert strategy_module.effective_solar_remaining_kwh(inp) == pytest.approx(5.0)
+
+
+def test_effective_solar_remaining_zero_when_house_exceeds_solar() -> None:
+    # solar 2, house 5 → clamped to 0
+    inp = _eod_inputs(solar_forecast_remaining_kwh=2.0, house_load_forecast_remaining_kwh=5.0)
+    assert strategy_module.effective_solar_remaining_kwh(inp) == pytest.approx(0.0)
+
+
+def test_effective_solar_remaining_treats_missing_house_as_zero() -> None:
+    inp = _eod_inputs(solar_forecast_remaining_kwh=4.0)
+    assert strategy_module.effective_solar_remaining_kwh(inp) == pytest.approx(4.0)
+
+
 # ── solar_shortfall_kwh ───────────────────────────────────────────────────────
 
 def test_solar_shortfall_kwh_returns_none_when_battery_soc_missing() -> None:

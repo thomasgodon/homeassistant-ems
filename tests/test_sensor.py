@@ -7,13 +7,16 @@ import pytest
 
 from custom_components.ems.models import EvDecision, InverterDecision, LadderResult, Thresholds
 from custom_components.ems.sensor import (
+    EmsBatteryEnergyToTargetSensor,
     EmsBatteryStatusSensor,
     EmsEvCurrentSensor,
     EmsEvStatusSensor,
     EmsGridStatusSensor,
     EmsInverterActivePowerSensor,
     EmsInverterModeSensor,
+    EmsNetSolarRemainingSensor,
     EmsPvStatusSensor,
+    EmsSolarBalanceSensor,
 )
 
 _DEFAULT_THRESHOLDS = Thresholds(
@@ -624,3 +627,93 @@ def test_grid_status_attributes_present():
 def test_grid_status_attributes_none_when_no_data():
     sensor = EmsGridStatusSensor(_make_coordinator(None))
     assert sensor.extra_state_attributes is None
+
+
+# ── EmsBatteryEnergyToTargetSensor ───────────────────────────────────────────
+
+def test_battery_energy_to_target_unique_id():
+    sensor = EmsBatteryEnergyToTargetSensor(_make_coordinator(0.0))
+    assert sensor.unique_id == "ems_battery_energy_to_target_kwh"
+
+
+def test_battery_energy_to_target_returns_value(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.battery_gap_kwh", lambda _: 3.2)
+    sensor = EmsBatteryEnergyToTargetSensor(_make_coordinator(0.0))
+    assert sensor.native_value == pytest.approx(3.2)
+    assert sensor.available is True
+
+
+def test_battery_energy_to_target_unavailable_when_no_data():
+    sensor = EmsBatteryEnergyToTargetSensor(_make_coordinator(None))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_battery_energy_to_target_unavailable_when_helper_returns_none(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.battery_gap_kwh", lambda _: None)
+    sensor = EmsBatteryEnergyToTargetSensor(_make_coordinator(0.0))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+# ── EmsNetSolarRemainingSensor ────────────────────────────────────────────────
+
+def test_net_solar_remaining_unique_id():
+    sensor = EmsNetSolarRemainingSensor(_make_coordinator(0.0))
+    assert sensor.unique_id == "ems_net_solar_remaining_kwh"
+
+
+def test_net_solar_remaining_returns_value(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.effective_solar_remaining_kwh", lambda _: 4.5)
+    sensor = EmsNetSolarRemainingSensor(_make_coordinator(0.0))
+    assert sensor.native_value == pytest.approx(4.5)
+    assert sensor.available is True
+
+
+def test_net_solar_remaining_unavailable_when_no_data():
+    sensor = EmsNetSolarRemainingSensor(_make_coordinator(None))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_net_solar_remaining_unavailable_when_helper_returns_none(monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.ems.sensor.effective_solar_remaining_kwh", lambda _: None
+    )
+    sensor = EmsNetSolarRemainingSensor(_make_coordinator(0.0))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+# ── EmsSolarBalanceSensor ─────────────────────────────────────────────────────
+
+def test_solar_balance_unique_id():
+    sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
+    assert sensor.unique_id == "ems_solar_balance_kwh"
+
+
+def test_solar_balance_positive_when_shortage(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 2.1)
+    sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
+    assert sensor.native_value == pytest.approx(2.1)
+    assert sensor.available is True
+
+
+def test_solar_balance_negative_when_surplus(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: -4.2)
+    sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
+    assert sensor.native_value == pytest.approx(-4.2)
+    assert sensor.available is True
+
+
+def test_solar_balance_unavailable_when_no_data():
+    sensor = EmsSolarBalanceSensor(_make_coordinator(None))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_solar_balance_unavailable_when_helper_returns_none(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: None)
+    sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
+    assert sensor.native_value is None
+    assert sensor.available is False

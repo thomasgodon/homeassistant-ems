@@ -139,6 +139,22 @@ def _idle(charging_state: EvChargingState) -> EvDecision:
 
 # ── EOD battery fullness helpers ──────────────────────────────────────────────
 
+def battery_gap_kwh(inputs: Inputs) -> float | None:
+    """kWh to lift battery from current SoC to target_soc. None if SoC or capacity unknown."""
+    if inputs.battery_soc is None or inputs.battery_capacity_kwh is None:
+        return None
+    gap_fraction = max(0.0, (inputs.battery_target_soc - inputs.battery_soc) / 100.0)
+    return inputs.battery_capacity_kwh * gap_fraction
+
+
+def effective_solar_remaining_kwh(inputs: Inputs) -> float | None:
+    """Solar forecast minus house load forecast, clamped >=0. None if solar forecast unknown."""
+    if inputs.solar_forecast_remaining_kwh is None:
+        return None
+    house = inputs.house_load_forecast_remaining_kwh or 0.0
+    return max(0.0, inputs.solar_forecast_remaining_kwh - house)
+
+
 def solar_shortfall_kwh(inputs: Inputs) -> float | None:
     """Return battery_gap_kwh − effective_solar_kwh.
 
@@ -146,19 +162,11 @@ def solar_shortfall_kwh(inputs: Inputs) -> float | None:
     Negative or zero = solar covers the gap (or battery already at/above target).
     None if any required input is missing.
     """
-    if (
-        inputs.battery_soc is None
-        or inputs.battery_capacity_kwh is None
-        or inputs.solar_forecast_remaining_kwh is None
-    ):
+    gap = battery_gap_kwh(inputs)
+    effective = effective_solar_remaining_kwh(inputs)
+    if gap is None or effective is None:
         return None
-
-    battery_gap_kwh = inputs.battery_capacity_kwh * max(
-        0.0, (inputs.battery_target_soc - inputs.battery_soc) / 100.0
-    )
-    house_forecast = inputs.house_load_forecast_remaining_kwh or 0.0
-    effective_solar = max(0.0, inputs.solar_forecast_remaining_kwh - house_forecast)
-    return battery_gap_kwh - effective_solar
+    return gap - effective
 
 
 def _cheap_hold_hours(inputs: Inputs) -> list[int] | None:
@@ -228,15 +236,12 @@ def expected_eod_soc(inputs: Inputs) -> float | None:
     Uses the same formula and None semantics as solar_shortfall_kwh().
     Returns None if any required input is missing.
     """
-    if (
-        inputs.battery_soc is None
-        or inputs.battery_capacity_kwh is None
-        or inputs.solar_forecast_remaining_kwh is None
-    ):
+    if inputs.battery_soc is None or inputs.battery_capacity_kwh is None:
         return None
-    house_forecast = inputs.house_load_forecast_remaining_kwh or 0.0
-    effective_solar = max(0.0, inputs.solar_forecast_remaining_kwh - house_forecast)
-    delta_soc = (effective_solar / inputs.battery_capacity_kwh) * 100.0
+    effective = effective_solar_remaining_kwh(inputs)
+    if effective is None:
+        return None
+    delta_soc = (effective / inputs.battery_capacity_kwh) * 100.0
     return min(100.0, inputs.battery_soc + delta_soc)
 
 

@@ -10,7 +10,9 @@ from .const import DOMAIN
 from .coordinator import EmsFastLoopCoordinator
 from .strategy import (
     battery_focus,
+    battery_gap_kwh,
     cheap_hold_rank,
+    effective_solar_remaining_kwh,
     expected_eod_soc,
     grid_focus,
     pv_destinations,
@@ -33,6 +35,9 @@ async def async_setup_entry(
         EmsBatteryStatusSensor(coordinator),
         EmsPvStatusSensor(coordinator),
         EmsGridStatusSensor(coordinator),
+        EmsBatteryEnergyToTargetSensor(coordinator),
+        EmsNetSolarRemainingSensor(coordinator),
+        EmsSolarBalanceSensor(coordinator),
     ])
 
 
@@ -371,3 +376,87 @@ class EmsGridStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntit
     @property
     def available(self) -> bool:
         return self.coordinator.data is not None
+
+
+class EmsBatteryEnergyToTargetSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    """kWh still needed to bring the battery from current SoC to its target SoC."""
+
+    _attr_unique_id = "ems_battery_energy_to_target_kwh"
+    _attr_name = "EMS Battery Energy To Target"
+    _attr_native_unit_of_measurement = "kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data is None:
+            return None
+        return battery_gap_kwh(self.coordinator.data.inputs)
+
+    @property
+    def available(self) -> bool:
+        if self.coordinator.data is None:
+            return False
+        return battery_gap_kwh(self.coordinator.data.inputs) is not None
+
+
+class EmsNetSolarRemainingSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    """Solar forecast remaining today minus house load forecast remaining, clamped to ≥ 0."""
+
+    _attr_unique_id = "ems_net_solar_remaining_kwh"
+    _attr_name = "EMS Net Solar Remaining"
+    _attr_native_unit_of_measurement = "kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data is None:
+            return None
+        return effective_solar_remaining_kwh(self.coordinator.data.inputs)
+
+    @property
+    def available(self) -> bool:
+        if self.coordinator.data is None:
+            return False
+        return effective_solar_remaining_kwh(self.coordinator.data.inputs) is not None
+
+
+class EmsSolarBalanceSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    """Signed energy balance: positive = shortage to fill battery, negative = surplus for EV."""
+
+    _attr_unique_id = "ems_solar_balance_kwh"
+    _attr_name = "EMS Solar Balance"
+    _attr_native_unit_of_measurement = "kWh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data is None:
+            return None
+        return solar_shortfall_kwh(self.coordinator.data.inputs)
+
+    @property
+    def available(self) -> bool:
+        if self.coordinator.data is None:
+            return False
+        return solar_shortfall_kwh(self.coordinator.data.inputs) is not None
