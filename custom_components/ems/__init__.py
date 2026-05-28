@@ -17,6 +17,7 @@ from .const import (
 from .controller import Controller
 from .coordinator import (
     EmsFastLoopCoordinator,
+    EmsForecastCoordinator,
     EmsState,
     EmsStrategyCoordinator,
 )
@@ -96,17 +97,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     strategy_coordinator = EmsStrategyCoordinator(hass, entry, state, controller)
     fast_loop_coordinator = EmsFastLoopCoordinator(hass, entry, state, controller)
+    forecast_coordinator = EmsForecastCoordinator(hass, entry)
 
     await strategy_coordinator.async_setup()
+    await forecast_coordinator.async_setup()
 
     await strategy_coordinator.async_config_entry_first_refresh()
     await fast_loop_coordinator.async_config_entry_first_refresh()
+    await forecast_coordinator.async_config_entry_first_refresh()
 
     hass.data[DOMAIN][entry.entry_id] = {
         "state": state,
         "controller": controller,
         "strategy_coordinator": strategy_coordinator,
         "fast_loop_coordinator": fast_loop_coordinator,
+        "forecast_coordinator": forecast_coordinator,
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

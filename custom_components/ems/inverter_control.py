@@ -78,17 +78,7 @@ def _compute(
     if inverter_strategy == "Off":
         return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
 
-    # Priority 1 — Energy-optimised mode never touches the inverter. The strategy
-    # caps EV to live PV surplus so the battery is inherently protected without
-    # power-control — Self-Use handles routing autonomously.
-    if ev_strategy == "Energy-optimised":
-        return InverterDecision(
-            inverter_verb=mapping.disabled_option,
-            active_power_w=None,
-            status="idle",
-        )
-
-    # Priority 2 — peak shaving: grid spike above cap, only when EV is idle.
+    # Priority 1 — peak shaving: grid spike above cap, only when EV is idle.
     # During an EV session the closed-loop EV integrator already drives
     # grid_import → max_grid_import_w; firing peak shaving simultaneously
     # causes double-correction that crashes ev_target to 0, stops the EV,
@@ -105,9 +95,10 @@ def _compute(
             status="peak_shaving",
         )
 
-    # Priority 3 — deficit hold: solar won't fill the battery today, so draw cheap
+    # Priority 2 — deficit hold: solar won't fill the battery today, so draw cheap
     # grid for house load during the cheapest remaining hours to preserve the battery
-    # for the expensive evening.
+    # for the expensive evening. Applies regardless of EV strategy — battery holds
+    # must fire even in Energy-optimised mode when grid is cheap and battery is short.
     # Bypass when PV alone covers the house — Self-Use handles it without EMS involvement.
     # Bypass during EV sessions — the EV integrator already controls grid import;
     # holding the battery simultaneously steals PV from the EV and causes grid draw.
@@ -121,6 +112,16 @@ def _compute(
             inverter_verb=mapping.power_control_option,
             active_power_w=0.0,
             status="holding_battery",
+        )
+
+    # Priority 3 — Energy-optimised mode: peak shaving and deficit hold are handled
+    # above. For EV-session management the strategy caps charge to live PV surplus,
+    # so the battery is inherently protected — release to Self-Use here.
+    if ev_strategy == "Energy-optimised":
+        return InverterDecision(
+            inverter_verb=mapping.disabled_option,
+            active_power_w=None,
+            status="idle",
         )
 
     # Priority 4 — battery priority: solar forecast won't fill the battery and an EV

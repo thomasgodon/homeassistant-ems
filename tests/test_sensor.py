@@ -8,6 +8,7 @@ import pytest
 from custom_components.ems.models import EvDecision, InverterDecision, LadderResult, Thresholds
 from custom_components.ems.sensor import (
     EmsBatteryEnergyToTargetSensor,
+    EmsBatterySolarDeficitSensor,
     EmsBatteryStatusSensor,
     EmsEvCurrentSensor,
     EmsEvStatusSensor,
@@ -17,7 +18,6 @@ from custom_components.ems.sensor import (
     EmsInverterModeSensor,
     EmsNetSolarRemainingSensor,
     EmsPvStatusSensor,
-    EmsBatterySolarDeficitSensor,
 )
 
 _DEFAULT_THRESHOLDS = Thresholds(
@@ -630,29 +630,35 @@ def test_grid_status_attributes_none_when_no_data():
     assert sensor.extra_state_attributes is None
 
 
+def _make_forecast_coordinator(no_data: bool = False) -> MagicMock:
+    coordinator = MagicMock()
+    coordinator.data = None if no_data else MagicMock()
+    return coordinator
+
+
 # ── EmsBatteryEnergyToTargetSensor ───────────────────────────────────────────
 
 def test_battery_energy_to_target_unique_id():
-    sensor = EmsBatteryEnergyToTargetSensor(_make_coordinator(0.0))
+    sensor = EmsBatteryEnergyToTargetSensor(_make_forecast_coordinator())
     assert sensor.unique_id == "ems_battery_energy_to_target"
 
 
 def test_battery_energy_to_target_returns_value(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.battery_gap_kwh", lambda _: 3.2)
-    sensor = EmsBatteryEnergyToTargetSensor(_make_coordinator(0.0))
+    sensor = EmsBatteryEnergyToTargetSensor(_make_forecast_coordinator())
     assert sensor.native_value == 3200
     assert sensor.available is True
 
 
 def test_battery_energy_to_target_unavailable_when_no_data():
-    sensor = EmsBatteryEnergyToTargetSensor(_make_coordinator(None))
+    sensor = EmsBatteryEnergyToTargetSensor(_make_forecast_coordinator(no_data=True))
     assert sensor.native_value is None
     assert sensor.available is False
 
 
 def test_battery_energy_to_target_unavailable_when_helper_returns_none(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.battery_gap_kwh", lambda _: None)
-    sensor = EmsBatteryEnergyToTargetSensor(_make_coordinator(0.0))
+    sensor = EmsBatteryEnergyToTargetSensor(_make_forecast_coordinator())
     assert sensor.native_value is None
     assert sensor.available is False
 
@@ -660,19 +666,19 @@ def test_battery_energy_to_target_unavailable_when_helper_returns_none(monkeypat
 # ── EmsNetSolarRemainingSensor ────────────────────────────────────────────────
 
 def test_net_solar_remaining_unique_id():
-    sensor = EmsNetSolarRemainingSensor(_make_coordinator(0.0))
+    sensor = EmsNetSolarRemainingSensor(_make_forecast_coordinator())
     assert sensor.unique_id == "ems_net_solar_remaining"
 
 
 def test_net_solar_remaining_returns_value(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.effective_solar_remaining_kwh", lambda _: 4.5)
-    sensor = EmsNetSolarRemainingSensor(_make_coordinator(0.0))
+    sensor = EmsNetSolarRemainingSensor(_make_forecast_coordinator())
     assert sensor.native_value == 4500
     assert sensor.available is True
 
 
 def test_net_solar_remaining_unavailable_when_no_data():
-    sensor = EmsNetSolarRemainingSensor(_make_coordinator(None))
+    sensor = EmsNetSolarRemainingSensor(_make_forecast_coordinator(no_data=True))
     assert sensor.native_value is None
     assert sensor.available is False
 
@@ -681,7 +687,7 @@ def test_net_solar_remaining_unavailable_when_helper_returns_none(monkeypatch):
     monkeypatch.setattr(
         "custom_components.ems.sensor.effective_solar_remaining_kwh", lambda _: None
     )
-    sensor = EmsNetSolarRemainingSensor(_make_coordinator(0.0))
+    sensor = EmsNetSolarRemainingSensor(_make_forecast_coordinator())
     assert sensor.native_value is None
     assert sensor.available is False
 
@@ -689,33 +695,33 @@ def test_net_solar_remaining_unavailable_when_helper_returns_none(monkeypatch):
 # ── EmsBatterySolarDeficitSensor ──────────────────────────────────────────────
 
 def test_battery_solar_deficit_unique_id():
-    sensor = EmsBatterySolarDeficitSensor(_make_coordinator(0.0))
+    sensor = EmsBatterySolarDeficitSensor(_make_forecast_coordinator())
     assert sensor.unique_id == "ems_battery_solar_deficit"
 
 
 def test_battery_solar_deficit_positive_when_shortage(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 2.1)
-    sensor = EmsBatterySolarDeficitSensor(_make_coordinator(0.0))
+    sensor = EmsBatterySolarDeficitSensor(_make_forecast_coordinator())
     assert sensor.native_value == -2100
     assert sensor.available is True
 
 
 def test_battery_solar_deficit_negative_when_surplus(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: -4.2)
-    sensor = EmsBatterySolarDeficitSensor(_make_coordinator(0.0))
+    sensor = EmsBatterySolarDeficitSensor(_make_forecast_coordinator())
     assert sensor.native_value == 4200
     assert sensor.available is True
 
 
 def test_battery_solar_deficit_unavailable_when_no_data():
-    sensor = EmsBatterySolarDeficitSensor(_make_coordinator(None))
+    sensor = EmsBatterySolarDeficitSensor(_make_forecast_coordinator(no_data=True))
     assert sensor.native_value is None
     assert sensor.available is False
 
 
 def test_battery_solar_deficit_unavailable_when_helper_returns_none(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: None)
-    sensor = EmsBatterySolarDeficitSensor(_make_coordinator(0.0))
+    sensor = EmsBatterySolarDeficitSensor(_make_forecast_coordinator())
     assert sensor.native_value is None
     assert sensor.available is False
 
@@ -723,25 +729,25 @@ def test_battery_solar_deficit_unavailable_when_helper_returns_none(monkeypatch)
 # ── EmsExpectedEodBatterySensor ───────────────────────────────────────────────
 
 def test_expected_eod_battery_unique_id():
-    sensor = EmsExpectedEodBatterySensor(_make_coordinator(0.0))
+    sensor = EmsExpectedEodBatterySensor(_make_forecast_coordinator())
     assert sensor.unique_id == "ems_expected_eod_battery"
 
 
 def test_expected_eod_battery_returns_value(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.expected_eod_soc", lambda _: 76.0)
-    sensor = EmsExpectedEodBatterySensor(_make_coordinator(0.0))
+    sensor = EmsExpectedEodBatterySensor(_make_forecast_coordinator())
     assert sensor.native_value == 76.0
     assert sensor.available is True
 
 
 def test_expected_eod_battery_unavailable_when_no_data():
-    sensor = EmsExpectedEodBatterySensor(_make_coordinator(None))
+    sensor = EmsExpectedEodBatterySensor(_make_forecast_coordinator(no_data=True))
     assert sensor.native_value is None
     assert sensor.available is False
 
 
 def test_expected_eod_battery_unavailable_when_helper_returns_none(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.expected_eod_soc", lambda _: None)
-    sensor = EmsExpectedEodBatterySensor(_make_coordinator(0.0))
+    sensor = EmsExpectedEodBatterySensor(_make_forecast_coordinator())
     assert sensor.native_value is None
     assert sensor.available is False

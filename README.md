@@ -105,6 +105,9 @@ Every configured input entity and every `select.ems_*` / `number.ems_*` entity t
 **1-second fast loop** (`EmsFastLoopCoordinator`):
 Re-reads live power values (`pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`) and reruns both algorithms. Writes active power and EV charge target but never writes the inverter verb — verb enforcement is the slow loop's job. Battery, forecast, price, and SoC fields are carried from the last slow-loop result.
 
+**Event-driven forecast coordinator** (`EmsForecastCoordinator`):
+No fixed polling interval. Runs once at startup, then only when one of the five slow-changing source entities changes state: `battery_soc`, `battery_capacity_kwh`, `battery_target_soc`, `solar_forecast_remaining_kwh`, `house_load_forecast_remaining_kwh`. The four forecast/battery sensors (`sensor.ems_battery_energy_to_target`, `sensor.ems_net_solar_remaining`, `sensor.ems_battery_solar_deficit`, `sensor.ems_expected_eod_battery`) are bound to this coordinator and update only when their inputs actually change — not every second.
+
 ### EOD battery fullness decision
 
 Each cycle EMS computes an effective solar forecast — remaining solar generation minus remaining house load, floored at zero. It then compares this to the remaining battery gap (capacity × distance from current SoC to target SoC). If effective solar covers the gap, the battery forecast is fine. If not, the shortfall drives the Path 2 and Path 4 battery-priority decisions.

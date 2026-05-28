@@ -5,13 +5,17 @@ Priority ladder (inverter_strategy == "Control Inverter"):
                           AND ev_power_w == 0 (suppressed during EV sessions to prevent
                           double-correction with the EV integrator)
                           → verb=power_control, active_power=-(pv + excess), status=peak_shaving
+                          (fires regardless of ev_strategy, including Energy-optimised)
   2. Deficit hold       — eod_suppress=True AND pv < house_load
                           AND commanded_ev_charge_w == 0 AND ev_power_w == 0
                           (skipped during EV sessions — hold would steal PV from EV)
                           → verb=power_control, active_power=0, status=holding_battery
-  3. Idle               — commanded_ev_charge_w == 0 AND ev_power_w == 0
+                          (fires regardless of ev_strategy, including Energy-optimised)
+  3. Energy-optimised   — ev_strategy == "Energy-optimised" (after peak shaving and deficit hold)
                           → verb=disabled_option, active_power=None, status=idle
-  4. Default            — commanded_ev_charge_w > 0 OR ev_power_w > 0
+  4. Idle               — commanded_ev_charge_w == 0 AND ev_power_w == 0
+                          → verb=disabled_option, active_power=None, status=idle
+  5. Default            — commanded_ev_charge_w > 0 OR ev_power_w > 0
                           → verb=power_control, active_power=-min(pv,house), status=controlling
 
 commanded_ev_charge_w is the smoothed EV target EMS will write this cycle.
@@ -426,6 +430,31 @@ def test_energy_optimised_overrides_shortfall_branch() -> None:
         solar_shortfall_kwh_result=2.0,
     )
     assert d.status == "idle"
+
+
+def test_energy_optimised_holds_battery_when_eod_suppress() -> None:
+    """Energy-optimised does not block deficit hold — battery is preserved on cheap hours."""
+    d = _decide(
+        ev_strategy="Energy-optimised",
+        pv_w=1700.0, house_load_w=3500.0,
+        eod_suppress=True,
+    )
+    assert d.status == "holding_battery"
+    assert d.inverter_verb == "power_control"
+    assert d.active_power_w == pytest.approx(0.0)
+
+
+def test_energy_optimised_peak_shaves_when_grid_over_cap() -> None:
+    """Energy-optimised does not block peak shaving — grid cap is enforced."""
+    d = _decide(
+        ev_strategy="Energy-optimised",
+        pv_w=1000.0,
+        grid_import_w=5500.0,
+        max_grid_import_w=4500.0,
+    )
+    assert d.status == "peak_shaving"
+    assert d.inverter_verb == "power_control"
+    assert d.active_power_w == pytest.approx(-2000.0)
 
 
 # ── Battery priority: new shortfall branch ────────────────────────────────────

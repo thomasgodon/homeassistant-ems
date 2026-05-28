@@ -381,6 +381,74 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         return result
 
 
+class EmsForecastCoordinator(DataUpdateCoordinator["Inputs | None"]):
+    """No-poll coordinator; refreshes at startup then on forecast/battery-SoC entity changes."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._entry = entry
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"{DOMAIN}_forecast",
+            update_interval=None,
+        )
+
+    async def async_setup(self) -> None:
+        data = self._entry.data
+        watched: list[str] = ["number.ems_battery_target_soc"]
+        for key in (
+            CONF_BATTERY_SOC,
+            CONF_BATTERY_CAPACITY,
+            CONF_SOLAR_FORECAST_REMAINING,
+            CONF_HOUSE_LOAD_FORECAST_REMAINING,
+        ):
+            entity_id = data.get(key)
+            if entity_id:
+                watched.append(entity_id)
+
+        @callback
+        def _on_forecast_change(_event) -> None:
+            self.hass.async_create_task(self.async_request_refresh())
+
+        self._entry.async_on_unload(
+            async_track_state_change_event(self.hass, watched, _on_forecast_change)
+        )
+
+    async def _async_update_data(self) -> Inputs:
+        data = self._entry.data
+        return Inputs(
+            now=dt_util.now(),
+            grid_import_w=0.0,
+            pv_w=0.0,
+            house_load_w=0.0,
+            ev_plugged=False,
+            ev_power_w=0.0,
+            ev_soc=None,
+            ev_strategy="Off",
+            is_cheap_hour=False,
+            inverter_strategy="Off",
+            thresholds=Thresholds(max_grid_import_w=0.0, ev_target_soc=80.0, ev_min_charge_w=0.0),
+            mapping=VerbMapping(
+                inverter_select_entity=None,
+                disabled_option=None,
+                power_control_option=None,
+                active_power_entity=None,
+                ev_charge_target_entity=None,
+            ),
+            battery_soc=_read_float_optional(self.hass, data.get(CONF_BATTERY_SOC)),
+            battery_capacity_kwh=_read_kwh_optional(self.hass, data.get(CONF_BATTERY_CAPACITY)),
+            battery_target_soc=_read_number(
+                self.hass, "number.ems_battery_target_soc", DEFAULT_BATTERY_TARGET_SOC
+            ),
+            solar_forecast_remaining_kwh=_read_kwh_optional(
+                self.hass, data.get(CONF_SOLAR_FORECAST_REMAINING)
+            ),
+            house_load_forecast_remaining_kwh=_read_kwh_optional(
+                self.hass, data.get(CONF_HOUSE_LOAD_FORECAST_REMAINING)
+            ),
+        )
+
+
 # ── state helpers ─────────────────────────────────────────────────────────────
 
 def _read_float(hass: HomeAssistant, entity_id: str | None, default: float) -> float:

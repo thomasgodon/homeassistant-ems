@@ -7,7 +7,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import EmsFastLoopCoordinator
+from .coordinator import EmsFastLoopCoordinator, EmsForecastCoordinator
 from .strategy import (
     battery_focus,
     battery_gap_kwh,
@@ -27,6 +27,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: EmsFastLoopCoordinator = hass.data[DOMAIN][entry.entry_id]["fast_loop_coordinator"]
+    forecast_coordinator: EmsForecastCoordinator = (
+        hass.data[DOMAIN][entry.entry_id]["forecast_coordinator"]
+    )
     async_add_entities([
         EmsInverterModeSensor(coordinator),
         EmsEvCurrentSensor(coordinator),
@@ -35,10 +38,10 @@ async def async_setup_entry(
         EmsBatteryStatusSensor(coordinator),
         EmsPvStatusSensor(coordinator),
         EmsGridStatusSensor(coordinator),
-        EmsBatteryEnergyToTargetSensor(coordinator),
-        EmsNetSolarRemainingSensor(coordinator),
-        EmsBatterySolarDeficitSensor(coordinator),
-        EmsExpectedEodBatterySensor(coordinator),
+        EmsBatteryEnergyToTargetSensor(forecast_coordinator),
+        EmsNetSolarRemainingSensor(forecast_coordinator),
+        EmsBatterySolarDeficitSensor(forecast_coordinator),
+        EmsExpectedEodBatterySensor(forecast_coordinator),
     ])
 
 
@@ -379,7 +382,7 @@ class EmsGridStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntit
         return self.coordinator.data is not None
 
 
-class EmsBatteryEnergyToTargetSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+class EmsBatteryEnergyToTargetSensor(CoordinatorEntity[EmsForecastCoordinator], SensorEntity):
     """Wh still needed to bring the battery from current SoC to its target SoC."""
 
     _attr_unique_id = "ems_battery_energy_to_target"
@@ -388,7 +391,7 @@ class EmsBatteryEnergyToTargetSensor(CoordinatorEntity[EmsFastLoopCoordinator], 
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:battery-arrow-up"
 
-    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+    def __init__(self, coordinator: EmsForecastCoordinator) -> None:
         super().__init__(coordinator)
 
     @property
@@ -399,17 +402,17 @@ class EmsBatteryEnergyToTargetSensor(CoordinatorEntity[EmsFastLoopCoordinator], 
     def native_value(self) -> int | None:
         if self.coordinator.data is None:
             return None
-        kwh = battery_gap_kwh(self.coordinator.data.inputs)
+        kwh = battery_gap_kwh(self.coordinator.data)
         return None if kwh is None else round(kwh * 1000)
 
     @property
     def available(self) -> bool:
         if self.coordinator.data is None:
             return False
-        return battery_gap_kwh(self.coordinator.data.inputs) is not None
+        return battery_gap_kwh(self.coordinator.data) is not None
 
 
-class EmsNetSolarRemainingSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+class EmsNetSolarRemainingSensor(CoordinatorEntity[EmsForecastCoordinator], SensorEntity):
     """Solar forecast remaining today minus house load forecast remaining, clamped to ≥ 0."""
 
     _attr_unique_id = "ems_net_solar_remaining"
@@ -418,7 +421,7 @@ class EmsNetSolarRemainingSensor(CoordinatorEntity[EmsFastLoopCoordinator], Sens
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:solar-power-variant"
 
-    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+    def __init__(self, coordinator: EmsForecastCoordinator) -> None:
         super().__init__(coordinator)
 
     @property
@@ -429,17 +432,17 @@ class EmsNetSolarRemainingSensor(CoordinatorEntity[EmsFastLoopCoordinator], Sens
     def native_value(self) -> int | None:
         if self.coordinator.data is None:
             return None
-        kwh = effective_solar_remaining_kwh(self.coordinator.data.inputs)
+        kwh = effective_solar_remaining_kwh(self.coordinator.data)
         return None if kwh is None else round(kwh * 1000)
 
     @property
     def available(self) -> bool:
         if self.coordinator.data is None:
             return False
-        return effective_solar_remaining_kwh(self.coordinator.data.inputs) is not None
+        return effective_solar_remaining_kwh(self.coordinator.data) is not None
 
 
-class EmsBatterySolarDeficitSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+class EmsBatterySolarDeficitSensor(CoordinatorEntity[EmsForecastCoordinator], SensorEntity):
     """Signed energy balance: positive = solar short of filling battery to target, negative = surplus."""  # noqa: E501
 
     _attr_unique_id = "ems_battery_solar_deficit"
@@ -448,7 +451,7 @@ class EmsBatterySolarDeficitSensor(CoordinatorEntity[EmsFastLoopCoordinator], Se
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:scale-balance"
 
-    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+    def __init__(self, coordinator: EmsForecastCoordinator) -> None:
         super().__init__(coordinator)
 
     @property
@@ -459,17 +462,17 @@ class EmsBatterySolarDeficitSensor(CoordinatorEntity[EmsFastLoopCoordinator], Se
     def native_value(self) -> int | None:
         if self.coordinator.data is None:
             return None
-        kwh = solar_shortfall_kwh(self.coordinator.data.inputs)
+        kwh = solar_shortfall_kwh(self.coordinator.data)
         return None if kwh is None else round(-kwh * 1000)
 
     @property
     def available(self) -> bool:
         if self.coordinator.data is None:
             return False
-        return solar_shortfall_kwh(self.coordinator.data.inputs) is not None
+        return solar_shortfall_kwh(self.coordinator.data) is not None
 
 
-class EmsExpectedEodBatterySensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+class EmsExpectedEodBatterySensor(CoordinatorEntity[EmsForecastCoordinator], SensorEntity):
     """Projected battery SoC (%) at end of day (00:00) given solar and house-load forecasts."""
 
     _attr_unique_id = "ems_expected_eod_battery"
@@ -480,7 +483,7 @@ class EmsExpectedEodBatterySensor(CoordinatorEntity[EmsFastLoopCoordinator], Sen
     _attr_icon = "mdi:battery-clock"
     _attr_suggested_display_precision = 0
 
-    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+    def __init__(self, coordinator: EmsForecastCoordinator) -> None:
         super().__init__(coordinator)
 
     @property
@@ -491,11 +494,11 @@ class EmsExpectedEodBatterySensor(CoordinatorEntity[EmsFastLoopCoordinator], Sen
     def native_value(self) -> float | None:
         if self.coordinator.data is None:
             return None
-        value = expected_eod_soc(self.coordinator.data.inputs)
+        value = expected_eod_soc(self.coordinator.data)
         return None if value is None else round(value, 1)
 
     @property
     def available(self) -> bool:
         if self.coordinator.data is None:
             return False
-        return expected_eod_soc(self.coordinator.data.inputs) is not None
+        return expected_eod_soc(self.coordinator.data) is not None
