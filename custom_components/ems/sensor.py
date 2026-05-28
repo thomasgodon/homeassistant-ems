@@ -37,7 +37,7 @@ async def async_setup_entry(
         EmsGridStatusSensor(coordinator),
         EmsBatteryEnergyToTargetSensor(coordinator),
         EmsNetSolarRemainingSensor(coordinator),
-        EmsSolarBalanceSensor(coordinator),
+        EmsBatterySolarDeficitSensor(coordinator),
         EmsExpectedEodBatterySensor(coordinator),
     ])
 
@@ -439,11 +439,11 @@ class EmsNetSolarRemainingSensor(CoordinatorEntity[EmsFastLoopCoordinator], Sens
         return effective_solar_remaining_kwh(self.coordinator.data.inputs) is not None
 
 
-class EmsSolarBalanceSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
-    """Signed energy balance: positive = surplus for EV, negative = solar short of filling battery."""  # noqa: E501
+class EmsBatterySolarDeficitSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    """Signed energy balance: positive = solar short of filling battery to target, negative = surplus."""  # noqa: E501
 
-    _attr_unique_id = "ems_solar_balance"
-    _attr_name = "EMS Solar Balance"
+    _attr_unique_id = "ems_battery_solar_deficit"
+    _attr_name = "EMS Battery Solar Deficit"
     _attr_native_unit_of_measurement = "Wh"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:scale-balance"

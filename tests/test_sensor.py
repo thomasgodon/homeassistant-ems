@@ -17,7 +17,7 @@ from custom_components.ems.sensor import (
     EmsInverterModeSensor,
     EmsNetSolarRemainingSensor,
     EmsPvStatusSensor,
-    EmsSolarBalanceSensor,
+    EmsBatterySolarDeficitSensor,
 )
 
 _DEFAULT_THRESHOLDS = Thresholds(
@@ -686,36 +686,36 @@ def test_net_solar_remaining_unavailable_when_helper_returns_none(monkeypatch):
     assert sensor.available is False
 
 
-# ── EmsSolarBalanceSensor ─────────────────────────────────────────────────────
+# ── EmsBatterySolarDeficitSensor ──────────────────────────────────────────────
 
-def test_solar_balance_unique_id():
-    sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
-    assert sensor.unique_id == "ems_solar_balance"
+def test_battery_solar_deficit_unique_id():
+    sensor = EmsBatterySolarDeficitSensor(_make_coordinator(0.0))
+    assert sensor.unique_id == "ems_battery_solar_deficit"
 
 
-def test_solar_balance_negative_when_shortage(monkeypatch):
+def test_battery_solar_deficit_positive_when_shortage(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 2.1)
-    sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
+    sensor = EmsBatterySolarDeficitSensor(_make_coordinator(0.0))
     assert sensor.native_value == -2100
     assert sensor.available is True
 
 
-def test_solar_balance_positive_when_surplus(monkeypatch):
+def test_battery_solar_deficit_negative_when_surplus(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: -4.2)
-    sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
+    sensor = EmsBatterySolarDeficitSensor(_make_coordinator(0.0))
     assert sensor.native_value == 4200
     assert sensor.available is True
 
 
-def test_solar_balance_unavailable_when_no_data():
-    sensor = EmsSolarBalanceSensor(_make_coordinator(None))
+def test_battery_solar_deficit_unavailable_when_no_data():
+    sensor = EmsBatterySolarDeficitSensor(_make_coordinator(None))
     assert sensor.native_value is None
     assert sensor.available is False
 
 
-def test_solar_balance_unavailable_when_helper_returns_none(monkeypatch):
+def test_battery_solar_deficit_unavailable_when_helper_returns_none(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: None)
-    sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
+    sensor = EmsBatterySolarDeficitSensor(_make_coordinator(0.0))
     assert sensor.native_value is None
     assert sensor.available is False
 
