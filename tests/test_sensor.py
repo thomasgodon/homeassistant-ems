@@ -633,13 +633,13 @@ def test_grid_status_attributes_none_when_no_data():
 
 def test_battery_energy_to_target_unique_id():
     sensor = EmsBatteryEnergyToTargetSensor(_make_coordinator(0.0))
-    assert sensor.unique_id == "ems_battery_energy_to_target_kwh"
+    assert sensor.unique_id == "ems_battery_energy_to_target"
 
 
 def test_battery_energy_to_target_returns_value(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.battery_gap_kwh", lambda _: 3.2)
     sensor = EmsBatteryEnergyToTargetSensor(_make_coordinator(0.0))
-    assert sensor.native_value == pytest.approx(3.2)
+    assert sensor.native_value == 3200
     assert sensor.available is True
 
 
@@ -660,13 +660,13 @@ def test_battery_energy_to_target_unavailable_when_helper_returns_none(monkeypat
 
 def test_net_solar_remaining_unique_id():
     sensor = EmsNetSolarRemainingSensor(_make_coordinator(0.0))
-    assert sensor.unique_id == "ems_net_solar_remaining_kwh"
+    assert sensor.unique_id == "ems_net_solar_remaining"
 
 
 def test_net_solar_remaining_returns_value(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.effective_solar_remaining_kwh", lambda _: 4.5)
     sensor = EmsNetSolarRemainingSensor(_make_coordinator(0.0))
-    assert sensor.native_value == pytest.approx(4.5)
+    assert sensor.native_value == 4500
     assert sensor.available is True
 
 
@@ -689,20 +689,20 @@ def test_net_solar_remaining_unavailable_when_helper_returns_none(monkeypatch):
 
 def test_solar_balance_unique_id():
     sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
-    assert sensor.unique_id == "ems_solar_balance_kwh"
+    assert sensor.unique_id == "ems_solar_balance"
 
 
-def test_solar_balance_positive_when_shortage(monkeypatch):
+def test_solar_balance_negative_when_shortage(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: 2.1)
     sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
-    assert sensor.native_value == pytest.approx(2.1)
+    assert sensor.native_value == -2100
     assert sensor.available is True
 
 
-def test_solar_balance_negative_when_surplus(monkeypatch):
+def test_solar_balance_positive_when_surplus(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: -4.2)
     sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
-    assert sensor.native_value == pytest.approx(-4.2)
+    assert sensor.native_value == 4200
     assert sensor.available is True
 
 

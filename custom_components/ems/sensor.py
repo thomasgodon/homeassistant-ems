@@ -379,12 +379,13 @@ class EmsGridStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntit
 
 
 class EmsBatteryEnergyToTargetSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
-    """kWh still needed to bring the battery from current SoC to its target SoC."""
+    """Wh still needed to bring the battery from current SoC to its target SoC."""
 
-    _attr_unique_id = "ems_battery_energy_to_target_kwh"
+    _attr_unique_id = "ems_battery_energy_to_target"
     _attr_name = "EMS Battery Energy To Target"
-    _attr_native_unit_of_measurement = "kWh"
+    _attr_native_unit_of_measurement = "Wh"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:battery-arrow-up"
 
     def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
         super().__init__(coordinator)
@@ -394,10 +395,11 @@ class EmsBatteryEnergyToTargetSensor(CoordinatorEntity[EmsFastLoopCoordinator], 
         return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self) -> int | None:
         if self.coordinator.data is None:
             return None
-        return battery_gap_kwh(self.coordinator.data.inputs)
+        kwh = battery_gap_kwh(self.coordinator.data.inputs)
+        return None if kwh is None else round(kwh * 1000)
 
     @property
     def available(self) -> bool:
@@ -409,10 +411,11 @@ class EmsBatteryEnergyToTargetSensor(CoordinatorEntity[EmsFastLoopCoordinator], 
 class EmsNetSolarRemainingSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
     """Solar forecast remaining today minus house load forecast remaining, clamped to ≥ 0."""
 
-    _attr_unique_id = "ems_net_solar_remaining_kwh"
+    _attr_unique_id = "ems_net_solar_remaining"
     _attr_name = "EMS Net Solar Remaining"
-    _attr_native_unit_of_measurement = "kWh"
+    _attr_native_unit_of_measurement = "Wh"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:solar-power-variant"
 
     def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
         super().__init__(coordinator)
@@ -422,10 +425,11 @@ class EmsNetSolarRemainingSensor(CoordinatorEntity[EmsFastLoopCoordinator], Sens
         return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self) -> int | None:
         if self.coordinator.data is None:
             return None
-        return effective_solar_remaining_kwh(self.coordinator.data.inputs)
+        kwh = effective_solar_remaining_kwh(self.coordinator.data.inputs)
+        return None if kwh is None else round(kwh * 1000)
 
     @property
     def available(self) -> bool:
@@ -435,12 +439,13 @@ class EmsNetSolarRemainingSensor(CoordinatorEntity[EmsFastLoopCoordinator], Sens
 
 
 class EmsSolarBalanceSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
-    """Signed energy balance: positive = shortage to fill battery, negative = surplus for EV."""
+    """Signed energy balance: positive = surplus for EV, negative = solar short of filling battery."""  # noqa: E501
 
-    _attr_unique_id = "ems_solar_balance_kwh"
+    _attr_unique_id = "ems_solar_balance"
     _attr_name = "EMS Solar Balance"
-    _attr_native_unit_of_measurement = "kWh"
+    _attr_native_unit_of_measurement = "Wh"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:scale-balance"
 
     def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
         super().__init__(coordinator)
@@ -450,10 +455,11 @@ class EmsSolarBalanceSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEnt
         return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self) -> int | None:
         if self.coordinator.data is None:
             return None
-        return solar_shortfall_kwh(self.coordinator.data.inputs)
+        kwh = solar_shortfall_kwh(self.coordinator.data.inputs)
+        return None if kwh is None else round(-kwh * 1000)
 
     @property
     def available(self) -> bool:
