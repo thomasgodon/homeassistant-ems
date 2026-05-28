@@ -305,6 +305,7 @@ Active power and EV target are cached — a service call is skipped if the value
 | `sensor.ems_battery_energy_to_target` | int (Wh) or unavailable | Wh still needed to bring the battery from current SoC to `number.ems_battery_target_soc`. Unavailable when `battery_soc` or `battery_capacity` is not configured. Always ≥ 0. |
 | `sensor.ems_net_solar_remaining` | int (Wh) or unavailable | Today's remaining solar forecast minus today's remaining house load forecast, clamped to ≥ 0. Unavailable when `solar_forecast_remaining` is not configured. |
 | `sensor.ems_solar_balance` | int (Wh) or unavailable | Signed energy balance: positive = surplus solar beyond what the battery needs (available for EV), negative = solar forecast is short of filling the battery. Unavailable when `battery_soc`, `battery_capacity`, or `solar_forecast_remaining` is not configured. |
+| `sensor.ems_expected_eod_battery` | float (%) or unavailable | Projected battery SoC at 00:00 given remaining solar forecast minus remaining house load forecast, clamped to 100 %. Unavailable when `battery_soc`, `battery_capacity`, or `solar_forecast_remaining` is not configured. Same value as the `expected_eod_soc` attribute on `sensor.ems_battery_status`. |
 
 #### `sensor.ems_ev_status` messages (priority order)
 

@@ -38,6 +38,7 @@ async def async_setup_entry(
         EmsBatteryEnergyToTargetSensor(coordinator),
         EmsNetSolarRemainingSensor(coordinator),
         EmsSolarBalanceSensor(coordinator),
+        EmsExpectedEodBatterySensor(coordinator),
     ])
 
 
@@ -466,3 +467,35 @@ class EmsSolarBalanceSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEnt
         if self.coordinator.data is None:
             return False
         return solar_shortfall_kwh(self.coordinator.data.inputs) is not None
+
+
+class EmsExpectedEodBatterySensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
+    """Projected battery SoC (%) at end of day (00:00) given solar and house-load forecasts."""
+
+    _attr_unique_id = "ems_expected_eod_battery"
+    _attr_name = "EMS Expected End Of Day Battery"
+    _attr_native_unit_of_measurement = "%"
+    _attr_device_class = SensorDeviceClass.BATTERY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:battery-clock"
+    _attr_suggested_display_precision = 0
+
+    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data is None:
+            return None
+        value = expected_eod_soc(self.coordinator.data.inputs)
+        return None if value is None else round(value, 1)
+
+    @property
+    def available(self) -> bool:
+        if self.coordinator.data is None:
+            return False
+        return expected_eod_soc(self.coordinator.data.inputs) is not None

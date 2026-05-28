@@ -11,6 +11,7 @@ from custom_components.ems.sensor import (
     EmsBatteryStatusSensor,
     EmsEvCurrentSensor,
     EmsEvStatusSensor,
+    EmsExpectedEodBatterySensor,
     EmsGridStatusSensor,
     EmsInverterActivePowerSensor,
     EmsInverterModeSensor,
@@ -715,5 +716,32 @@ def test_solar_balance_unavailable_when_no_data():
 def test_solar_balance_unavailable_when_helper_returns_none(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.solar_shortfall_kwh", lambda _: None)
     sensor = EmsSolarBalanceSensor(_make_coordinator(0.0))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+# ── EmsExpectedEodBatterySensor ───────────────────────────────────────────────
+
+def test_expected_eod_battery_unique_id():
+    sensor = EmsExpectedEodBatterySensor(_make_coordinator(0.0))
+    assert sensor.unique_id == "ems_expected_eod_battery"
+
+
+def test_expected_eod_battery_returns_value(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.expected_eod_soc", lambda _: 76.0)
+    sensor = EmsExpectedEodBatterySensor(_make_coordinator(0.0))
+    assert sensor.native_value == 76.0
+    assert sensor.available is True
+
+
+def test_expected_eod_battery_unavailable_when_no_data():
+    sensor = EmsExpectedEodBatterySensor(_make_coordinator(None))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_expected_eod_battery_unavailable_when_helper_returns_none(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.expected_eod_soc", lambda _: None)
+    sensor = EmsExpectedEodBatterySensor(_make_coordinator(0.0))
     assert sensor.native_value is None
     assert sensor.available is False
