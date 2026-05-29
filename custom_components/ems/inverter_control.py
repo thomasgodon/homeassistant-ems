@@ -100,13 +100,17 @@ def _compute(
     # for the expensive evening. Applies regardless of EV strategy — battery holds
     # must fire even in Energy-optimised mode when grid is cheap and battery is short.
     # Bypass when PV alone covers the house — Self-Use handles it without EMS involvement.
-    # Bypass during EV sessions — the EV integrator already controls grid import;
-    # holding the battery simultaneously steals PV from the EV and causes grid draw.
+    # Bypass during EV sessions in Grid-optimised mode — the EV integrator controls
+    # grid import; holding the battery simultaneously steals PV from the EV and
+    # causes unwanted grid draw. In Price-optimised mode the EV is deliberately
+    # grid-fed during cheap hours, so the hold still fires: PV charges the battery,
+    # house and EV both draw from cheap grid, battery is preserved for the evening peak.
+    ev_session = commanded_ev_charge_w > 0.0 or ev_power_w > 0.0
+    allow_during_session = ev_strategy == "Price-optimised"
     if (
         eod_suppress
         and pv_w < house_load_w
-        and commanded_ev_charge_w == 0.0
-        and ev_power_w == 0.0
+        and (not ev_session or allow_during_session)
     ):
         return InverterDecision(
             inverter_verb=mapping.power_control_option,

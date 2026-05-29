@@ -55,13 +55,13 @@ When the solar forecast is enough to fill the battery to target by evening and n
 
 **Example:** Battery is at 60 %, target is 80 %, capacity is 10 kWh — a gap of 2 kWh. Remaining solar is forecast at 8 kWh and house load is forecast at 4 kWh, leaving 4 kWh of net solar for the battery. With 4 kWh of forecast and only 2 kWh needed, EMS stays out of the way.
 
-#### Path 2 — Battery short, EV idle
+#### Path 2 — Battery short
 
-When the forecast shows solar won't fully charge the battery and no EV session is active, EMS identifies the cheapest remaining hours of the day **that are also below today's median electricity price** and protects the battery during those hours. Instead of letting the battery drain to cover house load, EMS instructs the inverter to hold the battery flat — house load draws from cheap grid, solar that arrives goes into the battery. By the time the expensive evening hours arrive the battery is as full as it can be.
+When the forecast shows solar won't fully charge the battery, EMS identifies the cheapest remaining hours of the day **that are also below today's median electricity price** and protects the battery during those hours. Instead of letting the battery drain to cover house load, EMS instructs the inverter to hold the battery flat — house load draws from cheap grid, solar that arrives goes into the battery. By the time the expensive evening hours arrive the battery is as full as it can be.
 
 The number of protected hours scales with the shortfall: a large gap selects more cheap hours; a small gap selects fewer. If no remaining hour is below the day's median price — meaning the cheap window has already passed — EMS accepts the shortfall and lets the battery discharge normally rather than drawing expensive grid power.
 
-Peak shaving overrides the hold if a grid spike occurs. The hold is also bypassed whenever PV alone covers the house load — Self-Use Mode handles routing without EMS intervention.
+Peak shaving overrides the hold if a grid spike occurs. The hold is also bypassed whenever PV alone covers the house load — Self-Use Mode handles routing without EMS involvement. In Grid-optimised mode, the hold is also bypassed during EV sessions — the EV integrator controls grid import and holding the battery simultaneously would interfere. In Price-optimised mode the hold still fires during an EV session: the EV is deliberately charged from cheap grid, PV flows into the battery, and the battery is preserved for the expensive evening peak.
 
 **Example:** Battery needs 4 kWh but net solar forecast is only 2 kWh — shortfall is 2 kWh. Prices for the remaining day show 14:00 and 15:00 are the cheapest (and both are below today's median). EMS holds the battery flat during those two hours. House load draws from cheap grid; solar supplements the battery. If the time is already 19:00 and all remaining hours are above the median, EMS releases the battery to discharge through the evening peak.
 
@@ -83,6 +83,8 @@ In a scenario where solar forecast leaves only 1 kWh of net solar for a 2 kWh ba
 #### Path 4 — EV in Grid-optimised or Price-optimised mode
 
 EMS integrates grid import toward the configured cap. The EV draws up to the cap minus current grid import, so total grid import stays at the cap. The battery is never drained for the EV.
+
+> **Note (Price-optimised + cheap hour):** When both the battery forecast is short *and* the current hour qualifies as a cheap hold hour, Path 2 takes precedence over Path 4 — see Path 2 above.
 
 **When the battery forecast is fine:** EMS sets the inverter to cover the full house load including the EV from PV. Whatever PV exceeds the combined load trickles into the battery. The battery charges naturally once the EV has reached its cap.
 

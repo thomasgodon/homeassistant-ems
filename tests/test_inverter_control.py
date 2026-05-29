@@ -7,8 +7,9 @@ Priority ladder (inverter_strategy == "Control Inverter"):
                           → verb=power_control, active_power=-(pv + excess), status=peak_shaving
                           (fires regardless of ev_strategy, including Energy-optimised)
   2. Deficit hold       — eod_suppress=True AND pv < house_load
-                          AND commanded_ev_charge_w == 0 AND ev_power_w == 0
-                          (skipped during EV sessions — hold would steal PV from EV)
+                          AND (no EV session OR ev_strategy == "Price-optimised")
+                          (skipped during Grid-optimised EV sessions — hold would steal PV from EV;
+                          fires in Price-optimised EV sessions — EV is deliberately grid-fed)
                           → verb=power_control, active_power=0, status=holding_battery
                           (fires regardless of ev_strategy, including Energy-optimised)
   3. Energy-optimised   — ev_strategy == "Energy-optimised" (after peak shaving and deficit hold)
@@ -351,20 +352,43 @@ def test_deficit_hold_bypassed_when_pv_covers_house() -> None:
     assert d.status == "idle"
 
 
-def test_deficit_hold_skipped_when_ev_drawing() -> None:
-    """Deficit hold is skipped when EV is drawing — would steal PV from EV and cause grid draw."""
-    d = _decide(pv_w=1000.0, house_load_w=5000.0, ev_power_w=3000.0, eod_suppress=True)
+def test_deficit_hold_skipped_when_ev_drawing_grid_optimised() -> None:
+    """Deficit hold is skipped in Grid-optimised EV sessions — would steal PV from EV."""
+    d = _decide(
+        pv_w=1000.0, house_load_w=5000.0, ev_power_w=3000.0,
+        eod_suppress=True, ev_strategy="Grid-optimised",
+    )
     assert d.status == "controlling"
     assert d.active_power_w == pytest.approx(-min(1000.0, 5000.0))
 
 
-def test_deficit_hold_skipped_when_commanded_ev_charge() -> None:
-    """Deficit hold skipped on cycle 1 of EV session (commanded > 0, EV not yet drawing)."""
+def test_deficit_hold_fires_when_ev_drawing_price_optimised() -> None:
+    """Deficit hold fires in Price-optimised EV sessions — EV is deliberately grid-fed."""
+    d = _decide(
+        pv_w=1000.0, house_load_w=5000.0, ev_power_w=3000.0,
+        eod_suppress=True, ev_strategy="Price-optimised",
+    )
+    assert d.status == "holding_battery"
+    assert d.active_power_w == pytest.approx(0.0)
+
+
+def test_deficit_hold_skipped_when_commanded_ev_charge_grid_optimised() -> None:
+    """Deficit hold skipped on cycle 1 in Grid-optimised (commanded > 0, EV not yet drawing)."""
     d = _decide(
         pv_w=1000.0, house_load_w=5000.0, ev_power_w=0.0,
-        commanded_ev_charge_w=2000.0, eod_suppress=True,
+        commanded_ev_charge_w=2000.0, eod_suppress=True, ev_strategy="Grid-optimised",
     )
     assert d.status == "controlling"
+
+
+def test_deficit_hold_fires_on_cycle1_price_optimised() -> None:
+    """Deficit hold fires on cycle 1 of a Price-optimised session (commanded > 0)."""
+    d = _decide(
+        pv_w=1000.0, house_load_w=5000.0, ev_power_w=0.0,
+        commanded_ev_charge_w=2000.0, eod_suppress=True, ev_strategy="Price-optimised",
+    )
+    assert d.status == "holding_battery"
+    assert d.active_power_w == pytest.approx(0.0)
 
 
 def test_eod_suppress_ignored_when_no_deficit() -> None:
@@ -513,3 +537,51 @@ def test_battery_priority_not_fired_when_shortfall_none() -> None:
         commanded_ev_charge_w=2000.0, solar_shortfall_kwh_result=None,
     )
     assert d.status == "controlling"
+
+
+def test_p2_takes_precedence_over_p4_in_price_optimised() -> None:
+    """P2 (deficit hold) beats P4 (battery_priority) in Price-optimised + cheap hour + EV session.
+
+    Bug repro: PV=1701, house=7070, EV=4512, house_non_ev=2558, shortfall>0, eod_suppress=True.
+    Expected: hold battery at 0W (P2), NOT discharge battery via battery_priority (P4).
+    """
+    d = _decide(
+        pv_w=1701.0,
+        house_load_w=7070.0,
+        ev_power_w=4512.0,
+        eod_suppress=True,
+        ev_strategy="Price-optimised",
+        solar_shortfall_kwh_result=1.33,
+    )
+    assert d.status == "holding_battery"
+    assert d.active_power_w == pytest.approx(0.0)
+
+
+def test_p4_still_fires_in_price_optimised_when_not_eod_suppress() -> None:
+    """P4 (battery_priority) fires for Price-optimised outside a cheap hour (eod_suppress=False)."""
+    d = _decide(
+        pv_w=1701.0,
+        house_load_w=7070.0,
+        ev_power_w=4512.0,
+        eod_suppress=False,
+        ev_strategy="Price-optimised",
+        solar_shortfall_kwh_result=1.33,
+    )
+    assert d.status == "battery_priority"
+    # house_non_ev = max(0, 7070 - 4512) = 2558
+    assert d.active_power_w == pytest.approx(-2558.0)
+
+
+def test_p4_fires_in_price_optimised_when_pv_exceeds_house_load() -> None:
+    """P2 falls through when pv >= house_load; P4 fires, no discharge (PV covers house_non_ev)."""
+    d = _decide(
+        pv_w=8000.0,
+        house_load_w=7070.0,
+        ev_power_w=4512.0,
+        eod_suppress=True,
+        ev_strategy="Price-optimised",
+        solar_shortfall_kwh_result=1.33,
+    )
+    assert d.status == "battery_priority"
+    # house_non_ev = max(0, 7070 - 4512) = 2558; PV (8000) > 2558, no battery discharge
+    assert d.active_power_w == pytest.approx(-2558.0)
