@@ -112,9 +112,15 @@ def _compute(
         and pv_w < house_load_w
         and (not ev_session or allow_during_session)
     ):
+        # When PV exceeds the non-EV house load, serve the house from PV and let
+        # the surplus charge the battery via DC. When PV is insufficient, redirect
+        # all PV straight into the battery (0 W AC output) and cover the house from
+        # cheap grid — battery charges faster and avoids conversion losses.
+        house_non_ev = max(0.0, house_load_w - ev_power_w)
+        active_power = -house_non_ev if pv_w > house_non_ev else 0.0
         return InverterDecision(
             inverter_verb=mapping.power_control_option,
-            active_power_w=0.0,
+            active_power_w=active_power,
             status="holding_battery",
         )
 

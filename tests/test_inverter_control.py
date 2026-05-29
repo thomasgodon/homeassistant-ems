@@ -391,6 +391,17 @@ def test_deficit_hold_fires_on_cycle1_price_optimised() -> None:
     assert d.active_power_w == pytest.approx(0.0)
 
 
+def test_deficit_hold_serves_house_non_ev_when_pv_exceeds_it_price_optimised() -> None:
+    """Price-optimised EV + pv > house_non_ev: active=-house_non_ev, surplus PV to battery."""
+    # pv=4000, house=7070, ev=4512 → house_non_ev=2558; pv(4000) > house_non_ev(2558)
+    d = _decide(
+        pv_w=4000.0, house_load_w=7070.0, ev_power_w=4512.0,
+        eod_suppress=True, ev_strategy="Price-optimised",
+    )
+    assert d.status == "holding_battery"
+    assert d.active_power_w == pytest.approx(-2558.0)
+
+
 def test_eod_suppress_ignored_when_no_deficit() -> None:
     """eod_suppress=False → no hold regardless of PV vs house."""
     d = _decide(pv_w=0.0, house_load_w=2000.0, eod_suppress=False)
