@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import statistics
 
 from .models import (
     BatteryFocus,
@@ -172,17 +173,28 @@ def solar_shortfall_kwh(inputs: Inputs) -> float | None:
 def _cheap_hold_hours(inputs: Inputs) -> list[int] | None:
     """Return the cheapest remaining hours needed to cover the solar deficit, sorted by price.
 
+    Only hours strictly below today's median price are eligible — if we are already
+    past the cheap window, the shortfall is accepted and the battery is allowed to
+    discharge rather than pulling expensive grid power.
+
     Each hour is assumed to save 1 kWh from the battery (conservative approximation).
-    Returns None when hold logic doesn't apply (missing data or no deficit).
+    Returns None when hold logic doesn't apply (missing data, no deficit, or no
+    remaining hour is below the day's median price).
     """
     if inputs.prices_today is None or len(inputs.prices_today) < 24:
         return None
     shortfall = solar_shortfall_kwh(inputs)
     if shortfall is None or shortfall <= 0.0:
         return None
+    median_price = statistics.median(inputs.prices_today)
     current_hour = inputs.now.hour
-    remaining = list(range(current_hour, 24))
-    sorted_by_price = sorted(remaining, key=lambda h: inputs.prices_today[h])
+    candidates = [
+        h for h in range(current_hour, 24)
+        if inputs.prices_today[h] < median_price
+    ]
+    if not candidates:
+        return None
+    sorted_by_price = sorted(candidates, key=lambda h: inputs.prices_today[h])
     return sorted_by_price[: math.ceil(shortfall)]
 
 

@@ -57,13 +57,13 @@ When the solar forecast is enough to fill the battery to target by evening and n
 
 #### Path 2 — Battery short, EV idle
 
-When the forecast shows solar won't fully charge the battery and no EV session is active, EMS identifies the cheapest remaining hours of the day and protects the battery during those hours. Instead of letting the battery drain to cover house load, EMS instructs the inverter to hold the battery flat — house load draws from cheap grid, solar that arrives goes into the battery. By the time the expensive evening hours arrive the battery is as full as it can be.
+When the forecast shows solar won't fully charge the battery and no EV session is active, EMS identifies the cheapest remaining hours of the day **that are also below today's median electricity price** and protects the battery during those hours. Instead of letting the battery drain to cover house load, EMS instructs the inverter to hold the battery flat — house load draws from cheap grid, solar that arrives goes into the battery. By the time the expensive evening hours arrive the battery is as full as it can be.
 
-The number of protected hours scales with the shortfall: a large gap selects more cheap hours; a small gap selects fewer.
+The number of protected hours scales with the shortfall: a large gap selects more cheap hours; a small gap selects fewer. If no remaining hour is below the day's median price — meaning the cheap window has already passed — EMS accepts the shortfall and lets the battery discharge normally rather than drawing expensive grid power.
 
 Peak shaving overrides the hold if a grid spike occurs. The hold is also bypassed whenever PV alone covers the house load — Self-Use Mode handles routing without EMS intervention.
 
-**Example:** Battery needs 4 kWh but net solar forecast is only 2 kWh — shortfall is 2 kWh. Prices for the remaining day show 14:00 and 15:00 are the cheapest. EMS holds the battery flat during those two hours. House load draws from cheap grid; solar supplements the battery.
+**Example:** Battery needs 4 kWh but net solar forecast is only 2 kWh — shortfall is 2 kWh. Prices for the remaining day show 14:00 and 15:00 are the cheapest (and both are below today's median). EMS holds the battery flat during those two hours. House load draws from cheap grid; solar supplements the battery. If the time is already 19:00 and all remaining hours are above the median, EMS releases the battery to discharge through the evening peak.
 
 #### Path 3 — EV in Energy-optimised mode
 
@@ -112,7 +112,7 @@ No fixed polling interval. Runs once at startup, then only when one of the five 
 
 Each cycle EMS computes an effective solar forecast — remaining solar generation minus remaining house load, floored at zero. It then compares this to the remaining battery gap (capacity × distance from current SoC to target SoC). If effective solar covers the gap, the battery forecast is fine. If not, the shortfall drives the Path 2 and Path 4 battery-priority decisions.
 
-For Path 2 (deficit hold), EMS ranks the remaining hours of the day by electricity price and selects the cheapest `N` hours, where `N` is large enough to cover the shortfall. The hold fires only during those hours. This feature requires `battery_soc`, `battery_capacity_kwh`, `solar_forecast_remaining_kwh`, and `prices_today` to all be configured; it is disabled silently if any of them is unavailable.
+For Path 2 (deficit hold), EMS filters remaining hours to those whose price is **strictly below today's median** and then selects the cheapest `N` of those, where `N` is large enough to cover the shortfall. This absolute price floor ensures EMS never holds the battery once the cheap window has passed — if all remaining hours are above the median, the hold is skipped and the battery discharges normally. This feature requires `battery_soc`, `battery_capacity_kwh`, `solar_forecast_remaining_kwh`, and `prices_today` to all be configured; it is disabled silently if any of them is unavailable.
 
 ---
 

@@ -485,6 +485,16 @@ def test_integrator_keeps_pushing_when_grid_below_cap(builder) -> None:
 _PRICES_24 = tuple(float(i) for i in range(24))  # hour 0 = cheapest, hour 23 = most expensive
 _BASE_NOW = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
 
+# Realistic daily profile: cheap midday solar window, expensive evening peak.
+# statistics.median == 0.20; only hours 10-15 (0.05) are strictly below median.
+# At _BASE_NOW (hour 12): below-median remaining hours are [12, 13, 14, 15].
+_PRICES_24_MIDDAY_CHEAP = (
+    0.20, 0.20, 0.20, 0.20, 0.20, 0.20, 0.20, 0.20, 0.20, 0.20,  # 0-9
+    0.05, 0.05, 0.05, 0.05, 0.05, 0.05,                            # 10-15 (cheap)
+    0.20, 0.20,                                                      # 16-17
+    0.45, 0.45, 0.45, 0.45, 0.45, 0.45,                            # 18-23 (expensive)
+)
+
 
 def _eod_inputs(**overrides) -> Inputs:
     """Build a minimal Inputs for is_eod_suppress_hour tests."""
@@ -526,14 +536,15 @@ def test_eod_suppress_disabled_when_battery_already_at_target(builder) -> None:
 
 def test_eod_suppress_true_when_current_hour_is_cheapest(builder) -> None:
     # battery gap = 10 * (80-50)/100 = 3 kWh, solar = 0 → deficit = 3 → need ceil(3)=3 cheap hours
-    # prices_today[12] = 12 → hour 12 is in cheapest 3 of hours 12..23 (hours 12,13,14)
+    # _PRICES_24_MIDDAY_CHEAP: median=0.20; below-median remaining at hour 12 = [12,13,14,15]
+    # cheapest 3 of those = [12,13,14] → hour 12 in set → True
     inp = _eod_inputs(
         now=_BASE_NOW,  # hour=12
         battery_soc=50.0,
         battery_capacity_kwh=10.0,
         battery_target_soc=80.0,
         solar_forecast_remaining_kwh=0.0,
-        prices_today=_PRICES_24,
+        prices_today=_PRICES_24_MIDDAY_CHEAP,
     )
     assert strategy_module.is_eod_suppress_hour(inp) is True
 
@@ -556,8 +567,28 @@ def test_eod_suppress_false_when_current_hour_is_expensive(builder) -> None:
     assert strategy_module.is_eod_suppress_hour(inp) is False
 
 
+def test_eod_suppress_false_when_all_remaining_hours_above_median(builder) -> None:
+    # Regression: 2026-05-28 19:00 bug. At 19:00 the system held the battery and drew
+    # from the grid at 0.24 €/kWh because the old logic ranked hour 19 as the
+    # "cheapest remaining" (vs 0.43 at 20:00). With the median filter, all hours
+    # 19–23 are above today's median (≈ 0.155) → no hold → battery discharges.
+    prices = (0.16, 0.16, 0.15, 0.15, 0.16, 0.16, 0.18, 0.17, 0.15, 0.11,
+              0.04, 0.02, 0.02, 0.02, 0.02, 0.02, 0.06, 0.12, 0.17, 0.24,
+              0.43, 0.42, 0.25, 0.19)
+    inp = _eod_inputs(
+        now=datetime.datetime(2026, 5, 28, 19, 0, 0, tzinfo=datetime.UTC),
+        battery_soc=50.0,
+        battery_capacity_kwh=10.0,
+        battery_target_soc=80.0,  # gap=3 kWh, solar=0 → shortfall=3 kWh
+        solar_forecast_remaining_kwh=0.0,
+        prices_today=prices,
+    )
+    assert strategy_module.is_eod_suppress_hour(inp) is False
+
+
 def test_eod_suppress_house_load_forecast_reduces_surplus(builder) -> None:
     # solar=5, house_forecast=3 → effective=2; gap=3 → deficit=1 → need 1 hour
+    # _PRICES_24_MIDDAY_CHEAP: median=0.20; cheapest below-median hour from 12+ = hour 12 (0.05)
     inp = _eod_inputs(
         now=_BASE_NOW,  # hour=12
         battery_soc=50.0,
@@ -565,9 +596,9 @@ def test_eod_suppress_house_load_forecast_reduces_surplus(builder) -> None:
         battery_target_soc=80.0,
         solar_forecast_remaining_kwh=5.0,
         house_load_forecast_remaining_kwh=3.0,
-        prices_today=_PRICES_24,
+        prices_today=_PRICES_24_MIDDAY_CHEAP,
     )
-    # effective_solar=2, gap=3, deficit=1, cheapest 1 hour of [12..23] = hour 12 → True
+    # effective_solar=2, gap=3, deficit=1, cheapest 1 below-median hour of [12..23] = hour 12 → True
     assert strategy_module.is_eod_suppress_hour(inp) is True
 
 
@@ -946,13 +977,14 @@ def test_cheap_hold_rank_returns_none_when_no_deficit() -> None:
 
 
 def test_cheap_hold_rank_returns_position_when_in_set() -> None:
-    # hour=12, gap=3 kWh, solar=0 → deficit=3 → cheapest 3 hours of [12..23]
-    # _PRICES_24 = (0,1,...,23): hours 12,13,14 are cheapest remaining → hour 12 = rank 1 of 3
+    # hour=12, gap=3 kWh, solar=0 → deficit=3 → cheapest 3 below-median hours of [12..23]
+    # _PRICES_24_MIDDAY_CHEAP: median=0.20; below-median remaining = [12,13,14,15] (all 0.05)
+    # cheapest 3 = [12,13,14] (stable sort on equal prices) → hour 12 = rank 1 of 3
     inp = _eod_inputs(
         now=_BASE_NOW,  # hour=12
         battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
         solar_forecast_remaining_kwh=0.0,
-        prices_today=_PRICES_24,
+        prices_today=_PRICES_24_MIDDAY_CHEAP,
     )
     result = strategy_module.cheap_hold_rank(inp)
     assert result == (1, 3)
