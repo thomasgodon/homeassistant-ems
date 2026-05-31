@@ -17,6 +17,8 @@ from .strategy import (
     grid_focus,
     pv_destinations,
     pv_focus,
+    solar_remaining_wh,
+    solar_seconds_until_zero,
     solar_shortfall_kwh,
 )
 
@@ -42,6 +44,8 @@ async def async_setup_entry(
         EmsNetSolarRemainingSensor(forecast_coordinator),
         EmsBatterySolarDeficitSensor(forecast_coordinator),
         EmsExpectedEodBatterySensor(forecast_coordinator),
+        EmsSolarRemainingSensor(forecast_coordinator),
+        EmsSolarTimeRemainingSensor(forecast_coordinator),
     ])
 
 
@@ -502,3 +506,66 @@ class EmsExpectedEodBatterySensor(CoordinatorEntity[EmsForecastCoordinator], Sen
         if self.coordinator.data is None:
             return False
         return expected_eod_soc(self.coordinator.data) is not None
+
+
+class EmsSolarRemainingSensor(CoordinatorEntity[EmsForecastCoordinator], SensorEntity):
+    """Solar energy remaining today (Wh), derived from the hourly JSON forecast."""
+
+    _attr_unique_id = "ems_solar_remaining"
+    _attr_name = "EMS Solar Remaining"
+    _attr_native_unit_of_measurement = "Wh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:white-balance-sunny"
+
+    def __init__(self, coordinator: EmsForecastCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> int:
+        if self.coordinator.data is None:
+            return 0
+        value = solar_remaining_wh(
+            self.coordinator.data.solar_forecast_today,
+            self.coordinator.data.now,
+        )
+        return 0 if value is None else round(value)
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None
+
+
+class EmsSolarTimeRemainingSensor(CoordinatorEntity[EmsForecastCoordinator], SensorEntity):
+    """Seconds until the last non-zero forecast hour ends."""
+
+    _attr_unique_id = "ems_solar_time_remaining"
+    _attr_name = "EMS Solar Time Remaining"
+    _attr_native_unit_of_measurement = "s"
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:timer-sand"
+
+    def __init__(self, coordinator: EmsForecastCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> int:
+        if self.coordinator.data is None:
+            return 0
+        value = solar_seconds_until_zero(
+            self.coordinator.data.solar_forecast_today,
+            self.coordinator.data.now,
+        )
+        return 0 if value is None else value
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.data is not None

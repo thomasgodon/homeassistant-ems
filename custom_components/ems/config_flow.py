@@ -35,7 +35,7 @@ from .const import (
     CONF_PRICE_SIGNAL_ENTITY,
     CONF_PRICES_JSON_ENTITY,
     CONF_PV_POWER,
-    CONF_SOLAR_FORECAST_REMAINING,
+    CONF_SOLAR_FORECAST_JSON_ENTITY,
     DOMAIN,
 )
 
@@ -49,7 +49,7 @@ _JSON_SENSOR = EntitySelectorConfig(domain=[SENSOR_DOMAIN])
 
 
 class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 10
+    VERSION = 11
 
     def __init__(self) -> None:
         self._data: dict = {}
@@ -107,8 +107,8 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._data[CONF_BATTERY_SOC] = user_input.get(CONF_BATTERY_SOC)
             self._data[CONF_BATTERY_CAPACITY] = user_input.get(CONF_BATTERY_CAPACITY)
-            self._data[CONF_SOLAR_FORECAST_REMAINING] = user_input.get(
-                CONF_SOLAR_FORECAST_REMAINING
+            self._data[CONF_SOLAR_FORECAST_JSON_ENTITY] = user_input.get(
+                CONF_SOLAR_FORECAST_JSON_ENTITY
             )
             self._data[CONF_HOUSE_LOAD_FORECAST_REMAINING] = user_input.get(
                 CONF_HOUSE_LOAD_FORECAST_REMAINING
@@ -119,7 +119,7 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema({
             vol.Optional(CONF_BATTERY_SOC): EntitySelector(_SOC_SENSOR),
             vol.Optional(CONF_BATTERY_CAPACITY): EntitySelector(_NUMBER_OR_SENSOR),
-            vol.Optional(CONF_SOLAR_FORECAST_REMAINING): EntitySelector(_NUMBER_OR_SENSOR),
+            vol.Optional(CONF_SOLAR_FORECAST_JSON_ENTITY): EntitySelector(_JSON_SENSOR),
             vol.Optional(CONF_HOUSE_LOAD_FORECAST_REMAINING): EntitySelector(_NUMBER_OR_SENSOR),
             vol.Optional(CONF_PRICES_JSON_ENTITY): EntitySelector(_JSON_SENSOR),
         })
@@ -238,8 +238,8 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             self._data[CONF_BATTERY_SOC] = user_input.get(CONF_BATTERY_SOC)
             self._data[CONF_BATTERY_CAPACITY] = user_input.get(CONF_BATTERY_CAPACITY)
-            self._data[CONF_SOLAR_FORECAST_REMAINING] = user_input.get(
-                CONF_SOLAR_FORECAST_REMAINING
+            self._data[CONF_SOLAR_FORECAST_JSON_ENTITY] = user_input.get(
+                CONF_SOLAR_FORECAST_JSON_ENTITY
             )
             self._data[CONF_HOUSE_LOAD_FORECAST_REMAINING] = user_input.get(
                 CONF_HOUSE_LOAD_FORECAST_REMAINING
@@ -257,9 +257,9 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
                 default=self._data.get(CONF_BATTERY_CAPACITY),
             ): EntitySelector(_NUMBER_OR_SENSOR),
             vol.Optional(
-                CONF_SOLAR_FORECAST_REMAINING,
-                default=self._data.get(CONF_SOLAR_FORECAST_REMAINING),
-            ): EntitySelector(_NUMBER_OR_SENSOR),
+                CONF_SOLAR_FORECAST_JSON_ENTITY,
+                default=self._data.get(CONF_SOLAR_FORECAST_JSON_ENTITY),
+            ): EntitySelector(_JSON_SENSOR),
             vol.Optional(
                 CONF_HOUSE_LOAD_FORECAST_REMAINING,
                 default=self._data.get(CONF_HOUSE_LOAD_FORECAST_REMAINING),

@@ -28,7 +28,7 @@ CONF_PRICE_SIGNAL_ENTITY = "price_signal_entity"
 # Config entry data keys — battery management (optional)
 CONF_BATTERY_SOC = "battery_soc"
 CONF_BATTERY_CAPACITY = "battery_capacity"
-CONF_SOLAR_FORECAST_REMAINING = "solar_forecast_remaining"
+CONF_SOLAR_FORECAST_JSON_ENTITY = "solar_forecast_json_entity"
 CONF_HOUSE_LOAD_FORECAST_REMAINING = "house_load_forecast_remaining"
 CONF_PRICES_JSON_ENTITY = "prices_json_entity"
 

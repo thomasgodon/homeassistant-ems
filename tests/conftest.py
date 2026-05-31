@@ -60,6 +60,7 @@ class InputsBuilder:
             solar_forecast_remaining_kwh=get("solar_forecast_remaining_kwh", None),
             house_load_forecast_remaining_kwh=get("house_load_forecast_remaining_kwh", None),
             prices_today=get("prices_today", None),
+            solar_forecast_today=get("solar_forecast_today", None),
         )
 
 

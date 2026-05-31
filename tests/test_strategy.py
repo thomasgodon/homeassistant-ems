@@ -747,6 +747,102 @@ def test_energy_optimised_no_surplus_when_pv_below_house_load(builder) -> None:
     assert d.charging_state == "not_enough_power"
 
 
+# ── solar_remaining_wh ────────────────────────────────────────────────────────
+
+_FORECAST_24 = tuple(float(h * 100) for h in range(24))  # 0, 100, 200, ..., 2300
+
+
+_NOON = datetime.datetime(2026, 5, 29, 12, 0, 0)
+
+
+def test_solar_remaining_wh_none_on_none_forecast() -> None:
+    assert strategy_module.solar_remaining_wh(None, _NOON) is None
+
+
+def test_solar_remaining_wh_none_on_wrong_length() -> None:
+    assert strategy_module.solar_remaining_wh(tuple(range(23)), _NOON) is None
+
+
+def test_solar_remaining_wh_midnight_full_day() -> None:
+    # At 00:00:00 all 24 hours remain; hour 0 = 0 Wh so pro-rated contribution is 0
+    result = strategy_module.solar_remaining_wh(
+        _FORECAST_24, datetime.datetime(2026, 5, 29, 0, 0, 0)
+    )
+    expected = sum(_FORECAST_24)  # 0 pro-rated + 100+200+...+2300
+    assert result == pytest.approx(expected)
+
+
+def test_solar_remaining_wh_pro_rates_current_hour() -> None:
+    # At 13:42 → 18 minutes left → hour 13 contribution = 1300 * (18/60)
+    now = datetime.datetime(2026, 5, 29, 13, 42, 0)
+    result = strategy_module.solar_remaining_wh(_FORECAST_24, now)
+    current = 1300.0 * (18 / 60.0)
+    future = sum(_FORECAST_24[14:])
+    assert result == pytest.approx(current + future)
+
+
+def test_solar_remaining_wh_last_minute_of_day() -> None:
+    # At 23:59 → 1 minute left → only hour 23 pro-rated, no future hours
+    now = datetime.datetime(2026, 5, 29, 23, 59, 0)
+    result = strategy_module.solar_remaining_wh(_FORECAST_24, now)
+    expected = 2300.0 * (1 / 60.0)
+    assert result == pytest.approx(expected)
+
+
+def test_solar_remaining_wh_all_zero_forecast() -> None:
+    zeros: tuple[float, ...] = tuple(0.0 for _ in range(24))
+    result = strategy_module.solar_remaining_wh(zeros, datetime.datetime(2026, 5, 29, 12, 0, 0))
+    assert result == pytest.approx(0.0)
+
+
+def test_solar_remaining_wh_partial_zero_tail() -> None:
+    # forecast has non-zero only in first half; by hour 14 everything is 0
+    partial = tuple(float(h * 100) if h < 14 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 5, 29, 13, 0, 0)
+    result = strategy_module.solar_remaining_wh(partial, now)
+    # hour 13: 1300 * (60/60) = 1300; hour 14..23: all 0
+    assert result == pytest.approx(1300.0)
+
+
+# ── solar_seconds_until_zero ──────────────────────────────────────────────────
+
+def test_solar_seconds_until_zero_none_on_none_forecast() -> None:
+    assert strategy_module.solar_seconds_until_zero(None, _NOON) is None
+
+
+def test_solar_seconds_until_zero_none_on_wrong_length() -> None:
+    assert strategy_module.solar_seconds_until_zero(tuple(range(5)), _NOON) is None
+
+
+def test_solar_seconds_until_zero_all_zero_returns_zero() -> None:
+    zeros: tuple[float, ...] = tuple(0.0 for _ in range(24))
+    assert strategy_module.solar_seconds_until_zero(zeros, _NOON) == 0
+
+
+def test_solar_seconds_until_zero_typical_midday() -> None:
+    # last non-zero hour = 17 → end = 18:00:00 = 64800 s; now = 13:00:00 = 46800 s → diff = 18000 s
+    forecast = tuple(500.0 if 6 <= h <= 17 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 5, 29, 13, 0, 0)
+    result = strategy_module.solar_seconds_until_zero(forecast, now)
+    assert result == 5 * 3600  # 18:00 - 13:00 = 5 hours
+
+
+def test_solar_seconds_until_zero_past_sunset_returns_zero() -> None:
+    # last non-zero hour = 17; now = 20:00:00 (well past sunset)
+    forecast = tuple(500.0 if 6 <= h <= 17 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 5, 29, 20, 0, 0)
+    result = strategy_module.solar_seconds_until_zero(forecast, now)
+    assert result == 0
+
+
+def test_solar_seconds_until_zero_accounts_for_seconds() -> None:
+    # last non-zero = 17 → end at 64800 s; now = 17:45:30 = 63930 s → 870 s left
+    forecast = tuple(500.0 if 6 <= h <= 17 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 5, 29, 17, 45, 30)
+    result = strategy_module.solar_seconds_until_zero(forecast, now)
+    assert result == 18 * 60 - 30  # 17 min 30 s
+
+
 # ── Energy-optimised hysteresis ───────────────────────────────────────────────
 
 def test_energy_optimised_hysteresis_blocks_start_below_start_band(builder) -> None:

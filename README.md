@@ -108,13 +108,13 @@ Every configured input entity and every `select.ems_*` / `number.ems_*` entity t
 Re-reads live power values (`pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`) and reruns both algorithms. Writes active power and EV charge target but never writes the inverter verb — verb enforcement is the slow loop's job. Battery, forecast, price, and SoC fields are carried from the last slow-loop result.
 
 **Event-driven forecast coordinator** (`EmsForecastCoordinator`):
-No fixed polling interval. Runs once at startup, then only when one of the five slow-changing source entities changes state: `battery_soc`, `battery_capacity_kwh`, `battery_target_soc`, `solar_forecast_remaining_kwh`, `house_load_forecast_remaining_kwh`. The four forecast/battery sensors (`sensor.ems_battery_energy_to_target`, `sensor.ems_net_solar_remaining`, `sensor.ems_battery_solar_deficit`, `sensor.ems_expected_eod_battery`) are bound to this coordinator and update only when their inputs actually change — not every second.
+No fixed polling interval. Runs once at startup, then only when one of the slow-changing source entities changes state: `battery_soc`, `battery_capacity_kwh`, `battery_target_soc`, `solar_forecast_json_entity`, `house_load_forecast_remaining_kwh`. The six forecast/battery sensors (`sensor.ems_battery_energy_to_target`, `sensor.ems_net_solar_remaining`, `sensor.ems_battery_solar_deficit`, `sensor.ems_expected_eod_battery`, `sensor.ems_solar_remaining`, `sensor.ems_solar_time_remaining`) are bound to this coordinator and update only when their inputs actually change — not every second.
 
 ### EOD battery fullness decision
 
 Each cycle EMS computes an effective solar forecast — remaining solar generation minus remaining house load, floored at zero. It then compares this to the remaining battery gap (capacity × distance from current SoC to target SoC). If effective solar covers the gap, the battery forecast is fine. If not, the shortfall drives the Path 2 and Path 4 battery-priority decisions.
 
-For Path 2 (deficit hold), EMS filters remaining hours to those whose price is **strictly below today's median** and then selects the cheapest `N` of those, where `N` is large enough to cover the shortfall. This absolute price floor ensures EMS never holds the battery once the cheap window has passed — if all remaining hours are above the median, the hold is skipped and the battery discharges normally. This feature requires `battery_soc`, `battery_capacity_kwh`, `solar_forecast_remaining_kwh`, and `prices_today` to all be configured; it is disabled silently if any of them is unavailable.
+For Path 2 (deficit hold), EMS filters remaining hours to those whose price is **strictly below today's median** and then selects the cheapest `N` of those, where `N` is large enough to cover the shortfall. This absolute price floor ensures EMS never holds the battery once the cheap window has passed — if all remaining hours are above the median, the hold is skipped and the battery discharges normally. This feature requires `battery_soc`, `battery_capacity_kwh`, `solar_forecast_json_entity`, and `prices_today` to all be configured; it is disabled silently if any of them is unavailable.
 
 ---
 
@@ -164,7 +164,7 @@ All fields optional. When not configured the corresponding battery features are 
 |------------|------|-------------|
 | `battery_soc` | `sensor` | Current home battery state of charge (%) |
 | `battery_capacity` | `sensor` / `number` / `input_number` | Total usable battery capacity. EMS reads `unit_of_measurement` and converts automatically — use **Wh** or **kWh**. |
-| `solar_forecast_remaining` | `sensor` / `number` / `input_number` | Expected remaining solar generation today. EMS reads `unit_of_measurement` and converts automatically — use **Wh** or **kWh**. |
+| `solar_forecast_json_entity` | `sensor` | Sensor whose **state** is a JSON list of exactly 24 floats (Wh) indexed by calendar hour of today (index 0 = 00:00, index 23 = 23:00). EMS derives the remaining solar energy and the time until sunset from this data each cycle. **Replaces the old scalar `solar_forecast_remaining` field — existing installs must reconfigure.** |
 | `house_load_forecast_remaining` | `sensor` / `number` / `input_number` | Expected remaining house load today. EMS reads `unit_of_measurement` and converts automatically — use **Wh** or **kWh**. When absent, house load is ignored in the forecast comparison. |
 | `prices_json_entity` | `sensor` | Sensor whose **state** is a JSON list of 24 floats (€/kWh or €ct/kWh) indexed by hour 0..23. Must be exactly 24 elements. Example: `[0.08, 0.07, 0.07, 0.08, 0.10, 0.14, 0.18, 0.21, 0.20, 0.17, 0.15, 0.14, 0.13, 0.14, 0.15, 0.17, 0.21, 0.25, 0.24, 0.22, 0.19, 0.16, 0.13, 0.10]` (hour 0 = midnight, hour 23 = 23:00). Only relative ordering matters so any consistent unit works. |
 
@@ -197,7 +197,8 @@ Every 10 seconds `coordinator.py::_build_inputs()` populates the following `Inpu
 | `battery_soc` | `battery_soc` entity (%) or `None` |
 | `battery_capacity_kwh` | `battery_capacity` entity, auto-converted to kWh (reads `unit_of_measurement`), or `None` |
 | `battery_target_soc` | `number.ems_battery_target_soc`; defaults to `80` % |
-| `solar_forecast_remaining_kwh` | `solar_forecast_remaining` entity (kWh) or `None` |
+| `solar_forecast_today` | `solar_forecast_json_entity` state parsed as 24-float tuple (Wh, indexed by calendar hour), or `None` |
+| `solar_forecast_remaining_kwh` | derived from `solar_forecast_today`: pro-rated current hour + sum of future hours, converted to kWh; `None` when JSON unavailable |
 | `house_load_forecast_remaining_kwh` | `house_load_forecast_remaining` entity (kWh) or `None` |
 | `prices_today` | `prices_json_entity` state parsed as 24-float tuple, or `None` |
 | `thresholds` | `max_grid_import_w` entity; `ev_target_soc` entity; `ev_min_charge_w` from `number.ems_ev_min_charge_w`; `max_ev_charge_w` entity; `ev_charge_advised_cheap_hours` from `number.ems_ev_charge_advised_cheap_hours` |
@@ -308,9 +309,11 @@ Active power and EV target are cached — a service call is skipped if the value
 | `sensor.ems_ev_current_w` | float (W) | Computed EV charge target EMS is writing to `ev_charge_target_entity`. `0` when idle. |
 | `sensor.ems_inverter_active_power` | float (W) | Active power EMS is writing to `active_power_entity`. |
 | `sensor.ems_battery_energy_to_target` | int (Wh) or unavailable | Wh still needed to bring the battery from current SoC to `number.ems_battery_target_soc`. Unavailable when `battery_soc` or `battery_capacity` is not configured. Always ≥ 0. |
-| `sensor.ems_net_solar_remaining` | int (Wh) or unavailable | Today's remaining solar forecast minus today's remaining house load forecast, clamped to ≥ 0. Unavailable when `solar_forecast_remaining` is not configured. |
-| `sensor.ems_battery_solar_deficit` | int (Wh) or unavailable | Signed energy balance: positive = solar forecast is short of filling the battery to target SoC, negative = solar surplus beyond the battery's charge gap. Unavailable when `battery_soc`, `battery_capacity`, or `solar_forecast_remaining` is not configured. |
-| `sensor.ems_expected_eod_battery` | float (%) or unavailable | Projected battery SoC at 00:00 given remaining solar forecast minus remaining house load forecast, clamped to 100 %. Unavailable when `battery_soc`, `battery_capacity`, or `solar_forecast_remaining` is not configured. Same value as the `expected_eod_soc` attribute on `sensor.ems_battery_status`. |
+| `sensor.ems_net_solar_remaining` | int (Wh) or unavailable | Today's remaining solar forecast minus today's remaining house load forecast, clamped to ≥ 0. Unavailable when `solar_forecast_json_entity` is not configured. |
+| `sensor.ems_battery_solar_deficit` | int (Wh) or unavailable | Signed energy balance: positive = solar forecast is short of filling the battery to target SoC, negative = solar surplus beyond the battery's charge gap. Unavailable when `battery_soc`, `battery_capacity`, or `solar_forecast_json_entity` is not configured. |
+| `sensor.ems_expected_eod_battery` | float (%) or unavailable | Projected battery SoC at 00:00 given remaining solar forecast minus remaining house load forecast, clamped to 100 %. Unavailable when `battery_soc`, `battery_capacity`, or `solar_forecast_json_entity` is not configured. Same value as the `expected_eod_soc` attribute on `sensor.ems_battery_status`. |
+| `sensor.ems_solar_remaining` | int (Wh) | Solar energy remaining today as computed by EMS: current hour pro-rated by minutes left, plus sum of future hours. Returns `0` when `solar_forecast_json_entity` is unavailable or unparseable. Icon: `mdi:white-balance-sunny`. |
+| `sensor.ems_solar_time_remaining` | int (s), `device_class: duration` | Seconds from now until the end of the last calendar hour that has non-zero solar forecast. HA renders this as HH:MM:SS. Returns `0` when all forecast values are zero, the last productive hour has already passed, or `solar_forecast_json_entity` is unavailable. Icon: `mdi:timer-sand`. |
 
 #### `sensor.ems_ev_status` messages (priority order)
 
@@ -344,7 +347,7 @@ Inverter-intent rows (1–5) override power-balance rows whenever EMS has an exp
 
 SoC suffix (` · N%`) is omitted when `battery_soc` is unavailable. The `(R of N cheap hours today)` rank suffix on row 4 is omitted when price data is unavailable.
 
-The ` · forecast EOD N%` suffix appears on rows 4–9 when `battery_soc`, `battery_capacity_kwh`, and `solar_forecast_remaining_kwh` are all available. When the forecast is short of the target, `, short X.X kWh` is appended to the EOD suffix. Both are hidden when any required input is unavailable or when solar is forecast to fully cover the gap (shortfall ≤ 0).
+The ` · forecast EOD N%` suffix appears on rows 4–9 when `battery_soc`, `battery_capacity_kwh`, and `solar_forecast_json_entity` are all available. When the forecast is short of the target, `, short X.X kWh` is appended to the EOD suffix. Both are hidden when any required input is unavailable or when solar is forecast to fully cover the gap (shortfall ≤ 0).
 
 #### `sensor.ems_pv_status` messages (priority order)
 

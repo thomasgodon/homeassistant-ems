@@ -34,7 +34,7 @@ PLATFORMS = [
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    if entry.version >= 10:
+    if entry.version >= 11:
         return True
 
     new_data = {**entry.data}
@@ -75,7 +75,17 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ):
         new_data.setdefault(key, None)
 
-    hass.config_entries.async_update_entry(entry, data=new_data, version=10)
+    # v10 → v11: replace scalar solar_forecast_remaining with hourly JSON sensor
+    new_data.pop("solar_forecast_remaining", None)
+    new_data.setdefault("solar_forecast_json_entity", None)
+    if new_data.get("solar_forecast_json_entity") is None:
+        _LOGGER.warning(
+            "EMS v11 migration: solar_forecast_remaining replaced by solar_forecast_json_entity. "
+            "Go to Settings → Devices & Services → EMS → Configure (Step 3) to attach a JSON "
+            "sensor with 24 Wh values indexed by calendar hour."
+        )
+
+    hass.config_entries.async_update_entry(entry, data=new_data, version=11)
     return True
 
 

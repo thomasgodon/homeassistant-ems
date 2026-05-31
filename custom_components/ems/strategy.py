@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from datetime import datetime
 
 from .models import (
     BatteryFocus,
@@ -373,5 +374,42 @@ def grid_focus(inputs: Inputs, inverter_decision: InverterDecision) -> GridFocus
     if abs(g - cap) <= _PEAK_CAP_PROXIMITY_W:
         return "at_peak_cap"
     return "importing"
+
+
+# ── solar forecast helpers ─────────────────────────────────────────────────────
+
+def solar_remaining_wh(forecast: tuple[float, ...] | None, now: datetime) -> float | None:
+    """Wh of solar forecast remaining today.
+
+    Pro-rates the current hour by minutes left; sums future hours verbatim.
+    Returns None when forecast is None or not exactly 24 elements.
+    """
+    if forecast is None or len(forecast) != 24:
+        return None
+    h = now.hour
+    minutes_left = 60 - now.minute
+    total = forecast[h] * (minutes_left / 60.0)
+    total += sum(forecast[h + 1:])
+    return total
+
+
+def solar_seconds_until_zero(forecast: tuple[float, ...] | None, now: datetime) -> int | None:
+    """Seconds from *now* until the end of the last hour with forecast > 0.
+
+    Returns 0 when already past the last productive hour.
+    Returns None when forecast is None or not exactly 24 elements.
+    """
+    if forecast is None or len(forecast) != 24:
+        return None
+    last_hour = -1
+    for h in range(23, -1, -1):
+        if forecast[h] > 0:
+            last_hour = h
+            break
+    if last_hour < 0:
+        return 0
+    end_second = (last_hour + 1) * 3600
+    now_second = now.hour * 3600 + now.minute * 60 + now.second
+    return max(0, end_second - now_second)
 
 

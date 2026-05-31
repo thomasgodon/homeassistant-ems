@@ -18,6 +18,8 @@ from custom_components.ems.sensor import (
     EmsInverterModeSensor,
     EmsNetSolarRemainingSensor,
     EmsPvStatusSensor,
+    EmsSolarRemainingSensor,
+    EmsSolarTimeRemainingSensor,
 )
 
 _DEFAULT_THRESHOLDS = Thresholds(
@@ -750,4 +752,81 @@ def test_expected_eod_battery_unavailable_when_helper_returns_none(monkeypatch):
     monkeypatch.setattr("custom_components.ems.sensor.expected_eod_soc", lambda _: None)
     sensor = EmsExpectedEodBatterySensor(_make_forecast_coordinator())
     assert sensor.native_value is None
+    assert sensor.available is False
+
+
+# ── EmsSolarRemainingSensor ───────────────────────────────────────────────────
+
+def test_solar_remaining_unique_id():
+    sensor = EmsSolarRemainingSensor(_make_forecast_coordinator())
+    assert sensor.unique_id == "ems_solar_remaining"
+
+
+def test_solar_remaining_unit_and_device_class():
+    sensor = EmsSolarRemainingSensor(_make_forecast_coordinator())
+    assert sensor.native_unit_of_measurement == "Wh"
+    assert sensor.device_class is None
+
+
+def test_solar_remaining_icon():
+    sensor = EmsSolarRemainingSensor(_make_forecast_coordinator())
+    assert sensor.icon == "mdi:white-balance-sunny"
+
+
+def test_solar_remaining_returns_value(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.solar_remaining_wh", lambda f, n: 8500.0)
+    sensor = EmsSolarRemainingSensor(_make_forecast_coordinator())
+    assert sensor.native_value == 8500
+    assert sensor.available is True
+
+
+def test_solar_remaining_returns_zero_when_helper_returns_none(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.solar_remaining_wh", lambda f, n: None)
+    sensor = EmsSolarRemainingSensor(_make_forecast_coordinator())
+    assert sensor.native_value == 0
+    assert sensor.available is True
+
+
+def test_solar_remaining_returns_zero_when_no_data():
+    sensor = EmsSolarRemainingSensor(_make_forecast_coordinator(no_data=True))
+    assert sensor.native_value == 0
+    assert sensor.available is False
+
+
+# ── EmsSolarTimeRemainingSensor ───────────────────────────────────────────────
+
+def test_solar_time_remaining_unique_id():
+    sensor = EmsSolarTimeRemainingSensor(_make_forecast_coordinator())
+    assert sensor.unique_id == "ems_solar_time_remaining"
+
+
+def test_solar_time_remaining_unit_and_device_class():
+    from homeassistant.components.sensor import SensorDeviceClass
+    sensor = EmsSolarTimeRemainingSensor(_make_forecast_coordinator())
+    assert sensor.native_unit_of_measurement == "s"
+    assert sensor.device_class == SensorDeviceClass.DURATION
+
+
+def test_solar_time_remaining_icon():
+    sensor = EmsSolarTimeRemainingSensor(_make_forecast_coordinator())
+    assert sensor.icon == "mdi:timer-sand"
+
+
+def test_solar_time_remaining_returns_value(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.solar_seconds_until_zero", lambda f, n: 18000)
+    sensor = EmsSolarTimeRemainingSensor(_make_forecast_coordinator())
+    assert sensor.native_value == 18000
+    assert sensor.available is True
+
+
+def test_solar_time_remaining_returns_zero_when_helper_returns_none(monkeypatch):
+    monkeypatch.setattr("custom_components.ems.sensor.solar_seconds_until_zero", lambda f, n: None)
+    sensor = EmsSolarTimeRemainingSensor(_make_forecast_coordinator())
+    assert sensor.native_value == 0
+    assert sensor.available is True
+
+
+def test_solar_time_remaining_returns_zero_when_no_data():
+    sensor = EmsSolarTimeRemainingSensor(_make_forecast_coordinator(no_data=True))
+    assert sensor.native_value == 0
     assert sensor.available is False

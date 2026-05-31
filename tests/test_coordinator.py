@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,6 +11,7 @@ from custom_components.ems.const import (
     CONF_EV_TARGET_SOC,
     CONF_GRID_IMPORT_POWER,
     CONF_MAX_GRID_IMPORT_W,
+    CONF_SOLAR_FORECAST_JSON_ENTITY,
     DEFAULT_EV_TARGET_SOC,
     DEFAULT_MAX_GRID_IMPORT_W,
 )
@@ -953,3 +955,150 @@ async def test_async_setup_input_change_calls_request_refresh():
     # the task wraps async_request_refresh — verify the coroutine was created
     call_arg = coord.hass.async_create_task.call_args[0][0]
     assert call_arg is not None
+
+
+# ---------------------------------------------------------------------------
+# _read_solar_forecast_json
+# ---------------------------------------------------------------------------
+
+_SOLAR_FORECAST_24 = list(float(h * 100) for h in range(24))
+
+
+def test_read_solar_forecast_json_happy_path():
+    from custom_components.ems.coordinator import _read_solar_forecast_json
+    hass = _make_hass_with_attr("sensor.solar_forecast", json.dumps(_SOLAR_FORECAST_24))
+    result = _read_solar_forecast_json(hass, "sensor.solar_forecast")
+    assert result == tuple(_SOLAR_FORECAST_24)
+
+
+def test_read_solar_forecast_json_none_on_no_entity_id():
+    from custom_components.ems.coordinator import _read_solar_forecast_json
+    hass = MagicMock()
+    assert _read_solar_forecast_json(hass, None) is None
+
+
+def test_read_solar_forecast_json_none_on_unavailable():
+    from custom_components.ems.coordinator import _read_solar_forecast_json
+    s = MagicMock()
+    s.state = "unavailable"
+    hass = MagicMock()
+    hass.states.get = MagicMock(return_value=s)
+    assert _read_solar_forecast_json(hass, "sensor.solar_forecast") is None
+
+
+def test_read_solar_forecast_json_none_on_parse_failure():
+    from custom_components.ems.coordinator import _read_solar_forecast_json
+    hass = _make_hass_with_attr("sensor.solar_forecast", "not-json")
+    assert _read_solar_forecast_json(hass, "sensor.solar_forecast") is None
+
+
+def test_read_solar_forecast_json_none_on_wrong_length():
+    from custom_components.ems.coordinator import _read_solar_forecast_json
+    hass = _make_hass_with_attr("sensor.solar_forecast", json.dumps([100.0] * 23))
+    assert _read_solar_forecast_json(hass, "sensor.solar_forecast") is None
+
+
+# ---------------------------------------------------------------------------
+# _build_inputs populates solar_forecast_today and derives solar_forecast_remaining_kwh
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_build_inputs_solar_forecast_json_populates_fields():
+    from custom_components.ems.coordinator import EmsStrategyCoordinator
+
+    forecast = [0.0] * 13 + [2000.0, 3000.0] + [0.0] * 9  # non-zero only at hours 13 and 14
+    entry = _make_entry({
+        "grid_import_power": "sensor.grid",
+        "pv_power": "sensor.pv",
+        "house_load": "sensor.load",
+        "ev_power": "sensor.ev",
+        CONF_SOLAR_FORECAST_JSON_ENTITY: "sensor.solar_forecast",
+    })
+
+    hass = _make_hass({
+        "sensor.grid": 0, "sensor.pv": 0, "sensor.load": 0, "sensor.ev": 0,
+        "number.ems_ev_min_charge_w": 1400,
+        "select.ems_ev_charging_mode": "Off",
+        "select.ems_inverter_control_mode": "Off",
+        "sensor.solar_forecast": json.dumps(forecast),
+    })
+
+    state = MagicMock()
+    state.startup_grace_until = None
+
+    coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
+    coordinator.hass = hass
+    coordinator._entry = entry
+    coordinator._state = state
+
+    fixed_now = datetime(2026, 5, 29, 13, 0, 0, tzinfo=UTC)
+
+    with patch("custom_components.ems.coordinator.dt_util") as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        inputs = await coordinator._build_inputs()
+
+    assert inputs.solar_forecast_today == tuple(forecast)
+    # At 13:00:00 — hour 13 fully remaining (60/60), hour 14 fully remaining: 2000+3000=5000 Wh
+    assert inputs.solar_forecast_remaining_kwh == pytest.approx(5.0)
+
+
+@pytest.mark.asyncio
+async def test_build_inputs_solar_forecast_json_missing_entity():
+    from custom_components.ems.coordinator import EmsStrategyCoordinator
+
+    entry = _make_entry({
+        "grid_import_power": "sensor.grid",
+        "pv_power": "sensor.pv",
+        "house_load": "sensor.load",
+        "ev_power": "sensor.ev",
+        # CONF_SOLAR_FORECAST_JSON_ENTITY intentionally absent
+    })
+
+    hass = _make_hass({
+        "sensor.grid": 0, "sensor.pv": 0, "sensor.load": 0, "sensor.ev": 0,
+        "number.ems_ev_min_charge_w": 1400,
+        "select.ems_ev_charging_mode": "Off",
+        "select.ems_inverter_control_mode": "Off",
+    })
+
+    state = MagicMock()
+    state.startup_grace_until = None
+
+    coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
+    coordinator.hass = hass
+    coordinator._entry = entry
+    coordinator._state = state
+
+    with patch("custom_components.ems.coordinator.dt_util"):
+        inputs = await coordinator._build_inputs()
+
+    assert inputs.solar_forecast_today is None
+    assert inputs.solar_forecast_remaining_kwh is None
+
+
+# ---------------------------------------------------------------------------
+# EmsForecastCoordinator watchlist includes solar_forecast_json_entity
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_forecast_coordinator_watchlist_includes_solar_forecast_json():
+    from custom_components.ems.coordinator import EmsForecastCoordinator
+
+    entry = _make_entry({CONF_SOLAR_FORECAST_JSON_ENTITY: "sensor.my_solar_forecast"})
+    entry.async_on_unload = MagicMock()
+
+    hass = MagicMock()
+    captured: list[str] = []
+
+    def mock_track(h, entities, cb):
+        captured.extend(entities)
+        return MagicMock()
+
+    _TRACK = "custom_components.ems.coordinator.async_track_state_change_event"
+    with patch(_TRACK, side_effect=mock_track):
+        coord = EmsForecastCoordinator.__new__(EmsForecastCoordinator)
+        coord.hass = hass
+        coord._entry = entry
+        await coord.async_setup()
+
+    assert "sensor.my_solar_forecast" in captured
