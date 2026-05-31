@@ -20,6 +20,7 @@ def decide(inputs: Inputs, *, commanded_ev_charge_w: float) -> InverterDecision:
         battery_target_soc=inputs.battery_target_soc,
         ev_strategy=inputs.ev_strategy,
         solar_shortfall_kwh_result=strategy_module.solar_shortfall_kwh(inputs),
+        max_active_power_w=inputs.thresholds.max_active_power_w,
     )
 
 
@@ -38,6 +39,7 @@ def recompute(
     battery_target_soc: float = 80.0,
     ev_strategy: str = "Off",
     solar_shortfall_kwh_result: float | None = None,
+    max_active_power_w: float | None = None,
 ) -> InverterDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
     return _compute(
@@ -54,10 +56,18 @@ def recompute(
         battery_target_soc=battery_target_soc,
         ev_strategy=ev_strategy,
         solar_shortfall_kwh_result=solar_shortfall_kwh_result,
+        max_active_power_w=max_active_power_w,
     )
 
 
 # ── core logic ────────────────────────────────────────────────────────────────
+
+def _clamp_active_power(value: float, cap: float | None) -> float:
+    """Clamp active_power_w to ±cap so inverter entity range is never exceeded."""
+    if cap is None:
+        return value
+    return max(-cap, min(cap, value))
+
 
 def _compute(
     *,
@@ -74,6 +84,7 @@ def _compute(
     battery_target_soc: float = 80.0,
     ev_strategy: str = "Off",
     solar_shortfall_kwh_result: float | None = None,
+    max_active_power_w: float | None = None,
 ) -> InverterDecision:
     if inverter_strategy == "Off":
         return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
@@ -91,7 +102,7 @@ def _compute(
         excess_w = grid_import_w - max_grid_import_w
         return InverterDecision(
             inverter_verb=mapping.power_control_option,
-            active_power_w=-(pv_w + excess_w),
+            active_power_w=_clamp_active_power(-(pv_w + excess_w), max_active_power_w),
             status="peak_shaving",
         )
 
@@ -120,7 +131,7 @@ def _compute(
         active_power = -house_non_ev if pv_w > house_non_ev else 0.0
         return InverterDecision(
             inverter_verb=mapping.power_control_option,
-            active_power_w=active_power,
+            active_power_w=_clamp_active_power(active_power, max_active_power_w),
             status="holding_battery",
         )
 
@@ -145,7 +156,7 @@ def _compute(
         house_non_ev = max(0.0, house_load_w - ev_power_w)
         return InverterDecision(
             inverter_verb=mapping.power_control_option,
-            active_power_w=-house_non_ev,
+            active_power_w=_clamp_active_power(-house_non_ev, max_active_power_w),
             status="battery_priority",
         )
 
@@ -164,6 +175,6 @@ def _compute(
     # EV (magnitude capped by pv_w), never charged from AC (sign always ≤ 0).
     return InverterDecision(
         inverter_verb=mapping.power_control_option,
-        active_power_w=-min(pv_w, house_load_w),
+        active_power_w=_clamp_active_power(-min(pv_w, house_load_w), max_active_power_w),
         status="controlling",
     )

@@ -61,6 +61,7 @@ def _decide(
     battery_target_soc: float = 80.0,
     ev_strategy: str = "Grid-optimised",
     solar_shortfall_kwh_result: float | None = None,
+    max_active_power_w: float | None = None,
 ) -> InverterDecision:
     return inverter_control_module.recompute(
         pv_w=pv_w,
@@ -76,6 +77,7 @@ def _decide(
         battery_target_soc=battery_target_soc,
         ev_strategy=ev_strategy,
         solar_shortfall_kwh_result=solar_shortfall_kwh_result,
+        max_active_power_w=max_active_power_w,
     )
 
 
@@ -596,3 +598,90 @@ def test_p4_fires_in_price_optimised_when_pv_exceeds_house_load() -> None:
     assert d.status == "battery_priority"
     # house_non_ev = max(0, 7070 - 4512) = 2558; PV (8000) > 2558, no battery discharge
     assert d.active_power_w == pytest.approx(-2558.0)
+
+
+# ── max_active_power_w clamping ────────────────────────────────────────────────
+
+def test_controlling_clamps_active_power_to_cap() -> None:
+    """When PV and house_load both exceed the inverter range, active_power is clamped to ±cap."""
+    d = _decide(
+        pv_w=5282.0,
+        house_load_w=7500.0,
+        ev_power_w=5000.0,
+        commanded_ev_charge_w=5000.0,
+        max_active_power_w=5000.0,
+    )
+    assert d.status == "controlling"
+    # -min(5282, 7500) = -5282 clamped to -5000
+    assert d.active_power_w == pytest.approx(-5000.0)
+
+
+def test_controlling_no_clamp_when_within_range() -> None:
+    """When computed value is within cap, no clamping occurs."""
+    d = _decide(
+        pv_w=3000.0,
+        house_load_w=4000.0,
+        ev_power_w=2000.0,
+        commanded_ev_charge_w=2000.0,
+        max_active_power_w=5000.0,
+    )
+    assert d.status == "controlling"
+    # -min(3000, 4000) = -3000, well within ±5000
+    assert d.active_power_w == pytest.approx(-3000.0)
+
+
+def test_controlling_no_clamp_when_cap_none() -> None:
+    """Without a cap (max_active_power_w=None), raw computed value is written."""
+    d = _decide(
+        pv_w=5282.0,
+        house_load_w=7500.0,
+        ev_power_w=5000.0,
+        commanded_ev_charge_w=5000.0,
+        max_active_power_w=None,
+    )
+    assert d.status == "controlling"
+    assert d.active_power_w == pytest.approx(-5282.0)
+
+
+def test_peak_shaving_clamps_active_power() -> None:
+    """Peak shaving clamps -(pv + excess) when it would exceed the cap."""
+    d = _decide(
+        pv_w=5000.0,
+        grid_import_w=6000.0,
+        max_grid_import_w=4500.0,
+        commanded_ev_charge_w=0.0,
+        ev_power_w=0.0,
+        max_active_power_w=5000.0,
+    )
+    assert d.status == "peak_shaving"
+    # excess = 6000 - 4500 = 1500; -(5000 + 1500) = -6500 clamped to -5000
+    assert d.active_power_w == pytest.approx(-5000.0)
+
+
+def test_holding_battery_clamps_active_power() -> None:
+    """Deficit hold clamps -house_non_ev when house_non_ev exceeds cap."""
+    d = _decide(
+        pv_w=4000.0,
+        house_load_w=8000.0,
+        ev_power_w=2000.0,
+        eod_suppress=True,
+        max_active_power_w=5000.0,
+    )
+    assert d.status == "holding_battery"
+    # pv (4000) > house_non_ev (6000)? No → active_power = -house_non_ev = -6000 → clamped -5000
+    assert d.active_power_w == pytest.approx(-5000.0)
+
+
+def test_battery_priority_clamps_active_power() -> None:
+    """Battery priority clamps -house_non_ev when it would exceed the cap."""
+    d = _decide(
+        pv_w=4000.0,
+        house_load_w=10000.0,
+        ev_power_w=4000.0,
+        commanded_ev_charge_w=4000.0,
+        solar_shortfall_kwh_result=2.0,
+        max_active_power_w=5000.0,
+    )
+    assert d.status == "battery_priority"
+    # house_non_ev = 10000 - 4000 = 6000; -6000 clamped to -5000
+    assert d.active_power_w == pytest.approx(-5000.0)

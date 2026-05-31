@@ -84,6 +84,8 @@ In a scenario where solar forecast leaves only 1 kWh of net solar for a 2 kWh ba
 
 EMS integrates grid import toward the configured cap. The EV draws up to the cap minus current grid import, so total grid import stays at the cap. The battery is never drained for the EV.
 
+An **anti-windup cap** prevents the integrator from racing ahead of the wallbox during its 5–15 s ramp-up: the commanded target can only project 500 W above the wallbox's measured draw. Without this cap, the integrator would overshoot to the wallbox maximum before it has ramped up, causing a grid spike that drives the target back below the minimum charge power and stops the session — which then immediately restarts, creating an on/off oscillation.
+
 > **Note (Price-optimised + cheap hour):** When both the battery forecast is short *and* the current hour qualifies as a cheap hold hour, Path 2 takes precedence over Path 4 — see Path 2 above.
 
 **When the battery forecast is fine:** EMS sets the inverter to cover the full house load including the EV from PV. Whatever PV exceeds the combined load trickles into the battery. The battery charges naturally once the EV has reached its cap.
@@ -142,7 +144,7 @@ The **Configure** button (Settings → Devices & Services → EMS → Configure)
 | `inverter_select` | select entity | No | HA select entity that controls inverter operating mode |
 | `inverter_disabled_option` | text | No | Option string written to the inverter select when EV is idle (e.g. `"Self Use"`) |
 | `inverter_power_control_option` | text | No | Option string written to the inverter select when EV is charging (e.g. `"Power Control"`) |
-| `active_power_entity` | `number` / `input_number` | No | EMS writes computed active power (W) to this entity. Negative = inverter drains PV → AC; `0` = hold battery. |
+| `active_power_entity` | `number` / `input_number` | No | EMS writes computed active power (W) to this entity. Negative = inverter drains PV → AC; `0` = hold battery. EMS reads the entity's `min`/`max` attributes at startup and clamps all writes to that range so a hardware-limited inverter never receives an out-of-range value. |
 
 ### Step 2 — EV Charger
 

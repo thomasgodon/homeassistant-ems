@@ -1,13 +1,19 @@
 """Tests for strategy.decide() and strategy.recompute().
 
 Grid headroom algorithm (integrating closed-loop):
-  feedback_w    = last_ev_target_w if not None else ev_power_w  (cold-start fallback)
+  feedback_w    = min(last_ev_target_w, ev_power_w + 500)  if last_ev_target_w is not None
+               else ev_power_w  (cold-start fallback)
   ev_target_w   = max(0, max_grid_import_w - grid_import_w + feedback_w)
   ev_target_w   = min(ev_target_w, max_ev_charge_w)  if max_ev_charge_w is set
 
 Using the last commanded target as feedback eliminates the static error that arises
 when the wallbox quantises to whole-amp steps and the measured ev_power_w never
 reaches the commanded value.
+
+The 500 W anti-windup headroom prevents the integrator from racing ahead of the
+wallbox ramp: during the 5-15 s ramp-up, feedback can only project 500 W above
+the actual draw, preventing the target from climbing to the max_ev_charge_w cap
+before the wallbox has caught up.
 """
 from __future__ import annotations
 
@@ -478,6 +484,88 @@ def test_integrator_keeps_pushing_when_grid_below_cap(builder) -> None:
     # feedback = 2752; target = max(0, 4500 - 4278 + 2752) = 2974 > 2752 — keeps pushing up
     assert d.ev_charge_power_w == pytest.approx(2974.0)
     assert d.strategy == "ev_charging"
+
+
+# ── anti-windup: integrator feedback cap ─────────────────────────────────────
+
+def test_antiwindup_caps_feedback_when_wallbox_lags(builder) -> None:
+    """During wallbox ramp-up, last_ev_target_w >> ev_power_w.
+
+    Without the cap the integrator would keep adding (max_grid - grid_import)
+    on top of the already-inflated last_target, driving the target to the wallbox
+    maximum and causing a grid overshoot that stops the session.
+
+    With the cap: feedback = min(last_target, ev_power + 500), which limits
+    the overshoot and lets the grid settle near max_grid_import_w.
+    """
+    thresholds = Thresholds(max_grid_import_w=5000.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Grid-optimised",
+        ev_soc=50.0,
+        grid_import_w=4500.0,        # background (2500) + EV (2000) still ramping
+        ev_power_w=2000.0,            # wallbox only drew 2000 W so far
+        last_ev_target_w=5000.0,      # last commanded was 5000 W (over-shoot)
+        thresholds=thresholds,
+    )
+    # Without anti-windup: feedback=5000, target = max(0, 5000 - 4500 + 5000) = 5500 — GROWS
+    # With anti-windup:    feedback=min(5000, 2000+500)=2500, target=max(0, 5000-4500+2500)=3000
+    assert d.ev_charge_power_w == pytest.approx(3000.0)
+    assert d.strategy == "ev_charging"
+
+
+def test_antiwindup_cold_start_uses_ev_power_w(builder) -> None:
+    """When last_ev_target_w is None (cold start), feedback is ev_power_w — unchanged."""
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Grid-optimised",
+        ev_soc=50.0,
+        grid_import_w=3500.0,
+        ev_power_w=2000.0,
+        last_ev_target_w=None,
+        thresholds=thresholds,
+    )
+    # feedback = ev_power_w = 2000; target = max(0, 4500 - 3500 + 2000) = 3000
+    assert d.ev_charge_power_w == pytest.approx(3000.0)
+
+
+def test_antiwindup_steady_state_cap_not_binding(builder) -> None:
+    """At steady state (last_target ≈ ev_power), anti-windup headroom is not consumed."""
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    # Wallbox reached the commanded value; lag = 0.
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Grid-optimised",
+        ev_soc=50.0,
+        grid_import_w=4500.0,
+        ev_power_w=2752.0,
+        last_ev_target_w=2752.0,
+        thresholds=thresholds,
+    )
+    # feedback = min(2752, 2752+500) = 2752 — cap not binding; target = 4500-4500+2752 = 2752
+    assert d.ev_charge_power_w == pytest.approx(2752.0)
+
+
+def test_antiwindup_quantisation_lag_within_headroom(builder) -> None:
+    """Wallbox quantises to whole amps; lag within headroom — anti-windup cap not binding."""
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Grid-optimised",
+        ev_soc=50.0,
+        grid_import_w=4244.0,
+        ev_power_w=2496.0,        # quantised to 11 A, 233 W below target
+        last_ev_target_w=2729.0,  # last commanded
+        thresholds=thresholds,
+    )
+    # feedback = min(2729, 2496+500) = min(2729, 2996) = 2729 — cap not binding
+    # target = max(0, 4500 - 4244 + 2729) = 2985 (same as before anti-windup)
+    assert d.ev_charge_power_w == pytest.approx(2985.0)
 
 
 # ── is_eod_suppress_hour truth table ─────────────────────────────────────────

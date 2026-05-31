@@ -21,6 +21,7 @@ class Thresholds:
     ev_min_charge_w: float
     max_ev_charge_w: float | None = None
     ev_charge_advised_cheap_hours: int = 4
+    max_active_power_w: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -183,6 +183,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
                 hass, "number.ems_ev_charge_advised_cheap_hours",
                 DEFAULT_EV_CHARGE_ADVISED_CHEAP_HOURS,
             )),
+            max_active_power_w=_read_entity_max_abs(hass, data.get(CONF_ACTIVE_POWER_ENTITY)),
         )
 
         mapping = VerbMapping(
@@ -356,6 +357,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             battery_target_soc=prior_inputs.battery_target_soc,
             ev_strategy=ev_strategy,
             solar_shortfall_kwh_result=shortfall_kwh,
+            max_active_power_w=prior_inputs.thresholds.max_active_power_w,
         )
 
         if ev_strategy != "Off":
@@ -546,6 +548,28 @@ def _derive_solar_remaining_kwh(
     forecast = _read_solar_forecast_json(hass, entity_id)
     remaining = strategy_module.solar_remaining_wh(forecast, now)
     return (remaining / 1000.0) if remaining is not None else None
+
+
+def _read_entity_max_abs(hass: HomeAssistant, entity_id: str | None) -> float | None:
+    """Return min(|min_attr|, |max_attr|) from a number entity, or None if unavailable.
+
+    Used to auto-detect the inverter active_power entity's accepted magnitude so that
+    inverter_control can clamp computed values before writing — preventing
+    ServiceValidationError when PV/house_load exceed the entity's range.
+    """
+    if not entity_id:
+        return None
+    state = hass.states.get(entity_id)
+    if state is None:
+        return None
+    try:
+        min_val = state.attributes.get("min")
+        max_val = state.attributes.get("max")
+        if min_val is None or max_val is None:
+            return None
+        return min(abs(float(min_val)), abs(float(max_val)))
+    except (ValueError, TypeError):
+        return None
 
 
 def _read_prices_json(hass: HomeAssistant, entity_id: str | None) -> tuple[float, ...] | None:

@@ -290,3 +290,44 @@ async def test_no_inverter_configured_no_verb_write() -> None:
     calls = hass.services.async_call.call_args_list
     select_calls = [c for c in calls if c[0][1] == "select_option"]
     assert len(select_calls) == 0
+
+
+# ── active_power write failure doesn't block EV target ────────────────────────
+
+@pytest.mark.asyncio
+async def test_write_fast_ev_target_written_when_active_power_raises() -> None:
+    """If active_power write raises (e.g. value out of entity range), EV target still written."""
+    hass = _make_hass()
+    hass.services.async_call = AsyncMock(side_effect=[
+        Exception("Value -5282 outside valid range -5000..5000"),  # active_power fails
+        None,  # ev_target succeeds
+    ])
+    ctrl = Controller(hass, _MAPPING_WITH_TARGET)
+    inv = _inv_power_control(active_power_w=-5282.0)
+    await ctrl.write_fast(_ev_charging(ev_charge_power_w=1500.0), inv)
+    ev_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.ev_charger_power"
+    ]
+    assert len(ev_calls) == 1
+    assert ev_calls[0][0][2]["value"] == pytest.approx(1500.0)
+
+
+@pytest.mark.asyncio
+async def test_write_slow_ev_target_written_when_active_power_raises() -> None:
+    """Same guarantee for write_slow: active_power failure must not block EV target."""
+    hass = _make_hass()
+    hass.services.async_call = AsyncMock(side_effect=[
+        None,   # select_option (verb) succeeds
+        Exception("Value -5282 outside valid range -5000..5000"),  # active_power fails
+        None,   # ev_target succeeds
+    ])
+    ctrl = Controller(hass, _MAPPING_WITH_TARGET)
+    inv = _inv_power_control(active_power_w=-5282.0)
+    await ctrl.write_slow(_ev_charging(ev_charge_power_w=2000.0), inv)
+    ev_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if c[0][1] == "set_value" and c[0][2].get("entity_id") == "number.ev_charger_power"
+    ]
+    assert len(ev_calls) == 1
+    assert ev_calls[0][0][2]["value"] == pytest.approx(2000.0)

@@ -118,6 +118,112 @@ def test_read_kwh_optional_no_entity_id_returns_none():
 
 
 # ---------------------------------------------------------------------------
+# _read_entity_max_abs — symmetric active-power cap from entity attributes
+# ---------------------------------------------------------------------------
+
+def _make_hass_with_range(entity_id: str, min_val: float, max_val: float) -> MagicMock:
+    hass = MagicMock()
+    s = MagicMock()
+    s.state = "0"
+    s.attributes = {"min": min_val, "max": max_val}
+
+    def get_state(eid):
+        return s if eid == entity_id else None
+
+    hass.states.get = MagicMock(side_effect=get_state)
+    return hass
+
+
+def test_read_entity_max_abs_symmetric_range():
+    from custom_components.ems.coordinator import _read_entity_max_abs
+    hass = _make_hass_with_range("number.knx_inverter_active_power", -5000.0, 5000.0)
+    assert _read_entity_max_abs(hass, "number.knx_inverter_active_power") == pytest.approx(5000.0)
+
+
+def test_read_entity_max_abs_asymmetric_returns_tighter_bound():
+    from custom_components.ems.coordinator import _read_entity_max_abs
+    hass = _make_hass_with_range("number.knx_inverter_active_power", -3000.0, 5000.0)
+    # min(|−3000|, |5000|) = 3000 — use tighter bound so neither side exceeds it
+    assert _read_entity_max_abs(hass, "number.knx_inverter_active_power") == pytest.approx(3000.0)
+
+
+def test_read_entity_max_abs_entity_absent_returns_none():
+    from custom_components.ems.coordinator import _read_entity_max_abs
+    hass = MagicMock()
+    hass.states.get = MagicMock(return_value=None)
+    assert _read_entity_max_abs(hass, "number.knx_inverter_active_power") is None
+
+
+def test_read_entity_max_abs_no_entity_id_returns_none():
+    from custom_components.ems.coordinator import _read_entity_max_abs
+    hass = MagicMock()
+    assert _read_entity_max_abs(hass, None) is None
+
+
+def test_read_entity_max_abs_missing_attrs_returns_none():
+    from custom_components.ems.coordinator import _read_entity_max_abs
+    hass = MagicMock()
+    s = MagicMock()
+    s.state = "0"
+    s.attributes = {}  # no min/max
+    hass.states.get = MagicMock(return_value=s)
+    assert _read_entity_max_abs(hass, "number.knx_inverter_active_power") is None
+
+
+# ---------------------------------------------------------------------------
+# _build_inputs reads max_active_power_w from active_power_entity range
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_build_inputs_reads_max_active_power_from_entity_range():
+    """_build_inputs populates thresholds.max_active_power_w from the entity min/max attrs."""
+    from custom_components.ems.coordinator import EmsStrategyCoordinator
+
+    entry = _make_entry({
+        "grid_import_power": "sensor.grid",
+        "pv_power": "sensor.pv",
+        "house_load": "sensor.load",
+        "ev_power": "sensor.ev",
+        "active_power_entity": "number.inverter_active_power",
+    })
+
+    inv_state = MagicMock()
+    inv_state.state = "0"
+    inv_state.attributes = {"min": -5000.0, "max": 5000.0}
+
+    def _get_state(eid):
+        if eid == "number.inverter_active_power":
+            return inv_state
+        base = {
+            "sensor.grid": "0", "sensor.pv": "0", "sensor.load": "0", "sensor.ev": "0",
+            "number.ems_ev_min_charge_w": "1400",
+            "select.ems_ev_charging_mode": "Off",
+            "select.ems_inverter_control_mode": "Off",
+        }
+        if eid in base:
+            s = MagicMock()
+            s.state = base[eid]
+            return s
+        return None
+
+    hass = MagicMock()
+    hass.states.get = MagicMock(side_effect=_get_state)
+
+    state = MagicMock()
+    state.startup_grace_until = None
+
+    coordinator = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
+    coordinator.hass = hass
+    coordinator._entry = entry
+    coordinator._state = state
+
+    with patch("custom_components.ems.coordinator.dt_util"):
+        inputs = await coordinator._build_inputs()
+
+    assert inputs.thresholds.max_active_power_w == pytest.approx(5000.0)
+
+
+# ---------------------------------------------------------------------------
 # _build_inputs reads max_grid_import_w / ev_target_soc from entities
 # ---------------------------------------------------------------------------
 

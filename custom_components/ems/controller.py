@@ -41,7 +41,13 @@ class Controller:
         if inverter_decision.inverter_verb is not None:
             await self._select_inverter_option(inverter_decision.inverter_verb)
         if inverter_decision.active_power_w is not None:
-            await self._write_active_power(inverter_decision.active_power_w)
+            try:
+                await self._write_active_power(inverter_decision.active_power_w)
+            except Exception:
+                _LOGGER.warning(
+                    "EMS: active power write skipped (%.0f W outside entity range)",
+                    inverter_decision.active_power_w,
+                )
         await self._write_ev_target(ev_decision.ev_charge_power_w)
 
     async def write_fast(
@@ -51,7 +57,13 @@ class Controller:
     ) -> None:
         """Called by the 1 s fast loop. Never writes the inverter verb."""
         if inverter_decision.active_power_w is not None:
-            await self._write_active_power(inverter_decision.active_power_w)
+            try:
+                await self._write_active_power(inverter_decision.active_power_w)
+            except Exception:
+                _LOGGER.debug(
+                    "EMS: active power write skipped (%.0f W outside entity range)",
+                    inverter_decision.active_power_w,
+                )
         await self._write_ev_target(ev_decision.ev_charge_power_w)
 
     # ── private helpers ───────────────────────────────────────────────────────

@@ -115,7 +115,13 @@ def _make_decision(
         # Integrating closed-loop: drives total grid import to max_grid_import_w.
         # Uses last commanded target as feedback to eliminate static error from
         # wallbox quantisation or ramp lag. Falls back to ev_power_w on cold start.
-        feedback_w = last_ev_target_w if last_ev_target_w is not None else ev_power_w
+        # Anti-windup: cap feedback to ev_power_w + headroom so the integrator
+        # cannot race ahead of the wallbox ramp, preventing grid overshoot that
+        # would otherwise drive the target below ev_min_charge_w and stop the session.
+        if last_ev_target_w is not None:
+            feedback_w = min(last_ev_target_w, ev_power_w + _ANTI_WINDUP_HEADROOM_W)
+        else:
+            feedback_w = ev_power_w
         ev_target_w = max(0.0, thresholds.max_grid_import_w - grid_import_w + feedback_w)
 
     if thresholds.max_ev_charge_w is not None:
@@ -235,6 +241,8 @@ def should_advise_ev_charge(inputs: Inputs) -> bool:
 
 
 # ── status-surface helpers ─────────────────────────────────────────────────────
+
+_ANTI_WINDUP_HEADROOM_W = 500.0
 
 _BATTERY_POWER_DEADBAND_W = 200.0
 _PV_DEADBAND_W = 100.0
