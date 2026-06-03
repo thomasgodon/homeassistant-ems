@@ -4,7 +4,12 @@ from . import strategy as strategy_module
 from .models import Inputs, InverterDecision, VerbMapping
 
 
-def decide(inputs: Inputs, *, commanded_ev_charge_w: float) -> InverterDecision:
+def decide(
+    inputs: Inputs,
+    *,
+    commanded_ev_charge_w: float,
+    currently_peak_shaving: bool = False,
+) -> InverterDecision:
     """Compute inverter verb and active power target. Never raises."""
     return _compute(
         pv_w=inputs.pv_w,
@@ -21,6 +26,7 @@ def decide(inputs: Inputs, *, commanded_ev_charge_w: float) -> InverterDecision:
         ev_strategy=inputs.ev_strategy,
         solar_shortfall_kwh_result=strategy_module.solar_shortfall_kwh(inputs),
         max_active_power_w=inputs.thresholds.max_active_power_w,
+        currently_peak_shaving=currently_peak_shaving,
     )
 
 
@@ -40,6 +46,7 @@ def recompute(
     ev_strategy: str = "Off",
     solar_shortfall_kwh_result: float | None = None,
     max_active_power_w: float | None = None,
+    currently_peak_shaving: bool = False,
 ) -> InverterDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
     return _compute(
@@ -57,10 +64,17 @@ def recompute(
         ev_strategy=ev_strategy,
         solar_shortfall_kwh_result=solar_shortfall_kwh_result,
         max_active_power_w=max_active_power_w,
+        currently_peak_shaving=currently_peak_shaving,
     )
 
 
 # ── core logic ────────────────────────────────────────────────────────────────
+
+# Peak shaving latches once active and only releases when grid import drops this
+# far below max_grid_import_w.  Prevents the controller's own correction from
+# immediately re-triggering peak shaving (bang-bang instability).
+_PEAK_SHAVING_HYSTERESIS_W = 500.0
+
 
 def _clamp_active_power(value: float, cap: float | None) -> float:
     """Clamp active_power_w to ±cap so inverter entity range is never exceeded."""
@@ -85,6 +99,7 @@ def _compute(
     ev_strategy: str = "Off",
     solar_shortfall_kwh_result: float | None = None,
     max_active_power_w: float | None = None,
+    currently_peak_shaving: bool = False,
 ) -> InverterDecision:
     if inverter_strategy == "Off":
         return InverterDecision(inverter_verb=None, active_power_w=None, status="disabled")
@@ -94,11 +109,17 @@ def _compute(
     # grid_import → max_grid_import_w; firing peak shaving simultaneously
     # causes double-correction that crashes ev_target to 0, stops the EV,
     # collapses grid_import, then unwinds to max — a sawtooth oscillation.
-    if (
-        grid_import_w > max_grid_import_w
-        and commanded_ev_charge_w == 0.0
-        and ev_power_w == 0.0
-    ):
+    #
+    # Hysteresis: once latched the condition holds until grid import drops
+    # _PEAK_SHAVING_HYSTERESIS_W below the cap, preventing the controller's
+    # own injection from immediately un-triggering peak shaving (bang-bang).
+    # In the hold band excess_w goes negative so active_power tapers smoothly.
+    _peak_entry = grid_import_w > max_grid_import_w
+    _peak_hold = (
+        currently_peak_shaving
+        and grid_import_w > max_grid_import_w - _PEAK_SHAVING_HYSTERESIS_W
+    )
+    if (_peak_entry or _peak_hold) and commanded_ev_charge_w == 0.0 and ev_power_w == 0.0:
         excess_w = grid_import_w - max_grid_import_w
         return InverterDecision(
             inverter_verb=mapping.power_control_option,

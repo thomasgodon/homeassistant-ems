@@ -6,6 +6,8 @@ Priority ladder (inverter_strategy == "Control Inverter"):
                           double-correction with the EV integrator)
                           → verb=power_control, active_power=-(pv + excess), status=peak_shaving
                           (fires regardless of ev_strategy, including Energy-optimised)
+                          Hysteresis: once latched, holds until grid < max − 500 W to
+                          prevent the controller's own injection from re-triggering it.
   2. Deficit hold       — eod_suppress=True AND pv < house_load
                           AND (no EV session OR ev_strategy == "Price-optimised")
                           (skipped during Grid-optimised EV sessions — hold would steal PV from EV;
@@ -62,6 +64,7 @@ def _decide(
     ev_strategy: str = "Grid-optimised",
     solar_shortfall_kwh_result: float | None = None,
     max_active_power_w: float | None = None,
+    currently_peak_shaving: bool = False,
 ) -> InverterDecision:
     return inverter_control_module.recompute(
         pv_w=pv_w,
@@ -78,6 +81,7 @@ def _decide(
         ev_strategy=ev_strategy,
         solar_shortfall_kwh_result=solar_shortfall_kwh_result,
         max_active_power_w=max_active_power_w,
+        currently_peak_shaving=currently_peak_shaving,
     )
 
 
@@ -329,6 +333,55 @@ def test_peak_shaving_active_power_always_negative() -> None:
     )
     assert d.active_power_w is not None
     assert d.active_power_w <= 0.0
+
+
+def test_peak_shaving_latches_in_hysteresis_band() -> None:
+    """Once in peak_shaving, status holds while grid is still above cap − 500 W."""
+    # grid_import=4200 < cap=4500, but inside the 500 W band → latch holds
+    d = _decide(
+        pv_w=1000.0,
+        grid_import_w=4200.0,
+        max_grid_import_w=4500.0,
+        currently_peak_shaving=True,
+    )
+    assert d.status == "peak_shaving"
+    assert d.inverter_verb == "power_control"
+
+
+def test_peak_shaving_releases_below_hysteresis_band() -> None:
+    """Peak shaving releases once grid import drops below cap − 500 W."""
+    # grid_import=3900 < 4500-500=4000 → released
+    d = _decide(
+        pv_w=1000.0,
+        grid_import_w=3900.0,
+        max_grid_import_w=4500.0,
+        currently_peak_shaving=True,
+    )
+    assert d.status == "idle"
+    assert d.inverter_verb == "disabled"
+
+
+def test_peak_shaving_no_false_entry_below_cap() -> None:
+    """Without a prior latch, grid below cap does not enter peak shaving."""
+    # grid_import=4400 < cap=4500, currently_peak_shaving=False → no entry
+    d = _decide(
+        grid_import_w=4400.0,
+        max_grid_import_w=4500.0,
+        currently_peak_shaving=False,
+    )
+    assert d.status == "idle"
+
+
+def test_peak_shaving_active_power_tapers_in_hold_band() -> None:
+    """In the hold band excess_w is negative so active_power magnitude < pv_w."""
+    # grid=4200, cap=4500 → excess=-300 → active_power = -(1000 + (-300)) = -700
+    d = _decide(
+        pv_w=1000.0,
+        grid_import_w=4200.0,
+        max_grid_import_w=4500.0,
+        currently_peak_shaving=True,
+    )
+    assert d.active_power_w == pytest.approx(-700.0)
 
 
 # ── Deficit hold (holding_battery) ────────────────────────────────────────────

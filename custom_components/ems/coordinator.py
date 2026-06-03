@@ -124,8 +124,15 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             raise UpdateFailed(f"EMS input build failed: {exc}") from exc
 
         ev_decision = strategy_module.decide(inputs)
+        prior_inv_status = (
+            self._state.last_result.inverter_decision.status
+            if self._state.last_result is not None
+            else None
+        )
         inverter_decision = inverter_control_module.decide(
-            inputs, commanded_ev_charge_w=ev_decision.ev_charge_power_w
+            inputs,
+            commanded_ev_charge_w=ev_decision.ev_charge_power_w,
+            currently_peak_shaving=(prior_inv_status == "peak_shaving"),
         )
 
         in_grace = (
@@ -358,6 +365,9 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             ev_strategy=ev_strategy,
             solar_shortfall_kwh_result=shortfall_kwh,
             max_active_power_w=prior_inputs.thresholds.max_active_power_w,
+            currently_peak_shaving=(
+                self._state.last_result.inverter_decision.status == "peak_shaving"
+            ),
         )
 
         if ev_strategy != "Off":
