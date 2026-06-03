@@ -573,6 +573,17 @@ def test_antiwindup_quantisation_lag_within_headroom(builder) -> None:
 _PRICES_24 = tuple(float(i) for i in range(24))  # hour 0 = cheapest, hour 23 = most expensive
 _BASE_NOW = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
 
+# ── solar/house forecast fixtures for EOD battery tests ───────────────────────
+# Solar: hours 8-17 productive (1 kWh/h each = 10 kWh total).
+# At _BASE_NOW (h=12, min=0) the solar window is (8, 17); active slice is h=12-17 (6 full hours).
+_SOLAR_TODAY_10KWH = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+# House-load forecasts that produce exact kWh within the active window at noon:
+#   active window = h=12-17 (6 hrs); minute=0 → pro-rate factor=1.0 for h=12
+_HOUSE_TODAY_1KWH_NOON = tuple(1000.0 if h == 12 else 0.0 for h in range(24))          # 1 kWh
+_HOUSE_TODAY_3KWH_NOON = tuple(1000.0 if 12 <= h <= 14 else 0.0 for h in range(24))    # 3 kWh
+_HOUSE_TODAY_4KWH_NOON = tuple(1000.0 if 12 <= h <= 15 else 0.0 for h in range(24))    # 4 kWh
+_HOUSE_TODAY_5KWH_NOON = tuple(1000.0 if 12 <= h <= 16 else 0.0 for h in range(24))    # 5 kWh
+
 # Realistic daily profile: cheap midday solar window, expensive evening peak.
 # statistics.median == 0.20; only hours 10-15 (0.05) are strictly below median.
 # At _BASE_NOW (hour 12): below-median remaining hours are [12, 13, 14, 15].
@@ -683,10 +694,12 @@ def test_eod_suppress_house_load_forecast_reduces_surplus(builder) -> None:
         battery_capacity_kwh=10.0,
         battery_target_soc=80.0,
         solar_forecast_remaining_kwh=5.0,
-        house_load_forecast_remaining_kwh=3.0,
+        solar_forecast_today=_SOLAR_TODAY_10KWH,
+        house_load_forecast_today=_HOUSE_TODAY_3KWH_NOON,
         prices_today=_PRICES_24_MIDDAY_CHEAP,
     )
-    # effective_solar=2, gap=3, deficit=1, cheapest 1 below-median hour of [12..23] = hour 12 → True
+    # effective_solar=5-3=2, gap=3, deficit=1
+    # cheapest 1 below-median hour of [12..23] = hour 12 → True
     assert strategy_module.is_eod_suppress_hour(inp) is True
 
 
@@ -743,7 +756,8 @@ def test_energy_optimised_blocks_ev_when_battery_wont_advance(builder) -> None:
         battery_capacity_kwh=10.0,
         battery_target_soc=80.0,
         solar_forecast_remaining_kwh=0.5,
-        house_load_forecast_remaining_kwh=1.0,
+        solar_forecast_today=_SOLAR_TODAY_10KWH,
+        house_load_forecast_today=_HOUSE_TODAY_1KWH_NOON,
         thresholds=_THRESHOLDS,
     )
     assert d.strategy == "ev_idle"
@@ -931,6 +945,150 @@ def test_solar_seconds_until_zero_accounts_for_seconds() -> None:
     assert result == 18 * 60 - 30  # 17 min 30 s
 
 
+# ── solar_production_window ────────────────────────────────────────────────────
+
+def test_solar_production_window_none_on_none_forecast() -> None:
+    assert strategy_module.solar_production_window(None) is None
+
+
+def test_solar_production_window_none_on_wrong_length() -> None:
+    assert strategy_module.solar_production_window(tuple(range(23))) is None
+
+
+def test_solar_production_window_none_on_all_zero() -> None:
+    assert strategy_module.solar_production_window(tuple(0.0 for _ in range(24))) is None
+
+
+def test_solar_production_window_typical() -> None:
+    # hours 8-17 productive
+    forecast = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+    assert strategy_module.solar_production_window(forecast) == (8, 17)
+
+
+def test_solar_production_window_single_hour() -> None:
+    # only hour 12 has production
+    forecast = tuple(500.0 if h == 12 else 0.0 for h in range(24))
+    assert strategy_module.solar_production_window(forecast) == (12, 12)
+
+
+# ── solar_production_start_time / solar_production_end_time ───────────────────
+
+def test_solar_production_start_time_none_on_all_zero_forecast() -> None:
+    zero = tuple(0.0 for _ in range(24))
+    now = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
+    assert strategy_module.solar_production_start_time(zero, now) is None
+
+
+def test_solar_production_start_time_typical() -> None:
+    forecast = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 4, 27, 14, 0, 0, tzinfo=datetime.UTC)
+    result = strategy_module.solar_production_start_time(forecast, now)
+    assert result == datetime.datetime(2026, 4, 27, 8, 0, 0, tzinfo=datetime.UTC)
+
+
+def test_solar_production_start_time_keeps_today_after_window_passes() -> None:
+    # Even when called after sunrise (now=20:00), still shows today's start
+    forecast = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 4, 27, 20, 0, 0, tzinfo=datetime.UTC)
+    result = strategy_module.solar_production_start_time(forecast, now)
+    assert result == datetime.datetime(2026, 4, 27, 8, 0, 0, tzinfo=datetime.UTC)
+
+
+def test_solar_production_end_time_none_on_all_zero_forecast() -> None:
+    zero = tuple(0.0 for _ in range(24))
+    now = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
+    assert strategy_module.solar_production_end_time(zero, now) is None
+
+
+def test_solar_production_end_time_typical() -> None:
+    # last hour = 17 → end = hour 18 = 18:00
+    forecast = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
+    result = strategy_module.solar_production_end_time(forecast, now)
+    assert result == datetime.datetime(2026, 4, 27, 18, 0, 0, tzinfo=datetime.UTC)
+
+
+def test_solar_production_end_time_last_hour_23() -> None:
+    # last non-zero hour = 23 → end = next day 00:00
+    forecast = tuple(500.0 if h == 23 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
+    result = strategy_module.solar_production_end_time(forecast, now)
+    assert result == datetime.datetime(2026, 4, 28, 0, 0, 0, tzinfo=datetime.UTC)
+
+
+def test_solar_production_end_time_keeps_today_after_window_passes() -> None:
+    # Called at 20:00, still shows today's end
+    forecast = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 4, 27, 20, 0, 0, tzinfo=datetime.UTC)
+    result = strategy_module.solar_production_end_time(forecast, now)
+    assert result == datetime.datetime(2026, 4, 27, 18, 0, 0, tzinfo=datetime.UTC)
+
+
+# ── house_load_in_solar_window_kwh ─────────────────────────────────────────────
+
+def test_house_load_in_solar_window_none_on_none_solar_forecast() -> None:
+    house = tuple(500.0 for _ in range(24))
+    now = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
+    assert strategy_module.house_load_in_solar_window_kwh(None, house, now) is None
+
+
+def test_house_load_in_solar_window_none_on_wrong_length_solar() -> None:
+    house = tuple(500.0 for _ in range(24))
+    now = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
+    assert strategy_module.house_load_in_solar_window_kwh(tuple(range(23)), house, now) is None
+
+
+def test_house_load_in_solar_window_none_on_none_house_forecast() -> None:
+    solar = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
+    assert strategy_module.house_load_in_solar_window_kwh(solar, None, now) is None
+
+
+def test_house_load_in_solar_window_none_on_all_zero_solar() -> None:
+    # All-zero solar → no window → None
+    solar = tuple(0.0 for _ in range(24))
+    house = tuple(500.0 for _ in range(24))
+    now = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
+    assert strategy_module.house_load_in_solar_window_kwh(solar, house, now) is None
+
+
+def test_house_load_in_solar_window_zero_when_past_solar_end() -> None:
+    # now=20:00 is past last solar hour (17) → 0.0
+    solar = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+    house = tuple(1000.0 for _ in range(24))
+    now = datetime.datetime(2026, 4, 27, 20, 0, 0, tzinfo=datetime.UTC)
+    assert strategy_module.house_load_in_solar_window_kwh(solar, house, now) == 0.0
+
+
+def test_house_load_in_solar_window_full_window_before_solar_start() -> None:
+    # now=06:00, window starts at 8 → sums full window (8-17)
+    # house: 1000 Wh each at hours 12-14 → 3 hours in window → 3.0 kWh
+    solar = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+    house = tuple(1000.0 if 12 <= h <= 14 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 4, 27, 6, 0, 0, tzinfo=datetime.UTC)
+    result = strategy_module.house_load_in_solar_window_kwh(solar, house, now)
+    assert result == pytest.approx(3.0)
+
+
+def test_house_load_in_solar_window_mid_window_at_noon() -> None:
+    # now=12:00, minute=0 → active window 12-17 (6 full hours), house=1000 Wh at h12-14 → 3.0 kWh
+    solar = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+    house = tuple(1000.0 if 12 <= h <= 14 else 0.0 for h in range(24))
+    now = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
+    result = strategy_module.house_load_in_solar_window_kwh(solar, house, now)
+    assert result == pytest.approx(3.0)
+
+
+def test_house_load_in_solar_window_current_hour_pro_rated() -> None:
+    # now=14:30 → h14 pro-rated 30/60=0.5; house 1200 Wh/h
+    # h14=600, h15=1200, h16=1200, h17=1200 → 4.2 kWh
+    solar = tuple(1000.0 if 8 <= h <= 17 else 0.0 for h in range(24))
+    house = tuple(1200.0 for _ in range(24))
+    now = datetime.datetime(2026, 4, 27, 14, 30, 0, tzinfo=datetime.UTC)
+    result = strategy_module.house_load_in_solar_window_kwh(solar, house, now)
+    assert result == pytest.approx(4.2)
+
+
 # ── Energy-optimised hysteresis ───────────────────────────────────────────────
 
 def test_energy_optimised_hysteresis_blocks_start_below_start_band(builder) -> None:
@@ -1027,23 +1185,38 @@ def test_battery_gap_kwh_zero_when_above_target() -> None:
 # ── effective_solar_remaining_kwh ─────────────────────────────────────────────
 
 def test_effective_solar_remaining_none_when_solar_missing() -> None:
-    inp = _eod_inputs(house_load_forecast_remaining_kwh=3.0)
+    inp = _eod_inputs(
+        now=_BASE_NOW,
+        solar_forecast_today=_SOLAR_TODAY_10KWH,
+        house_load_forecast_today=_HOUSE_TODAY_3KWH_NOON,
+    )
     assert strategy_module.effective_solar_remaining_kwh(inp) is None
 
 
 def test_effective_solar_remaining_positive_when_solar_exceeds_house() -> None:
-    # 8 - 3 = 5 kWh
-    inp = _eod_inputs(solar_forecast_remaining_kwh=8.0, house_load_forecast_remaining_kwh=3.0)
+    # remaining=8 kWh, house in window=3 kWh → effective=5 kWh
+    inp = _eod_inputs(
+        now=_BASE_NOW,
+        solar_forecast_remaining_kwh=8.0,
+        solar_forecast_today=_SOLAR_TODAY_10KWH,
+        house_load_forecast_today=_HOUSE_TODAY_3KWH_NOON,
+    )
     assert strategy_module.effective_solar_remaining_kwh(inp) == pytest.approx(5.0)
 
 
 def test_effective_solar_remaining_zero_when_house_exceeds_solar() -> None:
-    # solar 2, house 5 → clamped to 0
-    inp = _eod_inputs(solar_forecast_remaining_kwh=2.0, house_load_forecast_remaining_kwh=5.0)
+    # remaining=2 kWh, house in window=5 kWh → clamped to 0
+    inp = _eod_inputs(
+        now=_BASE_NOW,
+        solar_forecast_remaining_kwh=2.0,
+        solar_forecast_today=_SOLAR_TODAY_10KWH,
+        house_load_forecast_today=_HOUSE_TODAY_5KWH_NOON,
+    )
     assert strategy_module.effective_solar_remaining_kwh(inp) == pytest.approx(0.0)
 
 
 def test_effective_solar_remaining_treats_missing_house_as_zero() -> None:
+    # No house forecast → windowing returns None → house treated as 0
     inp = _eod_inputs(solar_forecast_remaining_kwh=4.0)
     assert strategy_module.effective_solar_remaining_kwh(inp) == pytest.approx(4.0)
 
@@ -1088,13 +1261,15 @@ def test_solar_shortfall_kwh_negative_when_solar_covers() -> None:
 
 
 def test_solar_shortfall_kwh_subtracts_house_forecast() -> None:
-    # gap = 5 kWh (50%→100% on 10 kWh), solar = 10, house = 4 → effective = 6 → shortfall = -1.0
+    # gap=5 kWh (50→100% on 10 kWh), solar=10, house in window=4 → effective=6 → shortfall=-1.0
     inp = _eod_inputs(
+        now=_BASE_NOW,
         battery_soc=50.0,
         battery_capacity_kwh=10.0,
         battery_target_soc=100.0,
         solar_forecast_remaining_kwh=10.0,
-        house_load_forecast_remaining_kwh=4.0,
+        solar_forecast_today=_SOLAR_TODAY_10KWH,
+        house_load_forecast_today=_HOUSE_TODAY_4KWH_NOON,
     )
     assert strategy_module.solar_shortfall_kwh(inp) == pytest.approx(-1.0)
 
@@ -1111,15 +1286,17 @@ def test_solar_shortfall_kwh_negative_when_battery_at_target() -> None:
 
 
 def test_solar_shortfall_clamps_effective_solar_at_zero() -> None:
-    # solar=1 kWh, house_forecast=4 kWh → effective_solar unclamped would be -3.
+    # solar=1 kWh, house in window=4 kWh → effective_solar unclamped would be -3.
     # battery_gap=0 (soc=98 >= target=80). Without clamp: shortfall = 0 - (-3) = 3 (WRONG).
     # With clamp: effective_solar=max(0,-3)=0, shortfall = 0 - 0 = 0.
     inp = _eod_inputs(
+        now=_BASE_NOW,
         battery_soc=98.0,
         battery_capacity_kwh=10.0,
         battery_target_soc=80.0,
         solar_forecast_remaining_kwh=1.0,
-        house_load_forecast_remaining_kwh=4.0,
+        solar_forecast_today=_SOLAR_TODAY_10KWH,
+        house_load_forecast_today=_HOUSE_TODAY_4KWH_NOON,
     )
     shortfall = strategy_module.solar_shortfall_kwh(inp)
     assert shortfall is not None
@@ -1135,7 +1312,8 @@ def test_eod_suppress_disabled_when_battery_above_target_with_solar_short() -> N
         battery_capacity_kwh=10.0,
         battery_target_soc=80.0,
         solar_forecast_remaining_kwh=1.0,
-        house_load_forecast_remaining_kwh=4.0,
+        solar_forecast_today=_SOLAR_TODAY_10KWH,
+        house_load_forecast_today=_HOUSE_TODAY_4KWH_NOON,
         prices_today=_PRICES_24,
     )
     assert strategy_module.is_eod_suppress_hour(inp) is False
@@ -1310,20 +1488,23 @@ def test_expected_eod_soc_short(builder) -> None:
 
 
 def test_expected_eod_soc_uses_house_forecast(builder) -> None:
-    # solar=6 kWh, house=4 kWh → effective=2 kWh → delta=20% → EOD=70%
+    # solar=6 kWh, house in window=4 kWh → effective=2 kWh → delta=20% → EOD=70%
     inp = builder.build(
+        now=_BASE_NOW,
         battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
-        solar_forecast_remaining_kwh=6.0, house_load_forecast_remaining_kwh=4.0,
+        solar_forecast_remaining_kwh=6.0,
+        solar_forecast_today=_SOLAR_TODAY_10KWH,
+        house_load_forecast_today=_HOUSE_TODAY_4KWH_NOON,
     )
     result = strategy_module.expected_eod_soc(inp)
     assert result == pytest.approx(70.0)
 
 
 def test_expected_eod_soc_none_when_house_forecast_missing_defaults_to_zero(builder) -> None:
-    # house_forecast=None treated as 0 → effective_solar=5 kWh
+    # house_load_forecast_today=None treated as 0 → effective_solar=5 kWh
     inp = builder.build(
         battery_soc=50.0, battery_capacity_kwh=10.0, battery_target_soc=80.0,
-        solar_forecast_remaining_kwh=5.0, house_load_forecast_remaining_kwh=None,
+        solar_forecast_remaining_kwh=5.0,
     )
     result = strategy_module.expected_eod_soc(inp)
     assert result is not None and result > 50.0

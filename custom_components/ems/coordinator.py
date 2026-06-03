@@ -24,7 +24,7 @@ from .const import (
     CONF_EV_TARGET_SOC,
     CONF_GRID_IMPORT_POWER,
     CONF_HOUSE_LOAD,
-    CONF_HOUSE_LOAD_FORECAST_REMAINING,
+    CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY,
     CONF_INVERTER_DISABLED_OPTION,
     CONF_INVERTER_POWER_CONTROL_OPTION,
     CONF_INVERTER_SELECT,
@@ -103,7 +103,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             CONF_BATTERY_SOC, CONF_BATTERY_CAPACITY,
             CONF_PRICE_SIGNAL_ENTITY, CONF_PRICES_JSON_ENTITY,
             CONF_MAX_GRID_IMPORT_W,
-            CONF_SOLAR_FORECAST_JSON_ENTITY, CONF_HOUSE_LOAD_FORECAST_REMAINING,
+            CONF_SOLAR_FORECAST_JSON_ENTITY, CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY,
         ):
             entity_id = data.get(key)
             if entity_id:
@@ -219,8 +219,8 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
         solar_forecast_remaining_kwh = (
             solar_remaining / 1000.0 if solar_remaining is not None else None
         )
-        house_load_forecast_remaining_kwh = _read_kwh_optional(
-            hass, data.get(CONF_HOUSE_LOAD_FORECAST_REMAINING)
+        house_load_forecast_today = _read_solar_forecast_json(
+            hass, data.get(CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY)
         )
         prices_today = _read_prices_json(hass, data.get(CONF_PRICES_JSON_ENTITY))
 
@@ -242,9 +242,9 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             battery_capacity_kwh=battery_capacity_kwh,
             battery_target_soc=battery_target_soc,
             solar_forecast_remaining_kwh=solar_forecast_remaining_kwh,
-            house_load_forecast_remaining_kwh=house_load_forecast_remaining_kwh,
             prices_today=prices_today,
             solar_forecast_today=solar_forecast_today,
+            house_load_forecast_today=house_load_forecast_today,
         )
 
 
@@ -417,7 +417,7 @@ class EmsForecastCoordinator(DataUpdateCoordinator["Inputs | None"]):
             CONF_BATTERY_SOC,
             CONF_BATTERY_CAPACITY,
             CONF_SOLAR_FORECAST_JSON_ENTITY,
-            CONF_HOUSE_LOAD_FORECAST_REMAINING,
+            CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY,
         ):
             entity_id = data.get(key)
             if entity_id:
@@ -460,11 +460,11 @@ class EmsForecastCoordinator(DataUpdateCoordinator["Inputs | None"]):
             solar_forecast_remaining_kwh=_derive_solar_remaining_kwh(
                 self.hass, data.get(CONF_SOLAR_FORECAST_JSON_ENTITY), dt_util.now()
             ),
-            house_load_forecast_remaining_kwh=_read_kwh_optional(
-                self.hass, data.get(CONF_HOUSE_LOAD_FORECAST_REMAINING)
-            ),
             solar_forecast_today=_read_solar_forecast_json(
                 self.hass, data.get(CONF_SOLAR_FORECAST_JSON_ENTITY)
+            ),
+            house_load_forecast_today=_read_solar_forecast_json(
+                self.hass, data.get(CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY)
             ),
         )
 

@@ -27,7 +27,7 @@ from .const import (
     CONF_EV_TARGET_SOC,
     CONF_GRID_IMPORT_POWER,
     CONF_HOUSE_LOAD,
-    CONF_HOUSE_LOAD_FORECAST_REMAINING,
+    CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY,
     CONF_INVERTER_DISABLED_OPTION,
     CONF_INVERTER_POWER_CONTROL_OPTION,
     CONF_INVERTER_SELECT,
@@ -110,8 +110,8 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_SOLAR_FORECAST_JSON_ENTITY] = user_input.get(
                 CONF_SOLAR_FORECAST_JSON_ENTITY
             )
-            self._data[CONF_HOUSE_LOAD_FORECAST_REMAINING] = user_input.get(
-                CONF_HOUSE_LOAD_FORECAST_REMAINING
+            self._data[CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY] = user_input.get(
+                CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY
             )
             self._data[CONF_PRICES_JSON_ENTITY] = user_input.get(CONF_PRICES_JSON_ENTITY)
             return await self.async_step_grid()
@@ -120,7 +120,7 @@ class EmsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_BATTERY_SOC): EntitySelector(_SOC_SENSOR),
             vol.Optional(CONF_BATTERY_CAPACITY): EntitySelector(_NUMBER_OR_SENSOR),
             vol.Optional(CONF_SOLAR_FORECAST_JSON_ENTITY): EntitySelector(_JSON_SENSOR),
-            vol.Optional(CONF_HOUSE_LOAD_FORECAST_REMAINING): EntitySelector(_NUMBER_OR_SENSOR),
+            vol.Optional(CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY): EntitySelector(_JSON_SENSOR),
             vol.Optional(CONF_PRICES_JSON_ENTITY): EntitySelector(_JSON_SENSOR),
         })
         return self.async_show_form(step_id="battery", data_schema=schema)
@@ -241,8 +241,8 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
             self._data[CONF_SOLAR_FORECAST_JSON_ENTITY] = user_input.get(
                 CONF_SOLAR_FORECAST_JSON_ENTITY
             )
-            self._data[CONF_HOUSE_LOAD_FORECAST_REMAINING] = user_input.get(
-                CONF_HOUSE_LOAD_FORECAST_REMAINING
+            self._data[CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY] = user_input.get(
+                CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY
             )
             self._data[CONF_PRICES_JSON_ENTITY] = user_input.get(CONF_PRICES_JSON_ENTITY)
             return await self.async_step_grid()
@@ -261,9 +261,9 @@ class EmsOptionsFlow(config_entries.OptionsFlow):
                 default=self._data.get(CONF_SOLAR_FORECAST_JSON_ENTITY),
             ): EntitySelector(_JSON_SENSOR),
             vol.Optional(
-                CONF_HOUSE_LOAD_FORECAST_REMAINING,
-                default=self._data.get(CONF_HOUSE_LOAD_FORECAST_REMAINING),
-            ): EntitySelector(_NUMBER_OR_SENSOR),
+                CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY,
+                default=self._data.get(CONF_HOUSE_LOAD_FORECAST_JSON_ENTITY),
+            ): EntitySelector(_JSON_SENSOR),
             vol.Optional(
                 CONF_PRICES_JSON_ENTITY,
                 default=self._data.get(CONF_PRICES_JSON_ENTITY),

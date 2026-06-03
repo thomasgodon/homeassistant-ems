@@ -17,6 +17,8 @@ from .strategy import (
     grid_focus,
     pv_destinations,
     pv_focus,
+    solar_production_end_time,
+    solar_production_start_time,
     solar_remaining_wh,
     solar_seconds_until_zero,
     solar_shortfall_kwh,
@@ -46,6 +48,8 @@ async def async_setup_entry(
         EmsExpectedEodBatterySensor(forecast_coordinator),
         EmsSolarRemainingSensor(forecast_coordinator),
         EmsSolarTimeRemainingSensor(forecast_coordinator),
+        EmsSolarProductionStartSensor(forecast_coordinator),
+        EmsSolarProductionEndSensor(forecast_coordinator),
     ])
 
 
@@ -569,3 +573,71 @@ class EmsSolarTimeRemainingSensor(CoordinatorEntity[EmsForecastCoordinator], Sen
     @property
     def available(self) -> bool:
         return self.coordinator.data is not None
+
+
+class EmsSolarProductionStartSensor(CoordinatorEntity[EmsForecastCoordinator], SensorEntity):
+    """Datetime when solar production is forecast to begin today."""
+
+    _attr_unique_id = "ems_solar_production_start"
+    _attr_name = "EMS Solar Production Start"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:weather-sunset-up"
+
+    def __init__(self, coordinator: EmsForecastCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self):
+        if self.coordinator.data is None:
+            return None
+        return solar_production_start_time(
+            self.coordinator.data.solar_forecast_today,
+            self.coordinator.data.now,
+        )
+
+    @property
+    def available(self) -> bool:
+        if self.coordinator.data is None:
+            return False
+        return solar_production_start_time(
+            self.coordinator.data.solar_forecast_today,
+            self.coordinator.data.now,
+        ) is not None
+
+
+class EmsSolarProductionEndSensor(CoordinatorEntity[EmsForecastCoordinator], SensorEntity):
+    """Datetime when solar production is forecast to end today."""
+
+    _attr_unique_id = "ems_solar_production_end"
+    _attr_name = "EMS Solar Production End"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:weather-sunset-down"
+
+    def __init__(self, coordinator: EmsForecastCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self):
+        if self.coordinator.data is None:
+            return None
+        return solar_production_end_time(
+            self.coordinator.data.solar_forecast_today,
+            self.coordinator.data.now,
+        )
+
+    @property
+    def available(self) -> bool:
+        if self.coordinator.data is None:
+            return False
+        return solar_production_end_time(
+            self.coordinator.data.solar_forecast_today,
+            self.coordinator.data.now,
+        ) is not None

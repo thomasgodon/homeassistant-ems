@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import statistics
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .models import (
     BatteryFocus,
@@ -156,10 +156,17 @@ def battery_gap_kwh(inputs: Inputs) -> float | None:
 
 
 def effective_solar_remaining_kwh(inputs: Inputs) -> float | None:
-    """Solar forecast minus house load forecast, clamped >=0. None if solar forecast unknown."""
+    """Solar forecast remaining minus house load within the solar window, clamped >=0.
+
+    Only the house load that falls between solar production start and end (windowed
+    to now→end when we are already mid-day) is subtracted, because solar cannot
+    serve house load after sunset.  None if solar forecast unknown.
+    """
     if inputs.solar_forecast_remaining_kwh is None:
         return None
-    house = inputs.house_load_forecast_remaining_kwh or 0.0
+    house = house_load_in_solar_window_kwh(
+        inputs.solar_forecast_today, inputs.house_load_forecast_today, inputs.now
+    ) or 0.0
     return max(0.0, inputs.solar_forecast_remaining_kwh - house)
 
 
@@ -419,5 +426,99 @@ def solar_seconds_until_zero(forecast: tuple[float, ...] | None, now: datetime) 
     end_second = (last_hour + 1) * 3600
     now_second = now.hour * 3600 + now.minute * 60 + now.second
     return max(0, end_second - now_second)
+
+
+def solar_production_window(
+    forecast: tuple[float, ...] | None,
+) -> tuple[int, int] | None:
+    """Return (first_hour, last_hour) where forecast > 0.
+
+    Both hours are inclusive calendar hours (0-23).
+    Returns None when forecast is None, not exactly 24 elements, or all-zero.
+    """
+    if forecast is None or len(forecast) != 24:
+        return None
+    first_hour = -1
+    for h in range(24):
+        if forecast[h] > 0:
+            first_hour = h
+            break
+    if first_hour < 0:
+        return None
+    last_hour = -1
+    for h in range(23, -1, -1):
+        if forecast[h] > 0:
+            last_hour = h
+            break
+    return (first_hour, last_hour)
+
+
+def solar_production_start_time(
+    forecast: tuple[float, ...] | None, now: datetime
+) -> datetime | None:
+    """Datetime of the start of the first productive solar hour today.
+
+    Returns today's start time regardless of whether it has already passed,
+    so the sensor always shows today's window even after it begins.
+    Returns None when the forecast has no productive hours.
+    """
+    window = solar_production_window(forecast)
+    if window is None:
+        return None
+    first_hour, _ = window
+    return now.replace(hour=first_hour, minute=0, second=0, microsecond=0)
+
+
+def solar_production_end_time(
+    forecast: tuple[float, ...] | None, now: datetime
+) -> datetime | None:
+    """Datetime of the end of the last productive solar hour today.
+
+    This is the start of the hour *after* the last non-zero forecast hour,
+    i.e. when solar production is expected to fall to zero.
+    Returns today's end time regardless of whether it has already passed.
+    Returns None when the forecast has no productive hours.
+    """
+    window = solar_production_window(forecast)
+    if window is None:
+        return None
+    _, last_hour = window
+    base = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return base + timedelta(hours=last_hour + 1)
+
+
+def house_load_in_solar_window_kwh(
+    solar_forecast: tuple[float, ...] | None,
+    house_forecast: tuple[float, ...] | None,
+    now: datetime,
+) -> float | None:
+    """kWh of house load forecast that falls within the solar production window.
+
+    When called before the solar window (pre-morning), the full window is summed.
+    When called during the solar window, only hours from now to solar end are
+    summed; the current hour is pro-rated by the minutes remaining in it.
+    When called after the solar window, returns 0.0 (no solar hours left).
+
+    Returns None when either forecast is None or not exactly 24 elements.
+    """
+    window = solar_production_window(solar_forecast)
+    if window is None or house_forecast is None or len(house_forecast) != 24:
+        return None
+    first_hour, last_hour = window
+    current_hour = now.hour
+    if current_hour > last_hour:
+        # Past sunset — no solar production left to serve house load.
+        return 0.0
+    # Start from the later of the solar window start and the current hour.
+    start_hour = max(first_hour, current_hour)
+    total_wh = 0.0
+    for h in range(start_hour, last_hour + 1):
+        if h == current_hour:
+            # Pro-rate the current hour by the fraction of minutes remaining.
+            minutes_left = 60 - now.minute
+            total_wh += house_forecast[h] * (minutes_left / 60.0)
+        else:
+            total_wh += house_forecast[h]
+    return total_wh / 1000.0
 
 

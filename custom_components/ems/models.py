@@ -43,9 +43,9 @@ class Inputs:
     battery_capacity_kwh: float | None = None
     battery_target_soc: float = 80.0
     solar_forecast_remaining_kwh: float | None = None
-    house_load_forecast_remaining_kwh: float | None = None
     prices_today: tuple[float, ...] | None = None
     solar_forecast_today: tuple[float, ...] | None = None
+    house_load_forecast_today: tuple[float, ...] | None = None
 
 
 StrategyLabel = Literal["ev_charging", "ev_idle"]

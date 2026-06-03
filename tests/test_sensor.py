@@ -18,6 +18,8 @@ from custom_components.ems.sensor import (
     EmsInverterModeSensor,
     EmsNetSolarRemainingSensor,
     EmsPvStatusSensor,
+    EmsSolarProductionEndSensor,
+    EmsSolarProductionStartSensor,
     EmsSolarRemainingSensor,
     EmsSolarTimeRemainingSensor,
 )
@@ -45,7 +47,6 @@ def _make_coordinator(
     prices_today=None,
     battery_capacity_kwh: float | None = None,
     solar_forecast_remaining_kwh: float | None = None,
-    house_load_forecast_remaining_kwh: float | None = None,
 ) -> MagicMock:
     coordinator = MagicMock()
     if ev_charge_power_w is None:
@@ -79,7 +80,6 @@ def _make_coordinator(
                 prices_today=prices_today,
                 battery_capacity_kwh=battery_capacity_kwh,
                 solar_forecast_remaining_kwh=solar_forecast_remaining_kwh,
-                house_load_forecast_remaining_kwh=house_load_forecast_remaining_kwh,
             ),
             computed_at=datetime.datetime(2026, 5, 4, 12, 0, 0, tzinfo=datetime.UTC),
         )
@@ -829,4 +829,90 @@ def test_solar_time_remaining_returns_zero_when_helper_returns_none(monkeypatch)
 def test_solar_time_remaining_returns_zero_when_no_data():
     sensor = EmsSolarTimeRemainingSensor(_make_forecast_coordinator(no_data=True))
     assert sensor.native_value == 0
+    assert sensor.available is False
+
+
+# ── EmsSolarProductionStartSensor ─────────────────────────────────────────────
+
+def test_solar_production_start_unique_id():
+    sensor = EmsSolarProductionStartSensor(_make_forecast_coordinator())
+    assert sensor.unique_id == "ems_solar_production_start"
+
+
+def test_solar_production_start_device_class():
+    from homeassistant.components.sensor import SensorDeviceClass
+    sensor = EmsSolarProductionStartSensor(_make_forecast_coordinator())
+    assert sensor.device_class == SensorDeviceClass.TIMESTAMP
+
+
+def test_solar_production_start_icon():
+    sensor = EmsSolarProductionStartSensor(_make_forecast_coordinator())
+    assert sensor.icon == "mdi:weather-sunset-up"
+
+
+def test_solar_production_start_returns_datetime(monkeypatch):
+    _dt = datetime.datetime(2026, 4, 27, 8, 0, 0, tzinfo=datetime.UTC)
+    monkeypatch.setattr(
+        "custom_components.ems.sensor.solar_production_start_time", lambda f, n: _dt
+    )
+    sensor = EmsSolarProductionStartSensor(_make_forecast_coordinator())
+    assert sensor.native_value == _dt
+    assert sensor.available is True
+
+
+def test_solar_production_start_unavailable_when_no_data():
+    sensor = EmsSolarProductionStartSensor(_make_forecast_coordinator(no_data=True))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_solar_production_start_unavailable_when_helper_returns_none(monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.ems.sensor.solar_production_start_time", lambda f, n: None
+    )
+    sensor = EmsSolarProductionStartSensor(_make_forecast_coordinator())
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+# ── EmsSolarProductionEndSensor ───────────────────────────────────────────────
+
+def test_solar_production_end_unique_id():
+    sensor = EmsSolarProductionEndSensor(_make_forecast_coordinator())
+    assert sensor.unique_id == "ems_solar_production_end"
+
+
+def test_solar_production_end_device_class():
+    from homeassistant.components.sensor import SensorDeviceClass
+    sensor = EmsSolarProductionEndSensor(_make_forecast_coordinator())
+    assert sensor.device_class == SensorDeviceClass.TIMESTAMP
+
+
+def test_solar_production_end_icon():
+    sensor = EmsSolarProductionEndSensor(_make_forecast_coordinator())
+    assert sensor.icon == "mdi:weather-sunset-down"
+
+
+def test_solar_production_end_returns_datetime(monkeypatch):
+    _dt = datetime.datetime(2026, 4, 27, 18, 0, 0, tzinfo=datetime.UTC)
+    monkeypatch.setattr(
+        "custom_components.ems.sensor.solar_production_end_time", lambda f, n: _dt
+    )
+    sensor = EmsSolarProductionEndSensor(_make_forecast_coordinator())
+    assert sensor.native_value == _dt
+    assert sensor.available is True
+
+
+def test_solar_production_end_unavailable_when_no_data():
+    sensor = EmsSolarProductionEndSensor(_make_forecast_coordinator(no_data=True))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_solar_production_end_unavailable_when_helper_returns_none(monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.ems.sensor.solar_production_end_time", lambda f, n: None
+    )
+    sensor = EmsSolarProductionEndSensor(_make_forecast_coordinator())
+    assert sensor.native_value is None
     assert sensor.available is False

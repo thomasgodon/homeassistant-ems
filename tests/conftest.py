@@ -58,9 +58,9 @@ class InputsBuilder:
             battery_capacity_kwh=get("battery_capacity_kwh", None),
             battery_target_soc=get("battery_target_soc", 80.0),
             solar_forecast_remaining_kwh=get("solar_forecast_remaining_kwh", None),
-            house_load_forecast_remaining_kwh=get("house_load_forecast_remaining_kwh", None),
             prices_today=get("prices_today", None),
             solar_forecast_today=get("solar_forecast_today", None),
+            house_load_forecast_today=get("house_load_forecast_today", None),
         )
 
 
