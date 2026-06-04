@@ -14,6 +14,7 @@ from custom_components.ems.sensor import (
     EmsEvStatusSensor,
     EmsExpectedEodBatterySensor,
     EmsGridStatusSensor,
+    EmsHouseLoadInSolarWindowSensor,
     EmsInverterActivePowerSensor,
     EmsInverterModeSensor,
     EmsNetSolarRemainingSensor,
@@ -690,6 +691,37 @@ def test_net_solar_remaining_unavailable_when_helper_returns_none(monkeypatch):
         "custom_components.ems.sensor.effective_solar_remaining_kwh", lambda _: None
     )
     sensor = EmsNetSolarRemainingSensor(_make_forecast_coordinator())
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+# ── EmsHouseLoadInSolarWindowSensor ──────────────────────────────────────────
+
+def test_house_load_in_solar_window_unique_id():
+    sensor = EmsHouseLoadInSolarWindowSensor(_make_forecast_coordinator())
+    assert sensor.unique_id == "ems_house_load_in_solar_window"
+
+
+def test_house_load_in_solar_window_returns_value(monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.ems.sensor.house_load_in_solar_window_kwh", lambda *_: 2.0
+    )
+    sensor = EmsHouseLoadInSolarWindowSensor(_make_forecast_coordinator())
+    assert sensor.native_value == 2000
+    assert sensor.available is True
+
+
+def test_house_load_in_solar_window_unavailable_when_no_data():
+    sensor = EmsHouseLoadInSolarWindowSensor(_make_forecast_coordinator(no_data=True))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_house_load_in_solar_window_unavailable_when_helper_returns_none(monkeypatch):
+    monkeypatch.setattr(
+        "custom_components.ems.sensor.house_load_in_solar_window_kwh", lambda *_: None
+    )
+    sensor = EmsHouseLoadInSolarWindowSensor(_make_forecast_coordinator())
     assert sensor.native_value is None
     assert sensor.available is False
 

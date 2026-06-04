@@ -15,6 +15,7 @@ from .strategy import (
     effective_solar_remaining_kwh,
     expected_eod_soc,
     grid_focus,
+    house_load_in_solar_window_kwh,
     pv_destinations,
     pv_focus,
     solar_production_end_time,
@@ -44,6 +45,7 @@ async def async_setup_entry(
         EmsGridStatusSensor(coordinator),
         EmsBatteryEnergyToTargetSensor(forecast_coordinator),
         EmsNetSolarRemainingSensor(forecast_coordinator),
+        EmsHouseLoadInSolarWindowSensor(forecast_coordinator),
         EmsBatterySolarDeficitSensor(forecast_coordinator),
         EmsExpectedEodBatterySensor(forecast_coordinator),
         EmsSolarRemainingSensor(forecast_coordinator),
@@ -448,6 +450,44 @@ class EmsNetSolarRemainingSensor(CoordinatorEntity[EmsForecastCoordinator], Sens
         if self.coordinator.data is None:
             return False
         return effective_solar_remaining_kwh(self.coordinator.data) is not None
+
+
+class EmsHouseLoadInSolarWindowSensor(CoordinatorEntity[EmsForecastCoordinator], SensorEntity):
+    """Forecasted house load remaining within the solar production window (now → solar end)."""
+
+    _attr_unique_id = "ems_house_load_in_solar_window"
+    _attr_name = "EMS House Load In Solar Window"
+    _attr_native_unit_of_measurement = "Wh"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:home-lightning-bolt"
+
+    def __init__(self, coordinator: EmsForecastCoordinator) -> None:
+        super().__init__(coordinator)
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data is None:
+            return None
+        kwh = house_load_in_solar_window_kwh(
+            self.coordinator.data.solar_forecast_today,
+            self.coordinator.data.house_load_forecast_today,
+            self.coordinator.data.now,
+        )
+        return None if kwh is None else round(kwh * 1000)
+
+    @property
+    def available(self) -> bool:
+        if self.coordinator.data is None:
+            return False
+        return house_load_in_solar_window_kwh(
+            self.coordinator.data.solar_forecast_today,
+            self.coordinator.data.house_load_forecast_today,
+            self.coordinator.data.now,
+        ) is not None
 
 
 class EmsBatterySolarDeficitSensor(CoordinatorEntity[EmsForecastCoordinator], SensorEntity):
