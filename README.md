@@ -109,8 +109,8 @@ Every configured input entity and every `select.ems_*` / `number.ems_*` entity t
 **1-second fast loop** (`EmsFastLoopCoordinator`):
 Re-reads live power values (`pv_w`, `house_load_w`, `ev_power_w`, `grid_import_w`) and reruns both algorithms. Writes active power and EV charge target but never writes the inverter verb — verb enforcement is the slow loop's job. Battery, forecast, price, and SoC fields are carried from the last slow-loop result.
 
-**Event-driven forecast coordinator** (`EmsForecastCoordinator`):
-No fixed polling interval. Runs once at startup, then only when one of the slow-changing source entities changes state: `battery_soc`, `battery_capacity_kwh`, `battery_target_soc`, `solar_forecast_json_entity`, `house_load_forecast_json_entity`. The eight forecast/battery sensors (`sensor.ems_battery_energy_to_target`, `sensor.ems_net_solar_remaining`, `sensor.ems_battery_solar_deficit`, `sensor.ems_expected_eod_battery`, `sensor.ems_solar_remaining`, `sensor.ems_solar_time_remaining`, `sensor.ems_solar_production_start`, `sensor.ems_solar_production_end`) are bound to this coordinator and update only when their inputs actually change — not every second.
+**Forecast coordinator** (`EmsForecastCoordinator`):
+Polls every **5 minutes** and also refreshes immediately whenever one of the slow-changing source entities changes state: `battery_soc`, `battery_capacity_kwh`, `battery_target_soc`, `solar_forecast_json_entity`, `house_load_forecast_json_entity`. The 5-minute backstop poll is required because `solar_forecast_remaining_kwh` decays through the day as elapsed hours are excluded from the remaining estimate — even when the forecast JSON entity itself is unchanged (e.g. a Solcast payload published once in the morning). The eight forecast/battery sensors (`sensor.ems_battery_energy_to_target`, `sensor.ems_net_solar_remaining`, `sensor.ems_battery_solar_deficit`, `sensor.ems_expected_eod_battery`, `sensor.ems_solar_remaining`, `sensor.ems_solar_time_remaining`, `sensor.ems_solar_production_start`, `sensor.ems_solar_production_end`) are bound to this coordinator.
 
 ### EOD battery fullness decision
 

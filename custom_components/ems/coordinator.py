@@ -399,7 +399,13 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
 
 
 class EmsForecastCoordinator(DataUpdateCoordinator["Inputs | None"]):
-    """No-poll coordinator; refreshes at startup then on forecast/battery-SoC entity changes."""
+    """Refreshes at startup, on forecast/battery-SoC entity changes, and every 5 minutes.
+
+    The 5-minute poll keeps solar_forecast_remaining_kwh accurate as time passes —
+    elapsed solar hours are excluded from the remaining estimate, so the EOD
+    projection decays through the day even when the forecast entity itself is
+    unchanged (e.g. a Solcast JSON published once in the morning).
+    """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._entry = entry
@@ -407,7 +413,7 @@ class EmsForecastCoordinator(DataUpdateCoordinator["Inputs | None"]):
             hass,
             _LOGGER,
             name=f"{DOMAIN}_forecast",
-            update_interval=None,
+            update_interval=timedelta(minutes=5),
         )
 
     async def async_setup(self) -> None:
