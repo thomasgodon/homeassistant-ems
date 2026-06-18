@@ -39,6 +39,7 @@ class Inputs:
     thresholds: Thresholds
     mapping: VerbMapping
     last_ev_target_w: float | None = None
+    grid_import_avg_w: float | None = None
     battery_soc: float | None = None
     battery_capacity_kwh: float | None = None
     battery_target_soc: float = 80.0

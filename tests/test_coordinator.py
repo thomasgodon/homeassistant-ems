@@ -553,6 +553,7 @@ def _make_fast_coordinator(hass_states: dict | None = None):
 
     state = MagicMock()
     state.startup_grace_until = None
+    state.grid_ema_w = None
 
     controller = MagicMock()
     controller.write_fast = AsyncMock()
@@ -777,6 +778,55 @@ async def test_fast_loop_idle_strategy_snaps_ema_to_zero():
 
 
 @pytest.mark.asyncio
+async def test_fast_loop_grid_ema_lags_transient():
+    """A short grid spike barely moves the 60 s EMA fed to the EV integrator.
+
+    The raw grid jumps 1000 → 6000 W (pump), but after a couple of 1 s ticks the EMA
+    the integrator checks against stays far below the spike — so the EV target the
+    integrator computes never craters. Captures the grid_import_avg_w passed to recompute.
+    """
+    from custom_components.ems.coordinator import EmsState
+
+    grid = {"v": 1000}
+
+    def get_state(eid):
+        if "grid" in eid:
+            return _mock_state(str(grid["v"]))
+        if "ev" in eid:
+            return _mock_state("100")
+        if "inverter_control" in eid:
+            return _mock_state("Control Inverter")
+        if "charging_mode" in eid:
+            return _mock_state("Grid-optimised")
+        return _mock_state("0")
+
+    coord = _make_fast_coordinator()
+    coord.hass.states.get = MagicMock(side_effect=get_state)
+    coord._state = EmsState(last_result=_make_ladder_result())
+
+    captured: list[float] = []
+
+    def fake_recompute(**kw):
+        captured.append(kw["grid_import_avg_w"])
+        return _ev_charging(2000.0)
+
+    with patch(_DT_UTIL) as mock_dt, \
+         patch(_RECOMPUTE_EV, side_effect=fake_recompute), \
+         patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE):
+        mock_dt.now.return_value = _NOW
+        await coord._async_update_data()   # tick 1: EMA initialises to raw 1000
+        grid["v"] = 6000                   # pump fires
+        await coord._async_update_data()   # tick 2
+        await coord._async_update_data()   # tick 3
+
+    # First sample seeds the EMA to the raw reading.
+    assert captured[0] == pytest.approx(1000.0)
+    # tau=60s ⇒ alpha≈0.0165; two ticks at 6000 lift the EMA only ~160 W, nowhere near 6000.
+    assert captured[-1] < 1300.0
+    assert coord._state.grid_ema_w == pytest.approx(captured[-1])
+
+
+@pytest.mark.asyncio
 async def test_fast_loop_inverter_off_mode_no_active_power_ema():
     """When inverter_strategy=Off, active_power EMA state is cleared and active_power is None."""
     ev = EvDecision(strategy="ev_charging", ev_charge_power_w=2000.0, charging_state="charging")
@@ -831,6 +881,7 @@ async def test_strategy_coordinator_sets_inverter_status_starting_up_during_grac
     state = MagicMock()
     state.startup_grace_until = grace_end
     state.last_result = None
+    state.grid_ema_w = None
 
     controller = MagicMock()
     controller.write_slow = AsyncMock()

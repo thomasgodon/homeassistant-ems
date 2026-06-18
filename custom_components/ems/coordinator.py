@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -55,11 +56,19 @@ _LOGGER = logging.getLogger(__name__)
 _EV_SMOOTHING_ALPHA: dict[str, float] = {"Fast": 0.3, "Normal": 0.2, "Slow": 0.1}
 _ACTIVE_POWER_EMA_ALPHA: float = 0.3
 
+# Time constant of the demand-averaging EMA applied to grid import before it feeds
+# the EV charge integrator. Damps short transients (e.g. a 20 s rainwater pump) so
+# they cannot drop the EV target below ev_min_charge_w and stop the session, while a
+# sustained load change still tracks within ~1 time constant. Only the EV integrator
+# sees the averaged value — peak shaving, active power, and status sensors use raw grid.
+_EV_GRID_FILTER_TAU_S: float = 60.0
+
 
 @dataclass
 class EmsState:
     last_result: LadderResult | None = None
     startup_grace_until: datetime | None = None
+    grid_ema_w: float | None = None
 
 
 class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
@@ -238,6 +247,7 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             thresholds=thresholds,
             mapping=mapping,
             last_ev_target_w=last_ev_target_w,
+            grid_import_avg_w=self._state.grid_ema_w,
             battery_soc=battery_soc,
             battery_capacity_kwh=battery_capacity_kwh,
             battery_target_soc=battery_target_soc,
@@ -284,6 +294,17 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         ev_power_w = _read_float(self.hass, data.get(CONF_EV_POWER), 0.0)
         grid_import_w = _read_float(self.hass, data.get(CONF_GRID_IMPORT_POWER), 0.0)
 
+        # Demand-averaging EMA on grid import (1 s loop ⇒ dt = 1 s). Only the EV
+        # integrator consumes this; everything else keeps the raw reading.
+        if self._state.grid_ema_w is None:
+            self._state.grid_ema_w = grid_import_w
+        else:
+            grid_alpha = 1.0 - math.exp(-1.0 / _EV_GRID_FILTER_TAU_S)
+            self._state.grid_ema_w = (
+                grid_alpha * grid_import_w + (1.0 - grid_alpha) * self._state.grid_ema_w
+            )
+        grid_import_avg_w = self._state.grid_ema_w
+
         prior_inputs = self._state.last_result.inputs
 
         ev_strategy = _read_select_state(self.hass, "select.ems_ev_charging_mode", "Off")
@@ -316,6 +337,7 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             is_cheap_hour=is_cheap_hour,
             thresholds=prior_inputs.thresholds,
             last_ev_target_w=self._ema_ev_w,
+            grid_import_avg_w=grid_import_avg_w,
             shortfall_kwh=shortfall_kwh,
         )
 
@@ -386,7 +408,9 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         await self._controller.write_fast(ev_fast, inverter_fast)
 
         now = dt_util.now()
-        fast_inputs = replace(fast_inputs_for_eod, now=now)
+        fast_inputs = replace(
+            fast_inputs_for_eod, now=now, grid_import_avg_w=grid_import_avg_w
+        )
         result = LadderResult(
             ev_decision=ev_fast,
             inverter_decision=inverter_fast,

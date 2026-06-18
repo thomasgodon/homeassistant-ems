@@ -56,6 +56,7 @@ def recompute(builder, **overrides) -> EvDecision:
         is_cheap_hour=inp.is_cheap_hour,
         thresholds=inp.thresholds,
         last_ev_target_w=inp.last_ev_target_w,
+        grid_import_avg_w=inp.grid_import_avg_w,
         shortfall_kwh=strategy_module.solar_shortfall_kwh(inp),
     )
 
@@ -443,6 +444,53 @@ def test_last_ev_target_used_when_provided(builder) -> None:
     # feedback = last_ev_target_w = 2729; target = max(0, 4500 - 4244 + 2729) = 2985
     # (was 2752 with ev_power_w feedback — old formula stayed stuck at 11 A)
     assert d.ev_charge_power_w == pytest.approx(2985.0)
+
+
+def test_integrator_uses_grid_avg_when_provided(builder) -> None:
+    """The integrator checks against grid_import_avg_w, not the raw instantaneous reading."""
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Grid-optimised",
+        ev_soc=50.0,
+        grid_import_w=9000.0,        # raw spike (ignored)
+        grid_import_avg_w=3500.0,    # smoothed reading the integrator must use
+        ev_power_w=2000.0,
+        last_ev_target_w=None,
+        thresholds=thresholds,
+    )
+    # feedback = ev_power_w = 2000; target = max(0, 4500 - 3500 + 2000) = 3000
+    # (raw grid of 9000 would have given max(0, 4500 - 9000 + 2000) = 0 → idle)
+    assert d.ev_charge_power_w == pytest.approx(3000.0)
+
+
+def test_grid_transient_does_not_stop_session(builder) -> None:
+    """Regression: a short grid spike (high raw grid) keeps charging when the EMA is low.
+
+    Mirrors the rainwater-pump case: a 1 kW transient briefly spikes raw grid import, but
+    the demand-averaged value barely moves, so the EV target stays above ev_min_charge_w.
+    """
+    thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=1400.0)
+    common = dict(
+        ev_plugged=True,
+        ev_strategy="Grid-optimised",
+        ev_soc=50.0,
+        ev_power_w=2500.0,
+        last_ev_target_w=2700.0,
+        thresholds=thresholds,
+    )
+    # feedback = min(2700, 2500+500) = 2700; target = 4500 - grid + 2700 = 7200 - grid.
+    # Raw grid spikes to 6200 W during the pump, but the 60 s EMA still reads ~4700 W.
+    with_filter = decide(builder, grid_import_w=6200.0, grid_import_avg_w=4700.0, **common)
+    assert with_filter.strategy == "ev_charging"
+    assert with_filter.ev_charge_power_w == pytest.approx(2500.0)  # 7200 - 4700
+    assert with_filter.ev_charge_power_w >= thresholds.ev_min_charge_w
+
+    # Same raw value with no averaging (avg falls back to raw): 7200 - 6200 = 1000 < 1400 → idle.
+    without_filter = decide(builder, grid_import_w=6200.0, grid_import_avg_w=None, **common)
+    assert without_filter.strategy == "ev_idle"
+    assert without_filter.charging_state == "not_enough_power"
 
 
 def test_integrator_drives_grid_to_cap(builder) -> None:

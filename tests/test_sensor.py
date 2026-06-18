@@ -13,6 +13,7 @@ from custom_components.ems.sensor import (
     EmsEvCurrentSensor,
     EmsEvStatusSensor,
     EmsExpectedEodBatterySensor,
+    EmsGridImportAverageSensor,
     EmsGridStatusSensor,
     EmsHouseLoadInSolarWindowSensor,
     EmsInverterActivePowerSensor,
@@ -158,6 +159,47 @@ def test_ev_current_shows_zero_when_no_data():
 def test_ev_current_unique_id():
     sensor = EmsEvCurrentSensor(_make_coordinator(0.0))
     assert sensor.unique_id == "ems_ev_current_w"
+
+
+# ── EmsGridImportAverageSensor ────────────────────────────────────────────────
+
+def _make_grid_avg_coordinator(grid_import_avg_w: float | None) -> MagicMock:
+    coordinator = MagicMock()
+    coordinator.data = LadderResult(
+        ev_decision=EvDecision(
+            strategy="ev_idle", ev_charge_power_w=0.0, charging_state="not_enough_power"
+        ),
+        inverter_decision=InverterDecision(inverter_verb=None, active_power_w=None),
+        inputs=MagicMock(grid_import_avg_w=grid_import_avg_w),
+        computed_at=datetime.datetime(2026, 5, 4, 12, 0, 0, tzinfo=datetime.UTC),
+    )
+    return coordinator
+
+
+def test_grid_import_average_returns_ema_value():
+    sensor = EmsGridImportAverageSensor(_make_grid_avg_coordinator(1234.5))
+    assert sensor.native_value == pytest.approx(1234.5)
+    assert sensor.available is True
+
+
+def test_grid_import_average_none_before_warmup():
+    sensor = EmsGridImportAverageSensor(_make_grid_avg_coordinator(None))
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_grid_import_average_none_when_no_data():
+    coordinator = MagicMock()
+    coordinator.data = None
+    sensor = EmsGridImportAverageSensor(coordinator)
+    assert sensor.native_value is None
+    assert sensor.available is False
+
+
+def test_grid_import_average_unique_id_and_icon():
+    sensor = EmsGridImportAverageSensor(_make_grid_avg_coordinator(0.0))
+    assert sensor.unique_id == "ems_grid_import_average"
+    assert sensor.icon == "mdi:sine-wave"
 
 
 # ── EmsEvStatusSensor ─────────────────────────────────────────────────────────

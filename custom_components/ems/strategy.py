@@ -24,6 +24,7 @@ def decide(inputs: Inputs) -> EvDecision:
         pv_w=inputs.pv_w,
         house_non_ev=house_non_ev,
         grid_import_w=inputs.grid_import_w,
+        grid_import_avg_w=inputs.grid_import_avg_w,
         ev_power_w=inputs.ev_power_w,
         last_ev_target_w=inputs.last_ev_target_w,
         ev_plugged=inputs.ev_plugged,
@@ -47,6 +48,7 @@ def recompute(
     is_cheap_hour: bool,
     thresholds: Thresholds,
     last_ev_target_w: float | None = None,
+    grid_import_avg_w: float | None = None,
     shortfall_kwh: float | None = None,
 ) -> EvDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
@@ -55,6 +57,7 @@ def recompute(
         pv_w=pv_w,
         house_non_ev=house_non_ev,
         grid_import_w=grid_import_w,
+        grid_import_avg_w=grid_import_avg_w,
         ev_power_w=ev_power_w,
         last_ev_target_w=last_ev_target_w,
         ev_plugged=ev_plugged,
@@ -73,6 +76,7 @@ def _make_decision(
     pv_w: float,
     house_non_ev: float,
     grid_import_w: float,
+    grid_import_avg_w: float | None,
     ev_power_w: float,
     last_ev_target_w: float | None,
     ev_plugged: bool,
@@ -122,7 +126,12 @@ def _make_decision(
             feedback_w = min(last_ev_target_w, ev_power_w + _ANTI_WINDUP_HEADROOM_W)
         else:
             feedback_w = ev_power_w
-        ev_target_w = max(0.0, thresholds.max_grid_import_w - grid_import_w + feedback_w)
+        # Use the demand-averaged (60 s EMA) grid reading the coordinator supplies,
+        # so a short transient (e.g. a 20 s pump) is attenuated and cannot crater the
+        # target below ev_min_charge_w and stop the session. Falls back to the raw
+        # instantaneous reading when no average is available (cold start, tests).
+        grid_for_ev = grid_import_avg_w if grid_import_avg_w is not None else grid_import_w
+        ev_target_w = max(0.0, thresholds.max_grid_import_w - grid_for_ev + feedback_w)
 
     if thresholds.max_ev_charge_w is not None:
         ev_target_w = min(ev_target_w, thresholds.max_ev_charge_w)

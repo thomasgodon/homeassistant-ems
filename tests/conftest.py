@@ -54,6 +54,7 @@ class InputsBuilder:
             thresholds=get("thresholds", _DEFAULT_THRESHOLDS),
             mapping=get("mapping", _DEFAULT_MAPPING),
             last_ev_target_w=get("last_ev_target_w", None),
+            grid_import_avg_w=get("grid_import_avg_w", None),
             battery_soc=get("battery_soc", None),
             battery_capacity_kwh=get("battery_capacity_kwh", None),
             battery_target_soc=get("battery_target_soc", 80.0),

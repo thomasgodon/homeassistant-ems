@@ -86,6 +86,8 @@ EMS integrates grid import toward the configured cap. The EV draws up to the cap
 
 An **anti-windup cap** prevents the integrator from racing ahead of the wallbox during its 5–15 s ramp-up: the commanded target can only project 500 W above the wallbox's measured draw. Without this cap, the integrator would overshoot to the wallbox maximum before it has ramped up, causing a grid spike that drives the target back below the minimum charge power and stops the session — which then immediately restarts, creating an on/off oscillation.
 
+A **60 s demand-averaging filter** smooths the grid-import reading that feeds the integrator (a 1 s EMA with a 60 s time constant, maintained by the fast loop). Only the EV integrator sees the averaged value — peak shaving, active-power, and the status sensors keep reading raw grid so they stay fast. This stops short transients from killing the session: a brief load like a rainwater pump (≈1 kW for 20 s) contributes only ~280 W to the averaged grid the integrator checks against instead of the full 1 kW, so the EV target stays above the minimum charge power and charging rides through. A sustained load change still tracks within roughly one time constant, so the EV throttles within about a minute on a genuine overload. The averaged value is published as `sensor.ems_grid_import_average`.
+
 > **Note (Price-optimised + cheap hour):** When both the battery forecast is short *and* the current hour qualifies as a cheap hold hour, Path 2 takes precedence over Path 4 — see Path 2 above.
 
 **When the battery forecast is fine:** EMS sets the inverter to cover the full house load including the EV from PV. Whatever PV exceeds the combined load trickles into the battery. The battery charges naturally once the EV has reached its cap.
@@ -310,6 +312,7 @@ Active power and EV target are cached — a service call is skipped if the value
 | `sensor.ems_inverter_mode` | `power_control`, `disabled`, or `None` | Current inverter verb from the last `InverterDecision`. |
 | `sensor.ems_ev_current_w` | float (W) | Computed EV charge target EMS is writing to `ev_charge_target_entity`. `0` when idle. |
 | `sensor.ems_inverter_active_power` | float (W) | Active power EMS is writing to `active_power_entity`. |
+| `sensor.ems_grid_import_average` | float (W) or unavailable | 60 s demand-averaged grid import (1 s EMA) the EV charge integrator checks against, so short transients don't stop the session. Unavailable until the fast loop has taken its first sample. Icon: `mdi:sine-wave`. |
 | `sensor.ems_battery_energy_to_target` | int (Wh) or unavailable | Wh still needed to bring the battery from current SoC to `number.ems_battery_target_soc`. Unavailable when `battery_soc` or `battery_capacity` is not configured. Always ≥ 0. |
 | `sensor.ems_net_solar_remaining` | int (Wh) or unavailable | Today's remaining solar forecast minus the house load forecast within the solar production window, clamped to ≥ 0. Unavailable when `solar_forecast_json_entity` is not configured. |
 | `sensor.ems_house_load_in_solar_window` | int (Wh) or unavailable | Forecasted house load that falls within the remaining solar production window (current hour pro-rated, now → solar end; `0` past sunset). Unavailable when `solar_forecast_json_entity` or `house_load_forecast_json_entity` is not configured. Icon: `mdi:home-lightning-bolt`. |
