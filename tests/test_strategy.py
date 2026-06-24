@@ -56,7 +56,6 @@ def recompute(builder, **overrides) -> EvDecision:
         is_cheap_hour=inp.is_cheap_hour,
         thresholds=inp.thresholds,
         last_ev_target_w=inp.last_ev_target_w,
-        grid_import_avg_w=inp.grid_import_avg_w,
         shortfall_kwh=strategy_module.solar_shortfall_kwh(inp),
     )
 
@@ -446,51 +445,114 @@ def test_last_ev_target_used_when_provided(builder) -> None:
     assert d.ev_charge_power_w == pytest.approx(2985.0)
 
 
-def test_integrator_uses_grid_avg_when_provided(builder) -> None:
-    """The integrator checks against grid_import_avg_w, not the raw instantaneous reading."""
+def test_integrator_uses_instantaneous_grid(builder) -> None:
+    """The integrator checks against the raw instantaneous grid reading (no smoothing)."""
     thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)
     d = decide(
         builder,
         ev_plugged=True,
         ev_strategy="Grid-optimised",
         ev_soc=50.0,
-        grid_import_w=9000.0,        # raw spike (ignored)
-        grid_import_avg_w=3500.0,    # smoothed reading the integrator must use
+        grid_import_w=3500.0,
         ev_power_w=2000.0,
         last_ev_target_w=None,
         thresholds=thresholds,
     )
     # feedback = ev_power_w = 2000; target = max(0, 4500 - 3500 + 2000) = 3000
-    # (raw grid of 9000 would have given max(0, 4500 - 9000 + 2000) = 0 → idle)
     assert d.ev_charge_power_w == pytest.approx(3000.0)
 
 
-def test_grid_transient_does_not_stop_session(builder) -> None:
-    """Regression: a short grid spike (high raw grid) keeps charging when the EMA is low.
+def test_grid_transient_craters_target_in_loop(builder) -> None:
+    """The control loop uses raw grid: a spike drops the target below the minimum → idle.
 
-    Mirrors the rainwater-pump case: a 1 kW transient briefly spikes raw grid import, but
-    the demand-averaged value barely moves, so the EV target stays above ev_min_charge_w.
+    Riding through a short transient is the job of apply_stop_debounce (tested below),
+    not the control loop — the loop must stay fast so the integrator stays stable.
     """
     thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=1400.0)
-    common = dict(
+    # feedback = min(2700, 2500+500) = 2700; target = 4500 - grid + 2700 = 7200 - grid.
+    # Raw grid spikes to 6200 → 7200 - 6200 = 1000 < 1400 → idle.
+    d = decide(
+        builder,
         ev_plugged=True,
         ev_strategy="Grid-optimised",
         ev_soc=50.0,
         ev_power_w=2500.0,
         last_ev_target_w=2700.0,
+        grid_import_w=6200.0,
         thresholds=thresholds,
     )
-    # feedback = min(2700, 2500+500) = 2700; target = 4500 - grid + 2700 = 7200 - grid.
-    # Raw grid spikes to 6200 W during the pump, but the 60 s EMA still reads ~4700 W.
-    with_filter = decide(builder, grid_import_w=6200.0, grid_import_avg_w=4700.0, **common)
-    assert with_filter.strategy == "ev_charging"
-    assert with_filter.ev_charge_power_w == pytest.approx(2500.0)  # 7200 - 4700
-    assert with_filter.ev_charge_power_w >= thresholds.ev_min_charge_w
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "not_enough_power"
 
-    # Same raw value with no averaging (avg falls back to raw): 7200 - 6200 = 1000 < 1400 → idle.
-    without_filter = decide(builder, grid_import_w=6200.0, grid_import_avg_w=None, **common)
-    assert without_filter.strategy == "ev_idle"
-    assert without_filter.charging_state == "not_enough_power"
+
+# ── stop-debounce ─────────────────────────────────────────────────────────────
+
+_T0 = datetime.datetime(2026, 4, 27, 12, 0, 0, tzinfo=datetime.UTC)
+_NOT_ENOUGH = EvDecision(
+    strategy="ev_idle", ev_charge_power_w=0.0, charging_state="not_enough_power"
+)
+_CHARGING = EvDecision(
+    strategy="ev_charging", ev_charge_power_w=3000.0, charging_state="charging"
+)
+
+
+def test_debounce_holds_at_min_when_charging_dips_below_min() -> None:
+    d, since = strategy_module.apply_stop_debounce(
+        _NOT_ENOUGH, was_charging=True, now=_T0, below_min_since=None, min_charge_w=1400.0,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.charging_state == "holding_through_dip"
+    assert d.ev_charge_power_w == 1400.0
+    assert since == _T0  # dwell timer starts now
+
+
+def test_debounce_keeps_holding_within_window() -> None:
+    now = _T0 + datetime.timedelta(seconds=59)
+    d, since = strategy_module.apply_stop_debounce(
+        _NOT_ENOUGH, was_charging=True, now=now, below_min_since=_T0, min_charge_w=1400.0,
+    )
+    assert d.charging_state == "holding_through_dip"
+    assert since == _T0  # carried, not reset
+
+
+def test_debounce_expires_after_window_and_idles() -> None:
+    now = _T0 + datetime.timedelta(seconds=60)
+    d, since = strategy_module.apply_stop_debounce(
+        _NOT_ENOUGH, was_charging=True, now=now, below_min_since=_T0, min_charge_w=1400.0,
+    )
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "not_enough_power"
+    assert since == _T0
+
+
+def test_debounce_resets_when_charging_normally() -> None:
+    d, since = strategy_module.apply_stop_debounce(
+        _CHARGING, was_charging=True, now=_T0, below_min_since=_T0, min_charge_w=1400.0,
+    )
+    assert d is _CHARGING
+    assert since is None
+
+
+def test_debounce_not_engaged_when_not_previously_charging() -> None:
+    d, since = strategy_module.apply_stop_debounce(
+        _NOT_ENOUGH, was_charging=False, now=_T0, below_min_since=None, min_charge_w=1400.0,
+    )
+    assert d is _NOT_ENOUGH
+    assert since is None
+
+
+@pytest.mark.parametrize(
+    "state",
+    ["ev_not_connected", "charging_disabled", "target_soc_reached",
+     "outside_cheap_hours", "battery_short"],
+)
+def test_debounce_never_holds_hard_gates(state) -> None:
+    idle = EvDecision(strategy="ev_idle", ev_charge_power_w=0.0, charging_state=state)
+    d, since = strategy_module.apply_stop_debounce(
+        idle, was_charging=True, now=_T0, below_min_since=_T0, min_charge_w=1400.0,
+    )
+    assert d is idle
+    assert since is None
 
 
 def test_integrator_drives_grid_to_cap(builder) -> None:

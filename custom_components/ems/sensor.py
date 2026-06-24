@@ -40,7 +40,6 @@ async def async_setup_entry(
         EmsEvCurrentSensor(coordinator),
         EmsEvStatusSensor(coordinator),
         EmsInverterActivePowerSensor(coordinator),
-        EmsGridImportAverageSensor(coordinator),
         EmsBatteryStatusSensor(coordinator),
         EmsPvStatusSensor(coordinator),
         EmsGridStatusSensor(coordinator),
@@ -128,37 +127,6 @@ class EmsInverterActivePowerSensor(CoordinatorEntity[EmsFastLoopCoordinator], Se
         return True
 
 
-class EmsGridImportAverageSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
-    """60 s demand-averaged grid import — the value the EV charge integrator checks against."""
-
-    _attr_unique_id = "ems_grid_import_average"
-    _attr_name = "EMS Grid Import Average"
-    _attr_native_unit_of_measurement = "W"
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:sine-wave"
-
-    def __init__(self, coordinator: EmsFastLoopCoordinator) -> None:
-        super().__init__(coordinator)
-
-    @property
-    def device_info(self):
-        return {"identifiers": {(DOMAIN, "ems")}, "name": "EMS", "manufacturer": "EMS"}
-
-    @property
-    def native_value(self) -> float | None:
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.inputs.grid_import_avg_w
-
-    @property
-    def available(self) -> bool:
-        return (
-            self.coordinator.data is not None
-            and self.coordinator.data.inputs.grid_import_avg_w is not None
-        )
-
-
 class EmsEvStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity):
     """Prose status for EV charging — priority-ordered, human-readable."""
 
@@ -196,6 +164,8 @@ class EmsEvStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity)
             return "Solar reserved for home battery"
         if state == "not_enough_power":
             return "Not enough surplus to charge"
+        if state == "holding_through_dip":
+            return "Holding charge through brief dip"
         # state == "charging"
         kw = round(ev.ev_charge_power_w / 1000, 1)
         if inp.grid_import_w > 0:

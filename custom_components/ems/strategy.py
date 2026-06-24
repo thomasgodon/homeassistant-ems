@@ -24,7 +24,6 @@ def decide(inputs: Inputs) -> EvDecision:
         pv_w=inputs.pv_w,
         house_non_ev=house_non_ev,
         grid_import_w=inputs.grid_import_w,
-        grid_import_avg_w=inputs.grid_import_avg_w,
         ev_power_w=inputs.ev_power_w,
         last_ev_target_w=inputs.last_ev_target_w,
         ev_plugged=inputs.ev_plugged,
@@ -48,7 +47,6 @@ def recompute(
     is_cheap_hour: bool,
     thresholds: Thresholds,
     last_ev_target_w: float | None = None,
-    grid_import_avg_w: float | None = None,
     shortfall_kwh: float | None = None,
 ) -> EvDecision:
     """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
@@ -57,7 +55,6 @@ def recompute(
         pv_w=pv_w,
         house_non_ev=house_non_ev,
         grid_import_w=grid_import_w,
-        grid_import_avg_w=grid_import_avg_w,
         ev_power_w=ev_power_w,
         last_ev_target_w=last_ev_target_w,
         ev_plugged=ev_plugged,
@@ -76,7 +73,6 @@ def _make_decision(
     pv_w: float,
     house_non_ev: float,
     grid_import_w: float,
-    grid_import_avg_w: float | None,
     ev_power_w: float,
     last_ev_target_w: float | None,
     ev_plugged: bool,
@@ -126,12 +122,12 @@ def _make_decision(
             feedback_w = min(last_ev_target_w, ev_power_w + _ANTI_WINDUP_HEADROOM_W)
         else:
             feedback_w = ev_power_w
-        # Use the demand-averaged (60 s EMA) grid reading the coordinator supplies,
-        # so a short transient (e.g. a 20 s pump) is attenuated and cannot crater the
-        # target below ev_min_charge_w and stop the session. Falls back to the raw
-        # instantaneous reading when no average is available (cold start, tests).
-        grid_for_ev = grid_import_avg_w if grid_import_avg_w is not None else grid_import_w
-        ev_target_w = max(0.0, thresholds.max_grid_import_w - grid_for_ev + feedback_w)
+        # Use the instantaneous grid reading: this loop is a pure integrator and is
+        # only stable with near-zero feedback delay. (A low-pass here — e.g. the old
+        # 60 s demand-averaging EMA — adds phase lag that destabilises it into a slow
+        # limit cycle.) Short transients are instead handled downstream by the
+        # stop-debounce in apply_stop_debounce(), which keeps the loop fast.
+        ev_target_w = max(0.0, thresholds.max_grid_import_w - grid_import_w + feedback_w)
 
     if thresholds.max_ev_charge_w is not None:
         ev_target_w = min(ev_target_w, thresholds.max_ev_charge_w)
@@ -152,6 +148,49 @@ def _idle(charging_state: EvChargingState) -> EvDecision:
         ev_charge_power_w=0.0,
         charging_state=charging_state,
     )
+
+
+# How long a charging session is held at minimum charge through a sub-minimum dip
+# before it is actually stopped. Rides out short load transients (e.g. a 20 s pump)
+# without flapping the wallbox; a sustained shortfall still ends the session.
+_EV_STOP_DEBOUNCE_S = 60.0
+
+
+def apply_stop_debounce(
+    decision: EvDecision,
+    *,
+    was_charging: bool,
+    now: datetime,
+    below_min_since: datetime | None,
+    min_charge_w: float,
+) -> tuple[EvDecision, datetime | None]:
+    """Hold an EV session through a brief sub-minimum dip before idling.
+
+    The integrator (or PV-surplus) target can momentarily fall below
+    ``ev_min_charge_w`` during a short load transient. Stopping on that flap makes
+    the wallbox oscillate (stop → load drops → restart → …). Instead, when a
+    *previously charging* session would idle for ``"not_enough_power"``, the command
+    is held at ``min_charge_w`` for up to ``_EV_STOP_DEBOUNCE_S``; only a sustained
+    shortfall actually stops the session. Hard gates (unplugged, Off, target SoC,
+    outside cheap hours, battery_short) are never debounced.
+
+    Pure: the caller owns ``below_min_since`` (the start-of-dip timestamp) and
+    ``now``. Returns the (possibly overridden) decision and the new
+    ``below_min_since`` (``None`` when no dip is in progress).
+    """
+    if decision.charging_state != "not_enough_power" or not was_charging:
+        # Charging normally, or a hard-gate idle — clear the dwell timer.
+        return decision, None
+    started = below_min_since if below_min_since is not None else now
+    if (now - started).total_seconds() < _EV_STOP_DEBOUNCE_S:
+        held = EvDecision(
+            strategy="ev_charging",
+            ev_charge_power_w=min_charge_w,
+            charging_state="holding_through_dip",
+        )
+        return held, started
+    # Dwell expired — let the idle decision through to actually stop the session.
+    return decision, started
 
 
 # ── EOD battery fullness helpers ──────────────────────────────────────────────

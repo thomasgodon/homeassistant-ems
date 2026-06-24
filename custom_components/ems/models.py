@@ -39,7 +39,6 @@ class Inputs:
     thresholds: Thresholds
     mapping: VerbMapping
     last_ev_target_w: float | None = None
-    grid_import_avg_w: float | None = None
     battery_soc: float | None = None
     battery_capacity_kwh: float | None = None
     battery_target_soc: float = 80.0
@@ -62,6 +61,7 @@ EvChargingState = Literal[
     "charging_disabled",
     "target_soc_reached",
     "not_enough_power",
+    "holding_through_dip",
     "starting_up",
     "outside_cheap_hours",
     "battery_short",

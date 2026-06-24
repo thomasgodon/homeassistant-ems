@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -553,7 +553,7 @@ def _make_fast_coordinator(hass_states: dict | None = None):
 
     state = MagicMock()
     state.startup_grace_until = None
-    state.grid_ema_w = None
+    state.ev_below_min_since = None
 
     controller = MagicMock()
     controller.write_fast = AsyncMock()
@@ -778,52 +778,63 @@ async def test_fast_loop_idle_strategy_snaps_ema_to_zero():
 
 
 @pytest.mark.asyncio
-async def test_fast_loop_grid_ema_lags_transient():
-    """A short grid spike barely moves the 60 s EMA fed to the EV integrator.
-
-    The raw grid jumps 1000 → 6000 W (pump), but after a couple of 1 s ticks the EMA
-    the integrator checks against stays far below the spike — so the EV target the
-    integrator computes never craters. Captures the grid_import_avg_w passed to recompute.
-    """
+async def test_fast_loop_passes_raw_grid_to_recompute():
+    """The fast loop feeds the integrator the raw instantaneous grid (no avg kwarg)."""
     from custom_components.ems.coordinator import EmsState
 
-    grid = {"v": 1000}
-
-    def get_state(eid):
-        if "grid" in eid:
-            return _mock_state(str(grid["v"]))
-        if "ev" in eid:
-            return _mock_state("100")
-        if "inverter_control" in eid:
-            return _mock_state("Control Inverter")
-        if "charging_mode" in eid:
-            return _mock_state("Grid-optimised")
-        return _mock_state("0")
-
     coord = _make_fast_coordinator()
-    coord.hass.states.get = MagicMock(side_effect=get_state)
+    coord.hass.states.get = MagicMock(
+        side_effect=lambda eid: _mock_state("6000") if "grid" in eid else _mock_state("100")
+    )
     coord._state = EmsState(last_result=_make_ladder_result())
 
-    captured: list[float] = []
+    captured: dict = {}
 
     def fake_recompute(**kw):
-        captured.append(kw["grid_import_avg_w"])
+        captured.update(kw)
         return _ev_charging(2000.0)
 
     with patch(_DT_UTIL) as mock_dt, \
          patch(_RECOMPUTE_EV, side_effect=fake_recompute), \
          patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE):
         mock_dt.now.return_value = _NOW
-        await coord._async_update_data()   # tick 1: EMA initialises to raw 1000
-        grid["v"] = 6000                   # pump fires
-        await coord._async_update_data()   # tick 2
-        await coord._async_update_data()   # tick 3
+        await coord._async_update_data()
 
-    # First sample seeds the EMA to the raw reading.
-    assert captured[0] == pytest.approx(1000.0)
-    # tau=60s ⇒ alpha≈0.0165; two ticks at 6000 lift the EMA only ~160 W, nowhere near 6000.
-    assert captured[-1] < 1300.0
-    assert coord._state.grid_ema_w == pytest.approx(captured[-1])
+    assert captured["grid_import_w"] == pytest.approx(6000.0)
+    assert "grid_import_avg_w" not in captured
+
+
+@pytest.mark.asyncio
+async def test_fast_loop_stop_debounce_holds_then_idles():
+    """A charging session dipping below min is held at min for the debounce window,
+    then idles once the dip is sustained past _EV_STOP_DEBOUNCE_S."""
+    from custom_components.ems.strategy import _EV_STOP_DEBOUNCE_S
+
+    not_enough = EvDecision(
+        strategy="ev_idle", ev_charge_power_w=0.0, charging_state="not_enough_power"
+    )
+
+    coord = _make_fast_coordinator(_EV_STATES)
+    coord._state.last_result = _make_ladder_result()
+    coord._ema_ev_w = 2000.0   # session was charging
+    coord._prev_ev_power_w = 100.0  # not a session start
+
+    t_expire = _NOW + timedelta(seconds=_EV_STOP_DEBOUNCE_S + 1)
+
+    with patch(_RECOMPUTE_EV, return_value=not_enough), \
+         patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE), \
+         patch(_DT_UTIL) as mock_dt:
+        mock_dt.now.return_value = _NOW
+        await coord._async_update_data()   # tick 1: dip begins → held at min
+        held: EvDecision = coord._controller.write_fast.call_args[0][0]
+        assert held.charging_state == "holding_through_dip"
+        assert held.ev_charge_power_w == pytest.approx(1400.0)
+        assert coord._state.ev_below_min_since == _NOW
+
+        mock_dt.now.return_value = t_expire
+        await coord._async_update_data()   # tick 2: dwell expired → idle
+        stopped: EvDecision = coord._controller.write_fast.call_args[0][0]
+        assert stopped.ev_charge_power_w == 0.0
 
 
 @pytest.mark.asyncio
@@ -881,7 +892,7 @@ async def test_strategy_coordinator_sets_inverter_status_starting_up_during_grac
     state = MagicMock()
     state.startup_grace_until = grace_end
     state.last_result = None
-    state.grid_ema_w = None
+    state.ev_below_min_since = None
 
     controller = MagicMock()
     controller.write_slow = AsyncMock()
