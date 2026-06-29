@@ -90,6 +90,8 @@ The integrator reads the **instantaneous** grid import — it is a pure integrat
 
 Short transients are instead handled by a **stop-debounce** that rides them out without touching the control loop. If a *charging* session's target momentarily falls below the minimum charge power (e.g. a rainwater pump draws ≈1 kW for 20 s), EMS holds the wallbox at the minimum charge power for up to 60 s rather than stopping — the status reads *Holding charge through brief dip*. Only a **sustained** shortfall lasting longer than 60 s actually ends the session. During the hold the grid may briefly exceed the cap; that is the accepted cost of not flapping the charger. Hard gates (EV unplugged, mode Off, target SoC reached, outside cheap hours, battery reserved) stop charging immediately and are never debounced.
 
+The 60 s window is empirically grounded: across 9 days of live data, surplus dips while charging are bimodal — a transient cluster (median 10 s, ~68% under a minute) from clouds and pump cycles, and a tail of sustained shortfalls (p90 ≈ 340 s). 60 s sits in the valley between them, riding out transients without holding battery drain through a genuine shortfall. (In Energy-optimised mode the inverter is on Self-Use during the hold, so the home battery — not the grid — supplies the held minimum.)
+
 > **Note (Price-optimised + cheap hour):** When both the battery forecast is short *and* the current hour qualifies as a cheap hold hour, Path 2 takes precedence over Path 4 — see Path 2 above.
 
 **When the battery forecast is fine:** EMS sets the inverter to cover the full house load including the EV from PV. Whatever PV exceeds the combined load trickles into the battery. The battery charges naturally once the EV has reached its cap.

@@ -153,6 +153,11 @@ def _idle(charging_state: EvChargingState) -> EvDecision:
 # How long a charging session is held at minimum charge through a sub-minimum dip
 # before it is actually stopped. Rides out short load transients (e.g. a 20 s pump)
 # without flapping the wallbox; a sustained shortfall still ends the session.
+#
+# 60 s chosen from 9 days of live history: PV-surplus dips during daylight EV charging
+# are strongly bimodal — a transient cluster (median 10 s, ~68% under 60 s; clouds, pump
+# cycles) vs. a sustained-shortfall tail (p90 ~340 s). 60 s sits in the valley between
+# them: rides through the transient cluster, lets sustained shortfalls stop the session.
 _EV_STOP_DEBOUNCE_S = 60.0
 
 
