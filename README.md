@@ -15,6 +15,7 @@ Works with any inverter that exposes a `select` entity for operating modes and a
 ## Table of Contents
 
 - [How it works](#how-it-works)
+  - [Decision flow](#decision-flow)
   - [10-second strategy loop](#10-second-strategy-loop-emsstrategycoordinator)
   - [1-second fast loop](#1-second-fast-loop-emsfastloopcoordinator)
   - [Four decision paths](#four-decision-paths)
@@ -44,6 +45,66 @@ Works with any inverter that exposes a `select` entity for operating modes and a
 ## How it works
 
 EMS runs two execution loops. Every cycle both loops run an **EV algorithm** (`strategy.py`) and an **inverter control algorithm** (`inverter_control.py`), then write the results to your hardware.
+
+### Decision flow
+
+The two flowcharts below trace the exact branch order the code evaluates each cycle — first match wins. Chart A is the EV charge decision (`strategy.py::_make_decision` → `apply_stop_debounce`); Chart B is the inverter control ladder (`inverter_control.py::_compute`). The narrative "Four decision paths" and examples that follow elaborate on these branches.
+
+**Chart A — EV charge decision**
+
+```mermaid
+flowchart TD
+  Start([Every cycle: decide / recompute]) --> Off{ev_strategy == Off?}
+  Off -- yes --> IdleOff[idle: charging_disabled]
+  Off -- no --> Plug{EV plugged in?}
+  Plug -- no --> IdlePlug[idle: ev_not_connected]
+  Plug -- yes --> Cheap{Price-optimised AND not cheap hour?}
+  Cheap -- yes --> IdleCheap[idle: outside_cheap_hours]
+  Cheap -- no --> Soc{ev_soc &ge; ev_target_soc?}
+  Soc -- yes --> IdleSoc[idle: target_soc_reached]
+  Soc -- no --> Mode{ev_strategy?}
+
+  Mode -- Energy-optimised --> Short{solar shortfall &gt; 0?}
+  Short -- yes --> IdleShort[idle: battery_short]
+  Short -- no --> Surplus["target = max(0, pv - house_non_ev)<br/>cap to max_ev_charge_w"]
+  Surplus --> Hyst{"not charging AND<br/>target &lt; min * 1.1?"}
+  Hyst -- yes --> IdleNEP1[idle: not_enough_power]
+  Hyst -- no --> Tail
+
+  Mode -- "Grid-optimised /<br/>Price-optimised (cheap hour)" --> Integ["feedback = min(last_target, ev_power + 500)<br/>target = max(0, max_grid_import - grid_import + feedback)"]
+  Integ --> Tail
+
+  Tail["cap to max_ev_charge_w"] --> Floor{target &lt; ev_min_charge_w?}
+  Floor -- no --> Charge[ev_charging: target W]
+  Floor -- yes --> NEP[not_enough_power]
+
+  NEP --> Deb{"was charging AND<br/>within 60s stop-debounce?"}
+  Deb -- yes --> Hold[holding_through_dip: min_charge_w]
+  Deb -- no --> Stop[idle: charging stops]
+```
+
+Hard gates (`charging_disabled`, `ev_not_connected`, `outside_cheap_hours`, `target_soc_reached`, `battery_short`) are **never** stop-debounced — only `not_enough_power` from a previously charging session is held through a brief dip.
+
+**Chart B — Inverter control ladder**
+
+```mermaid
+flowchart TD
+  Start([Every cycle: decide / recompute]) --> Off{inverter_strategy == Off?}
+  Off -- yes --> Disabled[disabled: no writes]
+  Off -- no --> Peak{"(peak entry OR peak hold)<br/>AND EV fully idle?"}
+  Peak -- yes --> PeakS["peak_shaving<br/>Power Control, active = -(pv + excess)"]
+  Peak -- no --> Hold{"eod_suppress AND pv &lt; house<br/>AND (no EV session OR Price-optimised)?"}
+  Hold -- yes --> HoldB["holding_battery<br/>Power Control, active = -house_non_ev if pv&gt;house_non_ev else 0"]
+  Hold -- no --> Energy{ev_strategy == Energy-optimised?}
+  Energy -- yes --> Idle3["idle: release to Self-Use"]
+  Energy -- no --> BattPri{"solar shortfall &gt; 0<br/>AND EV session active?"}
+  BattPri -- yes --> BP["battery_priority<br/>Power Control, active = -house_non_ev"]
+  BattPri -- no --> IdleQ{EV fully idle?}
+  IdleQ -- yes --> Idle5["idle: release to Self-Use"]
+  IdleQ -- no --> Ctrl["controlling<br/>Power Control, active = -min(pv, house_load)"]
+```
+
+`active_power_w` is always clamped to ±`max_active_power_w`. Sign convention: negative = drain PV to AC; positive would charge the battery from AC (never emitted — the value is always ≤ 0, so the battery is never charged from grid and never drained for the EV).
 
 ### Four decision paths
 

@@ -17,6 +17,8 @@ Any change to integration code or behavior MUST update `README.md` in the same t
 
 When updating: edit the matching README section in the same commit. If a new input or output is added, add a row to the relevant table.
 
+**Decision charts**: the README `### Decision flow` section contains two Mermaid flowcharts mirroring `strategy.py::_make_decision`/`apply_stop_debounce` (Chart A) and `inverter_control.py::_compute` (Chart B). Whenever a branch, gate, ordering, or reason string in those decision paths changes, **redraw the matching chart in the same task** — a chart that diverges from the code is a bug.
+
 ## Commands
 
 ```powershell
