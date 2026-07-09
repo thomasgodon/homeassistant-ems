@@ -62,6 +62,7 @@ EvChargingState = Literal[
     "target_soc_reached",
     "not_enough_power",
     "holding_through_dip",
+    "grid_overloaded",
     "starting_up",
     "outside_cheap_hours",
     "battery_short",

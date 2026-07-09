@@ -78,12 +78,26 @@ flowchart TD
   Floor -- no --> Charge[ev_charging: target W]
   Floor -- yes --> NEP[not_enough_power]
 
-  NEP --> Deb{"was charging AND<br/>within 60s stop-debounce?"}
+  %% Non-Energy modes: generic 60 s stop-debounce
+  NEP --> EnA{Energy-optimised?}
+  EnA -- no --> Deb{"was charging AND<br/>within 60s stop-debounce?"}
   Deb -- yes --> Hold[holding_through_dip: min_charge_w]
   Deb -- no --> Stop[idle: charging stops]
+
+  %% Energy-optimised guards (apply_energy_stop_guards)
+  EnA -- yes --> Drain{"was charging AND<br/>within 120s battery-drain?"}
+  Drain -- yes --> HoldE[holding_through_dip: min_charge_w<br/>battery covers shortfall]
+  Drain -- no --> StopE[idle: charging stops]
+
+  Charge --> EnB{Energy-optimised?}
+  EnB -- no --> ChargeOK[ev_charging: target W]
+  EnB -- yes --> Grid
+  HoldE --> Grid{"was charging AND<br/>grid_import &gt; 100W for 30s?"}
+  Grid -- yes --> GridStop[idle: grid_overloaded]
+  Grid -- no --> ChargeE[ev_charging / holding_through_dip]
 ```
 
-Hard gates (`charging_disabled`, `ev_not_connected`, `outside_cheap_hours`, `target_soc_reached`, `battery_short`) are **never** stop-debounced — only `not_enough_power` from a previously charging session is held through a brief dip.
+Hard gates (`charging_disabled`, `ev_not_connected`, `outside_cheap_hours`, `target_soc_reached`, `battery_short`) are **never** debounced. In non-Energy modes only `not_enough_power` from a previously charging session is held through a brief 60 s dip. In **Energy-optimised** mode two independent guards apply instead: a sub-minimum dip is held at `ev_min_charge_w` (the home battery covers the shortfall) for up to **120 s** before stopping, and — regardless of that timer — the session stops with reason `grid_overloaded` once grid import stays above **100 W** for **30 s** (the battery/inverter can no longer cover house + EV).
 
 **Chart B — Inverter control ladder**
 
@@ -133,11 +147,16 @@ EMS first checks whether today's solar forecast, after covering the house load, 
 - If the forecast says there is no leftover — the battery forecast is short — the EV stays idle. `sensor.ems_ev_status` shows *Solar reserved for home battery*.
 - If the forecast says there is leftover, or if forecast data is unavailable, the EV charges at the live PV surplus above non-EV house load. The battery gets whatever PV is producing beyond what house and EV together need.
 
-The inverter stays in its native Self-Use mode throughout — EMS never takes manual control over the inverter in this mode, because the EV is capped at live PV surplus so the battery cannot be drained by the EV.
+The inverter stays in its native Self-Use mode throughout — EMS never takes manual control over the inverter in this mode. Self-Use means the home battery naturally discharges to cover house + EV load whenever PV is insufficient, which is what enables the short battery-drain window described below.
 
-To avoid rapid on-off cycling when surplus hovers near the minimum charge threshold, EMS applies hysteresis: the EV starts only when surplus exceeds the minimum threshold by 10 %, and stops only when surplus falls below the minimum.
+To avoid rapid on-off cycling when surplus hovers near the minimum charge threshold, EMS applies **start hysteresis**: the EV begins only when surplus exceeds the minimum threshold by 10 %. Once charging, two independent guards — not an immediate stop — decide when to end the session:
 
-**Example:** Battery capacity 10 kWh, current SoC 60 %, target 80 % — gap 2 kWh. Solar forecast remaining after house load: 4 kWh — plenty of leftover. At noon, PV generates 3 kW and the house (excluding the EV) needs 1 kW, so the EV charges at 2 kW. In the late afternoon, clouds reduce PV to 1 kW; surplus drops to 0 kW, below the minimum charge threshold, and the EV pauses.
+- **Battery-drain window (120 s).** When PV surplus (`pv − house_non_ev`) drops below the minimum charge power, EMS does not stop straight away. It throttles the EV to exactly the minimum charge power and lets the home battery cover the shortfall for up to 2 minutes (status *Holding charge through brief dip*). Only a shortfall sustained past 120 s ends the session. If surplus recovers above the minimum first, the EV resumes following surplus and the timer resets.
+- **Grid-overload cutoff (30 s).** Independently of the battery-drain window, if grid import stays above 100 W for 30 seconds — the house load has outgrown what the battery/inverter can supply, so the grid is being pulled — the session stops with reason `grid_overloaded` (status *Stopped — home load exceeds inverter capacity*). This fires faster than the 120 s window because a grid draw signals the battery can no longer help.
+
+Whichever guard trips first ends the session.
+
+**Example:** Battery capacity 10 kWh, current SoC 60 %, target 80 % — gap 2 kWh. Solar forecast remaining after house load: 4 kWh — plenty of leftover. At noon, PV generates 3 kW and the house (excluding the EV) needs 1 kW, so the EV charges at 2 kW. In the late afternoon, clouds reduce PV to 1 kW; surplus falls below the minimum, so EMS throttles the EV to 1.4 kW and the home battery supplies the ≈0.4 kW shortfall. If PV recovers within 2 minutes the EV ramps back up; if the shortfall persists past 2 minutes the EV stops. Were the house to switch on a large load and pull more than 100 W from the grid, the EV would instead stop after 30 seconds.
 
 In a scenario where solar forecast leaves only 1 kWh of net solar for a 2 kWh battery gap, the shortfall is 1 kWh — the EV idles with *Solar reserved for home battery* regardless of how much PV is generating at that moment.
 
@@ -305,7 +324,7 @@ Every configured input entity and every `select.ems_*` / `number.ems_*` entity i
 |------|----------------|---------|
 | `Grid-optimised` | Grid headroom available above the minimum charge threshold | Best-effort; EMS may also apply Battery priority (see Path 4) |
 | `Price-optimised` | Same as Grid-optimised AND price signal is on | Best-effort; same Battery priority protection |
-| `Energy-optimised` | Today's effective solar forecast covers house load plus battery gap AND live PV surplus exceeds minimum charge threshold (with 10 % hysteresis on start) | **Protected** — EV charges only from leftover solar; battery target always takes priority |
+| `Energy-optimised` | Today's effective solar forecast covers house load plus battery gap AND live PV surplus exceeds minimum charge threshold (with 10 % hysteresis on start) | **Mostly protected** — EV charges from leftover solar; on a brief surplus dip the battery covers the minimum for up to 120 s, and the session stops if grid import exceeds 100 W for 30 s |
 | `Off` | Never | Best-effort (EMS writes 0 W to charger) |
 
 `Energy-optimised` uses a binary budget gate: the EV is either fully allowed or fully blocked, depending on whether today's effective solar forecast still has leftover capacity after the house load and battery gap are subtracted. When the forecast is fine the EV gets the full live PV surplus above non-EV house load. When it is not fine — or the battery is short — the EV stays idle regardless of how much PV is producing at that moment. When forecast data is unavailable, EMS assumes fine and lets the EV charge.
@@ -398,7 +417,8 @@ Active power and EV target are cached — a service call is skipped if the value
 | `Waiting for cheap hours` | Mode is `Price-optimised` and current hour is not cheap |
 | `Solar reserved for home battery` | Mode is `Energy-optimised` and solar forecast won't cover battery gap after house load |
 | `Not enough surplus to charge` | Available headroom is below the minimum charge threshold (or below the 10 % hysteresis start band when starting from idle) |
-| `Holding charge through brief dip` | Target fell below the minimum, but a previously charging session is held at the minimum charge power for up to 60 s before stopping (stop-debounce) |
+| `Holding charge through brief dip` | Target fell below the minimum, but a previously charging session is held at the minimum charge power before stopping — up to 60 s in Grid-/Price-optimised (stop-debounce), or up to 120 s in Energy-optimised (battery-drain window, home battery covers the shortfall) |
+| `Stopped — home load exceeds inverter capacity` | Energy-optimised only: grid import stayed above 100 W for 30 s, so the session stopped (`grid_overloaded`) — the battery/inverter can no longer cover house + EV |
 | `Charging EV at N.N kW from solar surplus` | Actively charging; grid import ≤ 0 (exporting or balanced) |
 | `Charging EV at N.N kW with grid headroom` | Actively charging; grid import > 0 (using allowed headroom) |
 

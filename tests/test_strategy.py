@@ -555,6 +555,128 @@ def test_debounce_never_holds_hard_gates(state) -> None:
     assert since is None
 
 
+def test_debounce_custom_window_holds_longer() -> None:
+    """The debounce_s param overrides the default window (Energy-optimised = 120 s)."""
+    # At 61 s the default 60 s window would have expired, but 120 s still holds.
+    now = _T0 + datetime.timedelta(seconds=61)
+    d, since = strategy_module.apply_stop_debounce(
+        _NOT_ENOUGH, was_charging=True, now=now, below_min_since=_T0,
+        min_charge_w=1400.0, debounce_s=120.0,
+    )
+    assert d.charging_state == "holding_through_dip"
+    assert since == _T0
+
+
+# ── Energy-optimised stop guards ──────────────────────────────────────────────
+
+def _guards(decision, *, was_charging, now, grid_import_w,
+            below_min_since=None, grid_overload_since=None, min_charge_w=1400.0):
+    return strategy_module.apply_energy_stop_guards(
+        decision,
+        was_charging=was_charging,
+        now=now,
+        grid_import_w=grid_import_w,
+        below_min_since=below_min_since,
+        grid_overload_since=grid_overload_since,
+        min_charge_w=min_charge_w,
+    )
+
+
+def test_energy_guards_battery_drain_holds_at_min() -> None:
+    """Sub-minimum dip with low grid → held at min while the 120 s timer runs."""
+    d, below, grid_since = _guards(
+        _NOT_ENOUGH, was_charging=True, now=_T0, grid_import_w=0.0,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.charging_state == "holding_through_dip"
+    assert d.ev_charge_power_w == 1400.0
+    assert below == _T0
+    assert grid_since is None
+
+
+def test_energy_guards_battery_drain_holds_until_120s() -> None:
+    """Still holding at 119 s (longer than the generic 60 s debounce)."""
+    now = _T0 + datetime.timedelta(seconds=119)
+    d, below, _ = _guards(
+        _NOT_ENOUGH, was_charging=True, now=now, grid_import_w=0.0, below_min_since=_T0,
+    )
+    assert d.charging_state == "holding_through_dip"
+    assert below == _T0
+
+
+def test_energy_guards_battery_drain_stops_after_120s() -> None:
+    """A sustained 120 s shortfall (grid still low) finally stops the session."""
+    now = _T0 + datetime.timedelta(seconds=120)
+    d, below, grid_since = _guards(
+        _NOT_ENOUGH, was_charging=True, now=now, grid_import_w=0.0, below_min_since=_T0,
+    )
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "not_enough_power"
+    assert below == _T0
+    assert grid_since is None
+
+
+def test_energy_guards_grid_overload_starts_timer() -> None:
+    """Grid above the overload threshold starts the 30 s cutoff timer but keeps charging."""
+    d, _, grid_since = _guards(
+        _CHARGING, was_charging=True, now=_T0, grid_import_w=500.0,
+    )
+    assert d is _CHARGING
+    assert grid_since == _T0
+
+
+def test_energy_guards_grid_overload_within_window_keeps_charging() -> None:
+    now = _T0 + datetime.timedelta(seconds=29)
+    d, _, grid_since = _guards(
+        _CHARGING, was_charging=True, now=now, grid_import_w=500.0, grid_overload_since=_T0,
+    )
+    assert d is _CHARGING
+    assert grid_since == _T0
+
+
+def test_energy_guards_grid_overload_stops_after_30s() -> None:
+    """Sustained grid overload stops a normally-charging session after 30 s."""
+    now = _T0 + datetime.timedelta(seconds=30)
+    d, _, grid_since = _guards(
+        _CHARGING, was_charging=True, now=now, grid_import_w=500.0, grid_overload_since=_T0,
+    )
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "grid_overloaded"
+    assert grid_since == _T0
+
+
+def test_energy_guards_grid_overload_overrides_battery_drain_hold() -> None:
+    """Grid cutoff (30 s) fires even while the 120 s battery-drain hold is still active."""
+    now = _T0 + datetime.timedelta(seconds=30)
+    d, below, grid_since = _guards(
+        _NOT_ENOUGH, was_charging=True, now=now, grid_import_w=500.0,
+        below_min_since=_T0, grid_overload_since=_T0,
+    )
+    assert d.charging_state == "grid_overloaded"
+    assert below == _T0          # battery-drain timer still tracked
+    assert grid_since == _T0
+
+
+def test_energy_guards_grid_import_below_threshold_resets_timer() -> None:
+    """Grid at or below 100 W clears the overload timer."""
+    d, _, grid_since = _guards(
+        _CHARGING, was_charging=True, now=_T0, grid_import_w=100.0, grid_overload_since=_T0,
+    )
+    assert d is _CHARGING
+    assert grid_since is None
+
+
+def test_energy_guards_grid_overload_bypassed_when_not_charging() -> None:
+    """Not previously charging → no hold, no grid cutoff, both timers cleared."""
+    d, below, grid_since = _guards(
+        _NOT_ENOUGH, was_charging=False, now=_T0, grid_import_w=500.0,
+        below_min_since=_T0, grid_overload_since=_T0,
+    )
+    assert d is _NOT_ENOUGH
+    assert below is None
+    assert grid_since is None
+
+
 def test_integrator_drives_grid_to_cap(builder) -> None:
     """Verify integrator converges: when last_target == grid_target, formula stabilises at cap."""
     thresholds = Thresholds(max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=100.0)

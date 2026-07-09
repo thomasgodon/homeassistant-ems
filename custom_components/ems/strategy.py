@@ -94,7 +94,11 @@ def _make_decision(
 
     if ev_strategy == "Energy-optimised":
         # Binary budget: EV charges only when today's solar forecast has leftover
-        # after covering house load and battery target. No grid, no battery drain.
+        # after covering house load and battery target. The charge *target* is the
+        # live PV surplus (never grid); short-term battery drain is allowed only by
+        # the downstream Energy-optimised guards (apply_energy_stop_guards): when
+        # surplus dips below the minimum the session is held at ev_min_charge_w and
+        # the battery covers the shortfall for up to _EV_BATTERY_DRAIN_S.
         if shortfall_kwh is not None and shortfall_kwh > 0.0:
             return _idle("battery_short")
         # Forecast OK (or missing — assume fine). EV gets the full live PV surplus.
@@ -160,6 +164,19 @@ def _idle(charging_state: EvChargingState) -> EvDecision:
 # them: rides through the transient cluster, lets sustained shortfalls stop the session.
 _EV_STOP_DEBOUNCE_S = 60.0
 
+# Energy-optimised only. When live PV surplus drops below ev_min_charge_w the session
+# is deliberately held at the minimum and the home battery covers the shortfall for up
+# to this long before stopping — a longer, intentional battery-drain window rather than
+# the generic transient-only debounce above.
+_EV_BATTERY_DRAIN_S = 120.0
+
+# Energy-optimised only. Grid import above this level means the battery/inverter can no
+# longer cover house + EV (house load exceeds what the inverter can give). When it
+# persists for _EV_GRID_OVERLOAD_S the EV session is stopped, independently of — and
+# faster than — the battery-drain window above.
+_EV_GRID_OVERLOAD_W = 100.0
+_EV_GRID_OVERLOAD_S = 30.0
+
 
 def apply_stop_debounce(
     decision: EvDecision,
@@ -168,6 +185,7 @@ def apply_stop_debounce(
     now: datetime,
     below_min_since: datetime | None,
     min_charge_w: float,
+    debounce_s: float = _EV_STOP_DEBOUNCE_S,
 ) -> tuple[EvDecision, datetime | None]:
     """Hold an EV session through a brief sub-minimum dip before idling.
 
@@ -175,9 +193,11 @@ def apply_stop_debounce(
     ``ev_min_charge_w`` during a short load transient. Stopping on that flap makes
     the wallbox oscillate (stop → load drops → restart → …). Instead, when a
     *previously charging* session would idle for ``"not_enough_power"``, the command
-    is held at ``min_charge_w`` for up to ``_EV_STOP_DEBOUNCE_S``; only a sustained
-    shortfall actually stops the session. Hard gates (unplugged, Off, target SoC,
-    outside cheap hours, battery_short) are never debounced.
+    is held at ``min_charge_w`` for up to ``debounce_s`` (default
+    ``_EV_STOP_DEBOUNCE_S``; Energy-optimised passes the longer
+    ``_EV_BATTERY_DRAIN_S``); only a sustained shortfall actually stops the session.
+    Hard gates (unplugged, Off, target SoC, outside cheap hours, battery_short) are
+    never debounced.
 
     Pure: the caller owns ``below_min_since`` (the start-of-dip timestamp) and
     ``now``. Returns the (possibly overridden) decision and the new
@@ -187,7 +207,7 @@ def apply_stop_debounce(
         # Charging normally, or a hard-gate idle — clear the dwell timer.
         return decision, None
     started = below_min_since if below_min_since is not None else now
-    if (now - started).total_seconds() < _EV_STOP_DEBOUNCE_S:
+    if (now - started).total_seconds() < debounce_s:
         held = EvDecision(
             strategy="ev_charging",
             ev_charge_power_w=min_charge_w,
@@ -196,6 +216,70 @@ def apply_stop_debounce(
         return held, started
     # Dwell expired — let the idle decision through to actually stop the session.
     return decision, started
+
+
+def _apply_grid_overload_stop(
+    decision: EvDecision,
+    *,
+    was_charging: bool,
+    now: datetime,
+    grid_import_w: float,
+    grid_overload_since: datetime | None,
+) -> tuple[EvDecision, datetime | None]:
+    """Stop a charging session once the grid is being pulled for ``_EV_GRID_OVERLOAD_S``.
+
+    Runs on any *charging* command (normal ``charging`` or a held
+    ``holding_through_dip``): sustained grid import above ``_EV_GRID_OVERLOAD_W``
+    means the battery/inverter can no longer cover the load, so the EV must give
+    way. Resets the moment grid import drops back to the threshold. Pure: the caller
+    owns ``grid_overload_since``.
+    """
+    if decision.strategy != "ev_charging" or not was_charging:
+        return decision, None
+    if grid_import_w <= _EV_GRID_OVERLOAD_W:
+        return decision, None
+    started = grid_overload_since if grid_overload_since is not None else now
+    if (now - started).total_seconds() < _EV_GRID_OVERLOAD_S:
+        return decision, started
+    return _idle("grid_overloaded"), started
+
+
+def apply_energy_stop_guards(
+    decision: EvDecision,
+    *,
+    was_charging: bool,
+    now: datetime,
+    grid_import_w: float,
+    below_min_since: datetime | None,
+    grid_overload_since: datetime | None,
+    min_charge_w: float,
+) -> tuple[EvDecision, datetime | None, datetime | None]:
+    """Energy-optimised stop policy: battery-drain hold + grid-overload cutoff.
+
+    1. Battery-drain: hold a sub-minimum session at ``min_charge_w`` (battery covers
+       the shortfall) for up to ``_EV_BATTERY_DRAIN_S`` before stopping.
+    2. Grid-overload: independently stop after ``_EV_GRID_OVERLOAD_S`` of grid import
+       above ``_EV_GRID_OVERLOAD_W`` — applied *after* the hold so it overrides it.
+
+    Pure: the caller owns both timers. Returns the decision and the new
+    ``(below_min_since, grid_overload_since)``.
+    """
+    decision, below_min_since = apply_stop_debounce(
+        decision,
+        was_charging=was_charging,
+        now=now,
+        below_min_since=below_min_since,
+        min_charge_w=min_charge_w,
+        debounce_s=_EV_BATTERY_DRAIN_S,
+    )
+    decision, grid_overload_since = _apply_grid_overload_stop(
+        decision,
+        was_charging=was_charging,
+        now=now,
+        grid_import_w=grid_import_w,
+        grid_overload_since=grid_overload_since,
+    )
+    return decision, below_min_since, grid_overload_since
 
 
 # ── EOD battery fullness helpers ──────────────────────────────────────────────

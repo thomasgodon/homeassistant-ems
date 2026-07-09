@@ -63,6 +63,10 @@ class EmsState:
     # Start-of-dip timestamp for the EV stop-debounce (strategy.apply_stop_debounce),
     # shared between the slow and fast loops. None when no sub-minimum dip is active.
     ev_below_min_since: datetime | None = None
+    # Start-of-overload timestamp for the Energy-optimised grid-overload cutoff
+    # (strategy.apply_energy_stop_guards), shared between the loops. None when grid
+    # import is not sustained above the overload threshold.
+    ev_grid_overload_since: datetime | None = None
 
 
 class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
@@ -128,14 +132,32 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
 
         ev_decision = strategy_module.decide(inputs)
         # Hold a charging session through a brief sub-minimum dip before idling.
-        # Shares the dwell timestamp with the fast loop via EmsState.
-        ev_decision, self._state.ev_below_min_since = strategy_module.apply_stop_debounce(
-            ev_decision,
-            was_charging=inputs.last_ev_target_w is not None and inputs.last_ev_target_w > 0.0,
-            now=inputs.now,
-            below_min_since=self._state.ev_below_min_since,
-            min_charge_w=inputs.thresholds.ev_min_charge_w,
-        )
+        # Shares the dwell timestamp(s) with the fast loop via EmsState.
+        was_charging = inputs.last_ev_target_w is not None and inputs.last_ev_target_w > 0.0
+        if inputs.ev_strategy == "Energy-optimised":
+            # Energy-optimised: longer battery-drain hold + grid-overload cutoff.
+            (
+                ev_decision,
+                self._state.ev_below_min_since,
+                self._state.ev_grid_overload_since,
+            ) = strategy_module.apply_energy_stop_guards(
+                ev_decision,
+                was_charging=was_charging,
+                now=inputs.now,
+                grid_import_w=inputs.grid_import_w,
+                below_min_since=self._state.ev_below_min_since,
+                grid_overload_since=self._state.ev_grid_overload_since,
+                min_charge_w=inputs.thresholds.ev_min_charge_w,
+            )
+        else:
+            ev_decision, self._state.ev_below_min_since = strategy_module.apply_stop_debounce(
+                ev_decision,
+                was_charging=was_charging,
+                now=inputs.now,
+                below_min_since=self._state.ev_below_min_since,
+                min_charge_w=inputs.thresholds.ev_min_charge_w,
+            )
+            self._state.ev_grid_overload_since = None
         prior_inv_status = (
             self._state.last_result.inverter_decision.status
             if self._state.last_result is not None
@@ -334,13 +356,31 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
         # Hold a charging session through a brief sub-minimum dip before idling.
         # Applied before the EV-target EMA and the inverter decision so both see the
         # held minimum command instead of a flap to zero.
-        ev_fast, self._state.ev_below_min_since = strategy_module.apply_stop_debounce(
-            ev_fast,
-            was_charging=self._ema_ev_w is not None and self._ema_ev_w > 0.0,
-            now=dt_util.now(),
-            below_min_since=self._state.ev_below_min_since,
-            min_charge_w=prior_inputs.thresholds.ev_min_charge_w,
-        )
+        was_charging = self._ema_ev_w is not None and self._ema_ev_w > 0.0
+        if ev_strategy == "Energy-optimised":
+            # Energy-optimised: longer battery-drain hold + grid-overload cutoff.
+            (
+                ev_fast,
+                self._state.ev_below_min_since,
+                self._state.ev_grid_overload_since,
+            ) = strategy_module.apply_energy_stop_guards(
+                ev_fast,
+                was_charging=was_charging,
+                now=dt_util.now(),
+                grid_import_w=grid_import_w,
+                below_min_since=self._state.ev_below_min_since,
+                grid_overload_since=self._state.ev_grid_overload_since,
+                min_charge_w=prior_inputs.thresholds.ev_min_charge_w,
+            )
+        else:
+            ev_fast, self._state.ev_below_min_since = strategy_module.apply_stop_debounce(
+                ev_fast,
+                was_charging=was_charging,
+                now=dt_util.now(),
+                below_min_since=self._state.ev_below_min_since,
+                min_charge_w=prior_inputs.thresholds.ev_min_charge_w,
+            )
+            self._state.ev_grid_overload_since = None
 
         session_start = self._prev_ev_power_w == 0.0 and ev_power_w > 0.0
         self._prev_ev_power_w = ev_power_w

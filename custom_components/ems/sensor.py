@@ -166,6 +166,8 @@ class EmsEvStatusSensor(CoordinatorEntity[EmsFastLoopCoordinator], SensorEntity)
             return "Not enough surplus to charge"
         if state == "holding_through_dip":
             return "Holding charge through brief dip"
+        if state == "grid_overloaded":
+            return "Stopped — home load exceeds inverter capacity"
         # state == "charging"
         kw = round(ev.ev_charge_power_w / 1000, 1)
         if inp.grid_import_w > 0:
