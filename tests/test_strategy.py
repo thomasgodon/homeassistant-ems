@@ -1081,6 +1081,80 @@ def test_energy_optimised_no_surplus_when_pv_below_house_load(builder) -> None:
     assert d.charging_state == "not_enough_power"
 
 
+# ── Energy-optimised surplus override (slow-loop-sampled; flap fix) ────────────
+
+_ENERGY_TH = Thresholds(
+    max_grid_import_w=4500.0, ev_target_soc=80.0,
+    ev_min_charge_w=1400.0, max_ev_charge_w=7400.0,
+)
+
+
+def _energy_recompute(**overrides):
+    base = dict(
+        pv_w=4000.0, house_load_w=2000.0, ev_power_w=0.0, grid_import_w=0.0,
+        ev_plugged=True, ev_soc=50.0, ev_strategy="Energy-optimised",
+        is_cheap_hour=True, thresholds=_ENERGY_TH, last_ev_target_w=2000.0,
+        shortfall_kwh=-1.0,  # battery will fill → EV allowed
+    )
+    base.update(overrides)
+    return strategy_module.recompute(**base)
+
+
+def test_energy_surplus_w_helper_computes_and_clamps() -> None:
+    assert strategy_module.energy_surplus_w(
+        pv_w=5000.0, house_load_w=5000.0, ev_power_w=3000.0
+    ) == pytest.approx(3000.0)
+    # pv below non-EV house load → clamped to zero, not negative
+    assert strategy_module.energy_surplus_w(
+        pv_w=500.0, house_load_w=1500.0, ev_power_w=0.0
+    ) == 0.0
+
+
+def test_energy_optimised_recompute_without_override_uses_fresh_pv() -> None:
+    # No override → surplus = pv − house_non_ev = 4000 − 2000 = 2000 (fallback path).
+    d = _energy_recompute(energy_surplus_override_w=None)
+    assert d.strategy == "ev_charging"
+    assert d.ev_charge_power_w == pytest.approx(2000.0)
+
+
+def test_energy_optimised_override_ignores_fresh_pv_and_house() -> None:
+    # Fast loop must use the slow-loop surplus, NOT recompute from the (skewed) fast
+    # pv/house/ev telegrams — the root of the flap. Fresh values are absurd; override wins.
+    d = _energy_recompute(
+        energy_surplus_override_w=3200.0,
+        pv_w=99999.0, house_load_w=99999.0, ev_power_w=0.0,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.ev_charge_power_w == pytest.approx(3200.0)
+
+
+def test_energy_optimised_override_respects_max_charge_cap() -> None:
+    d = _energy_recompute(energy_surplus_override_w=10000.0)
+    assert d.ev_charge_power_w == pytest.approx(7400.0)
+
+
+def test_energy_optimised_override_below_min_is_not_enough_power() -> None:
+    d = _energy_recompute(energy_surplus_override_w=1000.0)
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "not_enough_power"
+
+
+def test_energy_optimised_override_negative_clamped_to_zero() -> None:
+    d = _energy_recompute(energy_surplus_override_w=-500.0)
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "not_enough_power"
+
+
+def test_grid_optimised_ignores_energy_surplus_override() -> None:
+    # Override is Energy-optimised only; Grid-optimised uses the grid integrator.
+    # target = max_grid(4500) − grid(1000) + feedback(min(2000, 0+500)=500) = 4000.
+    d = _energy_recompute(
+        ev_strategy="Grid-optimised", grid_import_w=1000.0,
+        energy_surplus_override_w=99999.0,
+    )
+    assert d.ev_charge_power_w == pytest.approx(4000.0)
+
+
 # ── solar_remaining_wh ────────────────────────────────────────────────────────
 
 _FORECAST_24 = tuple(float(h * 100) for h in range(24))  # 0, 100, 200, ..., 2300

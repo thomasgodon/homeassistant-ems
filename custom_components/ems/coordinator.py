@@ -67,6 +67,13 @@ class EmsState:
     # (strategy.apply_energy_stop_guards), shared between the loops. None when grid
     # import is not sustained above the overload threshold.
     ev_grid_overload_since: datetime | None = None
+    # Energy-optimised live PV surplus (W) computed by the slow (10 s) loop and reused
+    # by the fast (1 s) loop. house_load and ev_power are independent KNX telegrams;
+    # subtracting them every second lets telegram skew inject up to the full EV power
+    # into the setpoint, which the fast loop chases into a limit cycle. Sampling the
+    # subtraction only on the slow loop severs that fast feedback. None for non-Energy
+    # modes (the fast loop then recomputes surplus itself, unused by those modes).
+    ev_energy_surplus_w: float | None = None
 
 
 class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
@@ -129,6 +136,19 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
             inputs = await self._build_inputs()
         except Exception as exc:
             raise UpdateFailed(f"EMS input build failed: {exc}") from exc
+
+        # Sample the Energy-optimised PV surplus on the slow loop only and hand it to
+        # the fast loop (EmsState.ev_energy_surplus_w). The house_load − ev_power
+        # subtraction is skew-prone across asynchronous KNX telegrams; recomputing it
+        # every second flapped the wallbox. See strategy.energy_surplus_w/recompute.
+        if inputs.ev_strategy == "Energy-optimised":
+            self._state.ev_energy_surplus_w = strategy_module.energy_surplus_w(
+                pv_w=inputs.pv_w,
+                house_load_w=inputs.house_load_w,
+                ev_power_w=inputs.ev_power_w,
+            )
+        else:
+            self._state.ev_energy_surplus_w = None
 
         ev_decision = strategy_module.decide(inputs)
         # Hold a charging session through a brief sub-minimum dip before idling.
@@ -351,6 +371,9 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
             thresholds=prior_inputs.thresholds,
             last_ev_target_w=self._ema_ev_w,
             shortfall_kwh=shortfall_kwh,
+            # Energy-optimised: reuse the slow loop's PV surplus instead of recomputing
+            # the skew-prone house_load − ev_power subtraction every second (flap fix).
+            energy_surplus_override_w=self._state.ev_energy_surplus_w,
         )
 
         # Hold a charging session through a brief sub-minimum dip before idling.

@@ -48,8 +48,18 @@ def recompute(
     thresholds: Thresholds,
     last_ev_target_w: float | None = None,
     shortfall_kwh: float | None = None,
+    energy_surplus_override_w: float | None = None,
 ) -> EvDecision:
-    """Fast-path re-computation for the 1 s loop. Same logic as decide()."""
+    """Fast-path re-computation for the 1 s loop. Same logic as decide().
+
+    ``energy_surplus_override_w`` (Energy-optimised only): when provided, the live PV
+    surplus is *not* recomputed from ``pv_w − house_non_ev``; the supplied value —
+    computed by the slow (10 s) loop — is used instead. ``house_load`` and ``ev_power``
+    are independent, asynchronous KNX telegrams; subtracting them every second lets
+    telegram skew inject up to the full EV power into the setpoint, which the 1 s loop
+    then chases into a fast limit cycle. Sampling that subtraction only on the slow loop
+    (when the telegrams have settled) severs the fast feedback. See ``energy_surplus_w``.
+    """
     house_non_ev = max(0.0, house_load_w - ev_power_w)
     return _make_decision(
         pv_w=pv_w,
@@ -63,7 +73,23 @@ def recompute(
         is_cheap_hour=is_cheap_hour,
         thresholds=thresholds,
         shortfall_kwh=shortfall_kwh,
+        surplus_override_w=energy_surplus_override_w,
     )
+
+
+def energy_surplus_w(*, pv_w: float, house_load_w: float, ev_power_w: float) -> float:
+    """Live PV surplus available to the EV in Energy-optimised mode (W, clamped ≥0).
+
+    ``surplus = pv − house_non_ev`` where ``house_non_ev = house_load − ev_power`` (the
+    EV's own draw is excluded so it can absorb the headroom it creates as it ramps up).
+
+    The slow (10 s) loop computes this and hands it to the fast loop via
+    ``recompute(energy_surplus_override_w=…)``. Both operands are independent KNX
+    telegrams whose skew would destabilise a 1 s recompute (see ``recompute``); sampling
+    them once per slow cycle keeps the value stable.
+    """
+    house_non_ev = max(0.0, house_load_w - ev_power_w)
+    return max(0.0, pv_w - house_non_ev)
 
 
 # ── core logic ────────────────────────────────────────────────────────────────
@@ -81,6 +107,7 @@ def _make_decision(
     is_cheap_hour: bool,
     thresholds: Thresholds,
     shortfall_kwh: float | None,
+    surplus_override_w: float | None = None,
 ) -> EvDecision:
     # Hard gates — evaluated in priority order
     if ev_strategy == "Off":
@@ -103,8 +130,14 @@ def _make_decision(
             return _idle("battery_short")
         # Forecast OK (or missing — assume fine). EV gets the full live PV surplus.
         # surplus = PV minus non-EV house load; EV's own draw is excluded so the EV
-        # can absorb the headroom it creates as it ramps up.
-        surplus_w = max(0.0, pv_w - house_non_ev)
+        # can absorb the headroom it creates as it ramps up. The 1 s fast loop passes a
+        # slow-loop-computed override (surplus_override_w) so the fragile
+        # house_load − ev_power subtraction is sampled once per 10 s, not every second —
+        # see recompute()/energy_surplus_w() for why the fast subtraction oscillates.
+        if surplus_override_w is not None:
+            surplus_w = max(0.0, surplus_override_w)
+        else:
+            surplus_w = max(0.0, pv_w - house_non_ev)
         ev_target_w = surplus_w
         # Apply charger cap before hysteresis check so threshold comparison is accurate.
         if thresholds.max_ev_charge_w is not None:

@@ -66,7 +66,7 @@ flowchart TD
 
   Mode -- Energy-optimised --> Short{solar shortfall &gt; 0?}
   Short -- yes --> IdleShort[idle: battery_short]
-  Short -- no --> Surplus["target = max(0, pv - house_non_ev)<br/>cap to max_ev_charge_w"]
+  Short -- no --> Surplus["target = max(0, pv - house_non_ev)<br/>(sampled on 10s loop, reused by 1s loop)<br/>cap to max_ev_charge_w"]
   Surplus --> Hyst{"not charging AND<br/>target &lt; min * 1.1?"}
   Hyst -- yes --> IdleNEP1[idle: not_enough_power]
   Hyst -- no --> Tail
@@ -146,6 +146,8 @@ EMS first checks whether today's solar forecast, after covering the house load, 
 
 - If the forecast says there is no leftover — the battery forecast is short — the EV stays idle. `sensor.ems_ev_status` shows *Solar reserved for home battery*.
 - If the forecast says there is leftover, or if forecast data is unavailable, the EV charges at the live PV surplus above non-EV house load. The battery gets whatever PV is producing beyond what house and EV together need.
+
+The surplus (`pv − house_non_ev`, where `house_non_ev = house_load − ev_power`) is computed **only on the 10 s strategy loop** and reused by the 1 s fast loop — it is *not* recomputed every second. `house_load` and `ev_power` are independent sensors (on this deployment, two asynchronous KNX telegrams) whose sampling can be skewed by seconds; because the EV's multi-kW draw appears in both, recomputing the subtraction every second let that skew inject up to the full EV power into the setpoint, and the fast loop chased it into a large, fast oscillation (the wallbox "flapping"). Sampling the subtraction once per slow cycle — when the telegrams have settled — severs that fast feedback while still tracking genuine PV changes on the next 10 s tick. Solar surplus moves slowly, so the coarser update is not a limitation; brief transients are absorbed by the battery and the guards below. (The fast loop still runs the grid-overload guard and the smoothing EMA every second.)
 
 The inverter stays in its native Self-Use mode throughout — EMS never takes manual control over the inverter in this mode. Self-Use means the home battery naturally discharges to cover house + EV load whenever PV is insufficient, which is what enables the short battery-drain window described below.
 

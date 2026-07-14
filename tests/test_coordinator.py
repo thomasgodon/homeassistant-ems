@@ -615,6 +615,26 @@ async def test_fast_loop_ema_first_tick_uses_raw_value():
 
 
 @pytest.mark.asyncio
+async def test_fast_loop_passes_slow_loop_surplus_override_to_recompute():
+    """The fast loop must reuse EmsState.ev_energy_surplus_w (slow-loop-sampled)
+    instead of recomputing the skew-prone house_load - ev_power subtraction. Assert the
+    value is threaded into strategy.recompute as energy_surplus_override_w (flap fix)."""
+    coord = _make_fast_coordinator(_EV_STATES)
+    coord._state.last_result = _make_ladder_result()
+    coord._state.ev_below_min_since = None
+    coord._state.ev_grid_overload_since = None
+    coord._state.ev_energy_surplus_w = 1234.0
+
+    with patch(_RECOMPUTE_EV, return_value=_EV_DECISION_CHARGING) as mock_rc, \
+         patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE), \
+         patch(_DT_UTIL) as mock_dt:
+        mock_dt.now.return_value = _NOW
+        await coord._async_update_data()
+
+    assert mock_rc.call_args.kwargs["energy_surplus_override_w"] == pytest.approx(1234.0)
+
+
+@pytest.mark.asyncio
 async def test_fast_loop_ema_second_tick_blends():
     """Second tick blends 30% new + 70% old."""
     second_ev = _ev_charging(3000.0)
