@@ -159,8 +159,26 @@ def _compute(
     # Priority 3 — Energy-optimised / Solar-only: peak shaving and deficit hold are
     # handled above. Energy-optimised caps charge to live PV surplus, so the battery is
     # inherently protected. Solar-only charges the EV with the whole PV production and
-    # deliberately lets the battery (then grid) feed the house via native Self-Use.
-    # Either way, release to Self-Use here (never battery_priority / controlling).
+    # lets the battery (then grid) feed the house via native Self-Use — *unless* the
+    # solar forecast says the battery won't reach its EOD target during an EV session:
+    # then the inverter outputs only what the EV takes (−min(pv, EV target)), so the
+    # battery never discharges, PV the EV can't absorb charges it, and the house is
+    # grid-fed. Otherwise release to Self-Use here (never battery_priority/controlling).
+    if (
+        ev_strategy == "Solar-only"
+        and ev_session
+        and solar_shortfall_kwh_result is not None
+        and solar_shortfall_kwh_result > 0.0
+    ):
+        # Winding down (command already 0, EV still drawing) → use the measured draw.
+        ev_target_w = commanded_ev_charge_w if commanded_ev_charge_w > 0.0 else ev_power_w
+        return InverterDecision(
+            inverter_verb=mapping.power_control_option,
+            active_power_w=_clamp_active_power(
+                -min(max(0.0, pv_w), ev_target_w), max_active_power_w
+            ),
+            status="holding_battery",
+        )
     if ev_strategy in ("Energy-optimised", "Solar-only"):
         return InverterDecision(
             inverter_verb=mapping.disabled_option,

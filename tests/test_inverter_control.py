@@ -560,12 +560,82 @@ def test_solar_only_releases_to_self_use_when_ev_charging() -> None:
     assert d.active_power_w is None
 
 
-def test_solar_only_overrides_shortfall_branch() -> None:
-    """Solar-only fires before battery-priority — shortfall must not reserve PV."""
+def test_solar_only_shortfall_protects_battery_during_session() -> None:
+    """Forecast short + EV session → inverter outputs only the EV draw, battery
+    never discharges (house from grid)."""
     d = _decide(
         ev_strategy="Solar-only",
         pv_w=4000.0, house_load_w=5500.0,
         ev_power_w=4000.0, commanded_ev_charge_w=4000.0,
+        solar_shortfall_kwh_result=2.0,
+    )
+    assert d.status == "holding_battery"
+    assert d.inverter_verb == "power_control"
+    assert d.active_power_w == pytest.approx(-4000.0)
+
+
+def test_solar_only_shortfall_excess_pv_goes_to_battery() -> None:
+    """PV above the EV target: only the target is output; the rest charges the battery."""
+    d = _decide(
+        ev_strategy="Solar-only",
+        pv_w=9000.0, house_load_w=8000.0,
+        ev_power_w=7000.0, commanded_ev_charge_w=7000.0,
+        solar_shortfall_kwh_result=2.0,
+    )
+    assert d.active_power_w == pytest.approx(-7000.0)
+
+
+def test_solar_only_shortfall_pv_below_target_outputs_pv_only() -> None:
+    """Held at min with PV below it: output is −pv, the EV shortfall comes from grid."""
+    d = _decide(
+        ev_strategy="Solar-only",
+        pv_w=900.0, house_load_w=2400.0,
+        ev_power_w=1400.0, commanded_ev_charge_w=1400.0,
+        solar_shortfall_kwh_result=2.0,
+    )
+    assert d.status == "holding_battery"
+    assert d.active_power_w == pytest.approx(-900.0)
+
+
+def test_solar_only_shortfall_winding_down_uses_measured_ev_power() -> None:
+    d = _decide(
+        ev_strategy="Solar-only",
+        pv_w=3000.0, house_load_w=2500.0,
+        ev_power_w=1500.0, commanded_ev_charge_w=0.0,
+        solar_shortfall_kwh_result=2.0,
+    )
+    assert d.status == "holding_battery"
+    assert d.active_power_w == pytest.approx(-1500.0)
+
+
+def test_solar_only_shortfall_active_power_clamped() -> None:
+    d = _decide(
+        ev_strategy="Solar-only",
+        pv_w=9000.0, house_load_w=9500.0,
+        ev_power_w=8000.0, commanded_ev_charge_w=8000.0,
+        solar_shortfall_kwh_result=2.0,
+        max_active_power_w=5000.0,
+    )
+    assert d.active_power_w == pytest.approx(-5000.0)
+
+
+@pytest.mark.parametrize("shortfall", [None, 0.0, -1.0])
+def test_solar_only_forecast_ok_releases_to_self_use(shortfall) -> None:
+    d = _decide(
+        ev_strategy="Solar-only",
+        pv_w=4000.0, house_load_w=5500.0,
+        ev_power_w=4000.0, commanded_ev_charge_w=4000.0,
+        solar_shortfall_kwh_result=shortfall,
+    )
+    assert d.status == "idle"
+    assert d.inverter_verb == "disabled"
+    assert d.active_power_w is None
+
+
+def test_solar_only_shortfall_ev_idle_releases_to_self_use() -> None:
+    d = _decide(
+        ev_strategy="Solar-only",
+        pv_w=2000.0, house_load_w=1000.0,
         solar_shortfall_kwh_result=2.0,
     )
     assert d.status == "idle"

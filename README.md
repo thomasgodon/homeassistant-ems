@@ -119,7 +119,9 @@ flowchart TD
   Peak -- yes --> PeakS["peak_shaving<br/>Power Control, active = -(pv + excess)"]
   Peak -- no --> Hold{"eod_suppress AND pv &lt; house<br/>AND (no EV session OR Price-optimised)?"}
   Hold -- yes --> HoldB["holding_battery<br/>Power Control, active = -house_non_ev if pv&gt;house_non_ev else 0"]
-  Hold -- no --> Energy{ev_strategy == Energy-optimised<br/>OR Solar-only?}
+  Hold -- no --> SolarP{"Solar-only AND EV session<br/>AND solar shortfall &gt; 0?"}
+  SolarP -- yes --> SolarH["holding_battery<br/>Power Control, active = -min(pv, EV target)<br/>(EV target = commanded, else ev_power)"]
+  SolarP -- no --> Energy{ev_strategy == Energy-optimised<br/>OR Solar-only?}
   Energy -- yes --> Idle3["idle: release to Self-Use"]
   Energy -- no --> BattPri{"solar shortfall &gt; 0<br/>AND EV session active?"}
   BattPri -- yes --> BP["battery_priority<br/>Power Control, active = -house_non_ev"]
@@ -174,13 +176,16 @@ In a scenario where solar forecast leaves only 1 kWh of net solar for a 2 kWh ba
 
 #### Path 3b — EV in Solar-only mode
 
-The EV gets the **whole PV production**, not just the surplus: target = `pv` (capped by `max_ev_charge_w`). The rest of the house is not subtracted — it is fed by the home battery and then the grid, whatever the electricity price. The battery forecast (`battery_short`) and cheap hours are ignored.
+The EV gets the **whole PV production**, not just the surplus: target = `pv` (capped by `max_ev_charge_w`). The rest of the house is not subtracted — it is fed by the home battery and/or the grid, whatever the electricity price. The EV charge decision ignores the battery forecast (no `battery_short` gate) and cheap hours.
 
-The inverter stays in its native Self-Use mode (Chart B releases it for Solar-only just like Energy-optimised), so the battery discharges to cover the house until it is empty or at its discharge limit; after that the house imports from the grid. Because the inverter cannot tell house watts from EV watts, the battery in effect also covers part of the EV draw.
+What feeds the house depends on the end-of-day battery forecast (`solar_shortfall_kwh`):
+
+- **Forecast OK (or unavailable)** — the inverter stays in native Self-Use, so the battery discharges to cover the house until it is empty or at its discharge limit; after that the house imports from the grid. Because the inverter cannot tell house watts from EV watts, the battery in effect also covers part of the EV draw.
+- **Forecast short** (battery won't reach its target SoC by end of day) **during an EV session** — the battery is **not** drained. EMS switches the inverter to Power Control with `active_power = −min(pv, EV target)` (status `holding_battery`): the inverter outputs only what the EV takes, PV the EV can't absorb charges the battery, and the house runs entirely from the grid. During a hold at minimum with PV below it, the output is just `−pv`, so the EV's shortfall comes from the grid too. When the EV is idle, the inverter returns to Self-Use (the cheap-hour deficit hold of Path 2 still applies).
 
 Start/stop: the EV starts only when PV exceeds the minimum charge power by 10 % (start hysteresis). When PV drops below the minimum, the session is held at the minimum for up to **120 s** (battery/grid covers the gap) and then stops. There is **no grid-overload cutoff** — only a sustained lack of PV stops the session. `pv` is a single sensor, so unlike Energy-optimised there is no telegram-skew issue and the 1 s loop recomputes the target directly.
 
-**Example:** PV 3 kW, house (excluding EV) 2.5 kW. Energy-optimised would charge at 0.5 kW (below minimum → idle); Solar-only charges at 3 kW while the battery supplies the house's 2.5 kW. Once the battery is empty, the 2.5 kW comes from the grid and the EV keeps charging at 3 kW.
+**Example:** PV 3 kW, house (excluding EV) 2.5 kW. Energy-optimised would charge at 0.5 kW (below minimum → idle); Solar-only charges at 3 kW while the battery supplies the house's 2.5 kW. Once the battery is empty, the 2.5 kW comes from the grid and the EV keeps charging at 3 kW. If instead the forecast says the battery won't reach its target today, the battery is left alone from the start: the house's 2.5 kW comes from the grid immediately.
 
 #### Path 4 — EV in Grid-optimised or Price-optimised mode
 
@@ -347,7 +352,7 @@ Every configured input entity and every `select.ems_*` / `number.ems_*` entity i
 | `Grid-optimised` | Grid headroom available above the minimum charge threshold | Best-effort; EMS may also apply Battery priority (see Path 4) |
 | `Price-optimised` | Same as Grid-optimised AND price signal is on | Best-effort; same Battery priority protection |
 | `Energy-optimised` | Today's effective solar forecast covers house load plus battery gap AND live PV surplus exceeds minimum charge threshold (with 10 % hysteresis on start) | **Mostly protected** — EV charges from leftover solar; on a brief surplus dip the battery covers the minimum for up to 120 s, and the session stops if grid import exceeds 100 W for 30 s |
-| `Solar-only` | PV production exceeds minimum charge threshold (with 10 % hysteresis on start); EV target = whole PV, battery forecast and prices ignored | **Not protected** — inverter on Self-Use, so the battery (then the grid) feeds the house; on a PV dip the minimum is held for up to 120 s, no grid-overload cutoff (see Path 3b) |
+| `Solar-only` | PV production exceeds minimum charge threshold (with 10 % hysteresis on start); EV target = whole PV, battery forecast and prices ignored | **Forecast-dependent** — forecast OK: inverter on Self-Use, battery (then grid) feeds the house; forecast short during a session: battery not drained (Power Control, inverter outputs only the EV draw, excess PV charges the battery, house from grid). On a PV dip the minimum is held for up to 120 s, no grid-overload cutoff (see Path 3b) |
 | `Off` | Never | Best-effort (EMS writes 0 W to charger) |
 
 `Energy-optimised` uses a binary budget gate: the EV is either fully allowed or fully blocked, depending on whether today's effective solar forecast still has leftover capacity after the house load and battery gap are subtracted. When the forecast is fine the EV gets the full live PV surplus above non-EV house load. When it is not fine — or the battery is short — the EV stays idle regardless of how much PV is producing at that moment. When forecast data is unavailable, EMS assumes fine and lets the EV charge.
