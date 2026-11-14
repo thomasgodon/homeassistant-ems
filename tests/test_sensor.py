@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import datetime
 from unittest.mock import MagicMock
 
@@ -202,7 +203,16 @@ def test_ev_status_not_enough_power():
 
 
 def test_ev_status_holding_through_dip():
-    sensor = EmsEvStatusSensor(_make_coordinator(1400.0, charging_state="holding_through_dip"))
+    coordinator = _make_coordinator(1400.0)
+    # _make_coordinator forces "charging" whenever power > 0; set the held state directly.
+    coordinator.data = dataclasses.replace(
+        coordinator.data,
+        ev_decision=EvDecision(
+            strategy="ev_charging", ev_charge_power_w=1400.0,
+            charging_state="holding_through_dip",
+        ),
+    )
+    sensor = EmsEvStatusSensor(coordinator)
     assert sensor.native_value == "Holding charge through brief dip"
 
 

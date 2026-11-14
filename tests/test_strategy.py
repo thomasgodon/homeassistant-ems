@@ -1248,7 +1248,7 @@ def test_solar_seconds_until_zero_accounts_for_seconds() -> None:
     forecast = tuple(500.0 if 6 <= h <= 17 else 0.0 for h in range(24))
     now = datetime.datetime(2026, 5, 29, 17, 45, 30)
     result = strategy_module.solar_seconds_until_zero(forecast, now)
-    assert result == 18 * 60 - 30  # 17 min 30 s
+    assert result == 14 * 60 + 30  # 14 min 30 s
 
 
 # ── solar_production_window ────────────────────────────────────────────────────

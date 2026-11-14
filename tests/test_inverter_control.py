@@ -758,7 +758,9 @@ def test_peak_shaving_clamps_active_power() -> None:
 
 def test_holding_battery_clamps_active_power() -> None:
     """Deficit hold clamps -house_non_ev when house_non_ev exceeds cap."""
+    # EV is drawing, so the hold only fires in Price-optimised (bypassed in Grid-optimised).
     d = _decide(
+        ev_strategy="Price-optimised",
         pv_w=4000.0,
         house_load_w=8000.0,
         ev_power_w=2000.0,

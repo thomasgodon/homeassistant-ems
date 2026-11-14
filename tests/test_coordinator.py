@@ -848,7 +848,8 @@ async def test_fast_loop_stop_debounce_holds_then_idles():
         await coord._async_update_data()   # tick 1: dip begins → held at min
         held: EvDecision = coord._controller.write_fast.call_args[0][0]
         assert held.charging_state == "holding_through_dip"
-        assert held.ev_charge_power_w == pytest.approx(1400.0)
+        # Held at min (1400 W), then EMA-smoothed from 2000 W (Fast α=0.3) → 1820 W.
+        assert held.ev_charge_power_w == pytest.approx(0.3 * 1400.0 + 0.7 * 2000.0)
         assert coord._state.ev_below_min_since == _NOW
 
         mock_dt.now.return_value = t_expire
