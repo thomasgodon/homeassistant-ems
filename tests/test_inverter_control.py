@@ -761,14 +761,14 @@ def test_holding_battery_clamps_active_power() -> None:
     # EV is drawing, so the hold only fires in Price-optimised (bypassed in Grid-optimised).
     d = _decide(
         ev_strategy="Price-optimised",
-        pv_w=4000.0,
-        house_load_w=8000.0,
+        pv_w=7500.0,
+        house_load_w=9000.0,
         ev_power_w=2000.0,
         eod_suppress=True,
         max_active_power_w=5000.0,
     )
     assert d.status == "holding_battery"
-    # pv (4000) > house_non_ev (6000)? No → active_power = -house_non_ev = -6000 → clamped -5000
+    # pv (7500) > house_non_ev (7000) → active_power = -house_non_ev = -7000 → clamped -5000
     assert d.active_power_w == pytest.approx(-5000.0)
 
 

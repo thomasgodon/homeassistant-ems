@@ -26,11 +26,13 @@ jobs:
         run: ruff check custom_components/ems tests
 
       - name: Test (80% gate)
-        run: pytest tests/ --cov=custom_components.ems --cov-branch --cov-fail-under=80
+        run: >
+          pytest tests/ --cov=custom_components.ems --cov-branch
+          --cov-report=term-missing --cov-fail-under=80
 
       - name: Test pure modules (100% gate)
         run: >
           pytest
           --cov=custom_components.ems.strategy
-          --cov-branch --cov-fail-under=100
+          --cov-branch --cov-report=term-missing --cov-fail-under=100
           tests/test_strategy.py
