@@ -32,7 +32,7 @@ jobs:
 
       - name: Test pure modules (100% gate)
         run: >
-          pytest
+          pytest -o addopts=""
           --cov=custom_components.ems.strategy
           --cov-branch --cov-report=term-missing --cov-fail-under=100
           tests/test_strategy.py

@@ -500,7 +500,7 @@ The ` · forecast EOD N%` suffix appears on rows 4–9 when `battery_soc`, `batt
 
 ```powershell
 pytest tests/                  # Run all tests (80% coverage gate)
-pytest tests/test_strategy.py `
+pytest tests/test_strategy.py -o addopts="" `
   --cov=custom_components.ems.strategy `
   --cov-branch --cov-fail-under=100  # 100% coverage for pure module
 python -m ruff check custom_components/ems tests  # Lint

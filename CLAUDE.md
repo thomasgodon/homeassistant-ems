@@ -23,7 +23,7 @@ When updating: edit the matching README section in the same commit. If a new inp
 
 ```powershell
 pytest tests/                  # Run all tests (80% coverage gate)
-pytest tests/test_strategy.py `
+pytest tests/test_strategy.py -o addopts="" `
   --cov=custom_components.ems.strategy `
   --cov-branch --cov-fail-under=100  # 100% coverage for pure module
 python -m ruff check custom_components/ems tests  # Lint

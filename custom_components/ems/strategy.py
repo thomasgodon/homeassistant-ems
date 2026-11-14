@@ -662,7 +662,8 @@ def solar_production_window(
     if first_hour < 0:
         return None
     last_hour = -1
-    for h in range(23, -1, -1):
+    # A productive hour exists (first_hour >= 0), so this loop always breaks.
+    for h in range(23, -1, -1):  # pragma: no branch
         if forecast[h] > 0:
             last_hour = h
             break

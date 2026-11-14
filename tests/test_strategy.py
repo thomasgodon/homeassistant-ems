@@ -2078,6 +2078,16 @@ def test_pv_destinations_surplus_goes_to_grid(builder) -> None:
     _check_conservation(d)
 
 
+def test_pv_destinations_zero_house_load_skips_ev_split(builder) -> None:
+    # house=0 → nothing to split into an EV share; pv=2000, grid=-2000 → all exported
+    inp = _pv_inp(builder, pv_w=2000.0, house_load_w=0.0, ev_power_w=0.0, grid_import_w=-2000.0)
+    d = strategy_module.pv_destinations(inp, _inv("idle"))
+    assert d.to_house_w == pytest.approx(0.0)
+    assert d.to_ev_w == pytest.approx(0.0)
+    assert d.to_grid_w == pytest.approx(2000.0)
+    _check_conservation(d)
+
+
 def test_pv_destinations_pv_less_than_house(builder) -> None:
     # pv=500 < house=1000 → to_house=500, everything else 0
     inp = _pv_inp(builder, pv_w=500.0, house_load_w=1000.0, ev_power_w=0.0, grid_import_w=500.0)
