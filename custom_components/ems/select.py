@@ -24,7 +24,9 @@ async def async_setup_entry(
 class EmsEvChargingMode(SelectEntity, RestoreEntity):
     _attr_unique_id = "ems_ev_charging_mode"
     _attr_name = "EMS EV Charging Mode"
-    _attr_options = ["Grid-optimised", "Price-optimised", "Energy-optimised", "Off"]
+    _attr_options = [
+        "Grid-optimised", "Price-optimised", "Energy-optimised", "Solar-only", "Off"
+    ]
     _attr_current_option = "Off"
     _attr_icon = "mdi:car-electric"
 

@@ -9,7 +9,9 @@ async def test_ev_charging_mode_options():
     from custom_components.ems.select import EmsEvChargingMode
 
     entity = EmsEvChargingMode()
-    assert entity._attr_options == ["Grid-optimised", "Price-optimised", "Energy-optimised", "Off"]
+    assert entity._attr_options == [
+        "Grid-optimised", "Price-optimised", "Energy-optimised", "Solar-only", "Off"
+    ]
 
 
 @pytest.mark.asyncio

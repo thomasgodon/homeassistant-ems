@@ -1460,6 +1460,156 @@ def test_energy_optimised_hysteresis_stops_below_min(builder) -> None:
     assert d.charging_state == "not_enough_power"
 
 
+# ── Solar-only ────────────────────────────────────────────────────────────────
+
+def test_solar_only_target_is_whole_pv_ignoring_house_load(builder) -> None:
+    # pv=3000, house_non_ev=2500 → Energy-optimised would give 500; Solar-only gives 3000
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Solar-only",
+        pv_w=3000.0,
+        house_load_w=2500.0,
+        ev_power_w=0.0,
+        grid_import_w=2500.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.charging_state == "charging"
+    assert d.ev_charge_power_w == pytest.approx(3000.0)
+
+
+def test_solar_only_recompute_matches_decide(builder) -> None:
+    d = recompute(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Solar-only",
+        pv_w=3000.0,
+        house_load_w=2500.0,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.ev_charge_power_w == pytest.approx(3000.0)
+
+
+def test_solar_only_capped_by_max_ev_charge(builder) -> None:
+    thresholds = Thresholds(
+        max_grid_import_w=4500.0, ev_target_soc=80.0, ev_min_charge_w=1400.0,
+        max_ev_charge_w=2500.0,
+    )
+    d = decide(
+        builder, ev_plugged=True, ev_strategy="Solar-only", pv_w=6000.0,
+        thresholds=thresholds,
+    )
+    assert d.ev_charge_power_w == pytest.approx(2500.0)
+
+
+def test_solar_only_hysteresis_blocks_start_below_start_band(builder) -> None:
+    # pv=1450 ≥ min(1400) but < start band (1540); was idle → blocked
+    d = decide(
+        builder, ev_plugged=True, ev_strategy="Solar-only", pv_w=1450.0,
+        last_ev_target_w=0.0, thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "not_enough_power"
+
+
+def test_solar_only_hysteresis_continues_when_pv_in_band(builder) -> None:
+    d = decide(
+        builder, ev_plugged=True, ev_strategy="Solar-only", pv_w=1450.0,
+        last_ev_target_w=1500.0, thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.ev_charge_power_w == pytest.approx(1450.0)
+
+
+def test_solar_only_stops_below_min_when_charging(builder) -> None:
+    d = decide(
+        builder, ev_plugged=True, ev_strategy="Solar-only", pv_w=1300.0,
+        last_ev_target_w=1500.0, thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_idle"
+    assert d.charging_state == "not_enough_power"
+
+
+def test_solar_only_negative_pv_clamped(builder) -> None:
+    d = decide(
+        builder, ev_plugged=True, ev_strategy="Solar-only", pv_w=-20.0,
+        last_ev_target_w=1500.0, thresholds=_THRESHOLDS,
+    )
+    assert d.charging_state == "not_enough_power"
+
+
+def test_solar_only_ignores_battery_short(builder) -> None:
+    # Same shortfall setup that makes Energy-optimised idle with battery_short
+    d = decide(
+        builder,
+        ev_plugged=True,
+        ev_strategy="Solar-only",
+        pv_w=5000.0,
+        house_load_w=1000.0,
+        ev_power_w=0.0,
+        battery_soc=50.0,
+        battery_capacity_kwh=10.0,
+        battery_target_soc=80.0,
+        solar_forecast_remaining_kwh=1.5,
+        thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_charging"
+    assert d.ev_charge_power_w == pytest.approx(5000.0)
+
+
+def test_solar_only_ignores_cheap_hours(builder) -> None:
+    d = decide(
+        builder, ev_plugged=True, ev_strategy="Solar-only", pv_w=3000.0,
+        is_cheap_hour=False, thresholds=_THRESHOLDS,
+    )
+    assert d.strategy == "ev_charging"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "state"),
+    [
+        ({"ev_plugged": False}, "ev_not_connected"),
+        ({"ev_soc": 85.0}, "target_soc_reached"),
+    ],
+)
+def test_solar_only_hard_gates_still_win(builder, overrides, state) -> None:
+    kwargs = {"ev_plugged": True, **overrides}
+    d = decide(
+        builder, ev_strategy="Solar-only", pv_w=5000.0, thresholds=_THRESHOLDS, **kwargs,
+    )
+    assert d.charging_state == state
+
+
+def test_solar_stop_guards_hold_past_60s_then_stop() -> None:
+    held, since = strategy_module.apply_solar_stop_guards(
+        _NOT_ENOUGH, was_charging=True, now=_T0 + datetime.timedelta(seconds=61),
+        below_min_since=_T0, min_charge_w=1400.0,
+    )
+    assert held.charging_state == "holding_through_dip"
+    assert held.ev_charge_power_w == pytest.approx(1400.0)
+    assert since == _T0
+
+    stopped, since = strategy_module.apply_solar_stop_guards(
+        _NOT_ENOUGH, was_charging=True, now=_T0 + datetime.timedelta(seconds=120),
+        below_min_since=_T0, min_charge_w=1400.0,
+    )
+    assert stopped is _NOT_ENOUGH
+    assert since == _T0
+
+
+def test_solar_stop_guards_never_stop_charging_session() -> None:
+    """No grid-overload cutoff: a charging decision passes through untouched."""
+    charging = EvDecision(
+        strategy="ev_charging", ev_charge_power_w=3000.0, charging_state="charging"
+    )
+    d, since = strategy_module.apply_solar_stop_guards(
+        charging, was_charging=True, now=_T0, below_min_since=_T0, min_charge_w=1400.0,
+    )
+    assert d is charging
+    assert since is None
+
+
 # ── battery_gap_kwh ───────────────────────────────────────────────────────────
 
 def test_battery_gap_kwh_none_when_soc_missing() -> None:

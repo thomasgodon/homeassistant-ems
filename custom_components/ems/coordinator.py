@@ -169,6 +169,16 @@ class EmsStrategyCoordinator(DataUpdateCoordinator[LadderResult]):
                 grid_overload_since=self._state.ev_grid_overload_since,
                 min_charge_w=inputs.thresholds.ev_min_charge_w,
             )
+        elif inputs.ev_strategy == "Solar-only":
+            # Solar-only: 120 s battery-drain hold, no grid-overload cutoff.
+            ev_decision, self._state.ev_below_min_since = strategy_module.apply_solar_stop_guards(
+                ev_decision,
+                was_charging=was_charging,
+                now=inputs.now,
+                below_min_since=self._state.ev_below_min_since,
+                min_charge_w=inputs.thresholds.ev_min_charge_w,
+            )
+            self._state.ev_grid_overload_since = None
         else:
             ev_decision, self._state.ev_below_min_since = strategy_module.apply_stop_debounce(
                 ev_decision,
@@ -395,6 +405,16 @@ class EmsFastLoopCoordinator(DataUpdateCoordinator["LadderResult | None"]):
                 grid_overload_since=self._state.ev_grid_overload_since,
                 min_charge_w=prior_inputs.thresholds.ev_min_charge_w,
             )
+        elif ev_strategy == "Solar-only":
+            # Solar-only: 120 s battery-drain hold, no grid-overload cutoff.
+            ev_fast, self._state.ev_below_min_since = strategy_module.apply_solar_stop_guards(
+                ev_fast,
+                was_charging=was_charging,
+                now=dt_util.now(),
+                below_min_since=self._state.ev_below_min_since,
+                min_charge_w=prior_inputs.thresholds.ev_min_charge_w,
+            )
+            self._state.ev_grid_overload_since = None
         else:
             ev_fast, self._state.ev_below_min_since = strategy_module.apply_stop_debounce(
                 ev_fast,

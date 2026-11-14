@@ -9,7 +9,7 @@ Works with any inverter that exposes a `select` entity for operating modes and a
 ## Features
 
 - Closed-loop EV charge control: tracks `grid_import → max_grid_import_w` regardless of wallbox quantisation or ramp lag
-- Grid-optimised and price-optimised EV charging modes
+- Grid-optimised, price-optimised, energy-optimised and solar-only EV charging modes
 - Inverter peak shaving and end-of-day battery management
 - Full config-flow setup — no YAML editing required
 - Two-loop architecture: 10 s strategy loop + 1 s fast loop for sub-second response to load spikes

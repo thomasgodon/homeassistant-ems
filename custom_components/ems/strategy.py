@@ -138,16 +138,19 @@ def _make_decision(
             surplus_w = max(0.0, surplus_override_w)
         else:
             surplus_w = max(0.0, pv_w - house_non_ev)
-        ev_target_w = surplus_w
-        # Apply charger cap before hysteresis check so threshold comparison is accurate.
-        if thresholds.max_ev_charge_w is not None:
-            ev_target_w = min(ev_target_w, thresholds.max_ev_charge_w)
-        # Hysteresis: raise start threshold to 110% of minimum to prevent chattering
-        # when PV surplus hovers near the minimum charge power.
-        was_charging = last_ev_target_w is not None and last_ev_target_w > 0.0
-        if not was_charging and ev_target_w < thresholds.ev_min_charge_w * 1.1:
+        ev_target_w = _pv_target_with_hysteresis(surplus_w, last_ev_target_w, thresholds)
+        if ev_target_w is None:
             return _idle("not_enough_power")
         # was_charging case: fall through to common min check (stop = ev_min_charge_w)
+    elif ev_strategy == "Solar-only":
+        # The EV gets the *whole* PV production; the house is fed by the battery
+        # (inverter released to native Self-Use) and then the grid, regardless of
+        # price. Ignores the battery forecast (no battery_short gate) and cheap hours.
+        # pv_w is a single sensor, so unlike Energy-optimised there is no
+        # house_load − ev_power telegram skew and no slow-loop sampling is needed.
+        ev_target_w = _pv_target_with_hysteresis(max(0.0, pv_w), last_ev_target_w, thresholds)
+        if ev_target_w is None:
+            return _idle("not_enough_power")
     else:
         # Integrating closed-loop: drives total grid import to max_grid_import_w.
         # Uses last commanded target as feedback to eliminate static error from
@@ -177,6 +180,24 @@ def _make_decision(
         ev_charge_power_w=ev_target_w,
         charging_state="charging",
     )
+
+
+def _pv_target_with_hysteresis(
+    target_w: float, last_ev_target_w: float | None, thresholds: Thresholds
+) -> float | None:
+    """PV-driven EV target (Energy-optimised / Solar-only): cap, then start hysteresis.
+
+    The charger cap is applied before the hysteresis check so the threshold comparison
+    is accurate. A session that is *not* already charging only starts at 110% of the
+    minimum, preventing chatter when PV hovers near it. Returns ``None`` when the
+    session must not start; a running session falls through to the common min check.
+    """
+    if thresholds.max_ev_charge_w is not None:
+        target_w = min(target_w, thresholds.max_ev_charge_w)
+    was_charging = last_ev_target_w is not None and last_ev_target_w > 0.0
+    if not was_charging and target_w < thresholds.ev_min_charge_w * 1.1:
+        return None
+    return target_w
 
 
 def _idle(charging_state: EvChargingState) -> EvDecision:
@@ -313,6 +334,31 @@ def apply_energy_stop_guards(
         grid_overload_since=grid_overload_since,
     )
     return decision, below_min_since, grid_overload_since
+
+
+def apply_solar_stop_guards(
+    decision: EvDecision,
+    *,
+    was_charging: bool,
+    now: datetime,
+    below_min_since: datetime | None,
+    min_charge_w: float,
+) -> tuple[EvDecision, datetime | None]:
+    """Solar-only stop policy: battery-drain hold only, no grid-overload cutoff.
+
+    A sub-minimum PV dip is held at ``min_charge_w`` for up to ``_EV_BATTERY_DRAIN_S``
+    (battery/grid covers the shortfall) before stopping. Grid import is *expected* in
+    Solar-only (the house is grid-fed once the battery is empty), so it never stops
+    the session — only a sustained lack of PV does.
+    """
+    return apply_stop_debounce(
+        decision,
+        was_charging=was_charging,
+        now=now,
+        below_min_since=below_min_since,
+        min_charge_w=min_charge_w,
+        debounce_s=_EV_BATTERY_DRAIN_S,
+    )
 
 
 # ── EOD battery fullness helpers ──────────────────────────────────────────────

@@ -922,6 +922,110 @@ async def test_fast_loop_energy_optimised_grid_overload_stops_after_30s():
 
 
 @pytest.mark.asyncio
+async def test_fast_loop_solar_only_holds_120s_and_ignores_grid_import():
+    """Solar-only: 120 s battery-drain hold, and grid import never stops the session."""
+    not_enough = EvDecision(
+        strategy="ev_idle", ev_charge_power_w=0.0, charging_state="not_enough_power"
+    )
+    states = {
+        **_EV_STATES, "select.ems_ev_charging_mode": "Solar-only", "sensor.grid": 3000,
+    }
+    coord = _make_fast_coordinator(states)
+    coord._state.last_result = _make_ladder_result()
+    coord._state.ev_grid_overload_since = _NOW  # stale value from a prior Energy session
+    coord._ema_ev_w = 2000.0
+    coord._prev_ev_power_w = 100.0
+
+    with patch(_RECOMPUTE_EV, return_value=_ev_charging(2000.0)), \
+         patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE), \
+         patch(_DT_UTIL) as mock_dt:
+        mock_dt.now.return_value = _NOW + timedelta(seconds=60)
+        await coord._async_update_data()   # heavy grid import → still charging
+        charging: EvDecision = coord._controller.write_fast.call_args[0][0]
+        assert charging.strategy == "ev_charging"
+        assert coord._state.ev_grid_overload_since is None
+
+    with patch(_RECOMPUTE_EV, return_value=not_enough), \
+         patch(_RECOMPUTE_INV, return_value=_INV_DECISION_ACTIVE), \
+         patch(_DT_UTIL) as mock_dt:
+        mock_dt.now.return_value = _NOW
+        await coord._async_update_data()   # dip begins → held at min
+        assert coord._controller.write_fast.call_args[0][0].charging_state == (
+            "holding_through_dip"
+        )
+        mock_dt.now.return_value = _NOW + timedelta(seconds=61)
+        await coord._async_update_data()
+        assert coord._controller.write_fast.call_args[0][0].charging_state == (
+            "holding_through_dip"
+        )
+        mock_dt.now.return_value = _NOW + timedelta(seconds=120)
+        await coord._async_update_data()
+        assert coord._controller.write_fast.call_args[0][0].ev_charge_power_w == 0.0
+
+
+@pytest.mark.asyncio
+async def test_strategy_coordinator_solar_only_uses_solar_guards():
+    """Slow loop routes Solar-only through apply_solar_stop_guards and clears the
+    grid-overload timer."""
+    from dataclasses import replace as dc_replace
+
+    from custom_components.ems.coordinator import EmsStrategyCoordinator
+
+    entry = _make_entry({
+        "grid_import_power": "sensor.grid",
+        "pv_power": "sensor.pv",
+        "house_load": "sensor.load",
+        "ev_power": "sensor.ev",
+    })
+    hass = _make_hass({
+        "sensor.grid": 3000, "sensor.pv": 500, "sensor.load": 3500, "sensor.ev": 1400,
+        "number.ems_ev_min_charge_w": 1400,
+        "select.ems_ev_charging_mode": "Solar-only",
+        "select.ems_inverter_control_mode": "Control Inverter",
+    })
+
+    not_enough = EvDecision(
+        strategy="ev_idle", ev_charge_power_w=0.0, charging_state="not_enough_power"
+    )
+    charging = EvDecision(
+        strategy="ev_charging", ev_charge_power_w=1400.0, charging_state="charging"
+    )
+    prior = dc_replace(_make_ladder_result(), ev_decision=charging)  # was_charging=True
+
+    state = MagicMock()
+    state.startup_grace_until = None
+    state.last_result = prior
+    state.ev_below_min_since = None
+    state.ev_grid_overload_since = datetime(2024, 1, 1, tzinfo=UTC)
+
+    controller = MagicMock()
+    controller.write_slow = AsyncMock()
+
+    coord = EmsStrategyCoordinator.__new__(EmsStrategyCoordinator)
+    coord.hass = hass
+    coord._entry = entry
+    coord._state = state
+    coord._controller = controller
+
+    t0 = datetime(2024, 1, 1, tzinfo=UTC)
+    with patch(
+             "custom_components.ems.coordinator.strategy_module.decide",
+             return_value=not_enough,
+         ), \
+         patch(
+             "custom_components.ems.coordinator.inverter_control_module.decide",
+             return_value=InverterDecision(inverter_verb=None, active_power_w=None),
+         ), \
+         patch("custom_components.ems.coordinator.dt_util") as mock_dt:
+        mock_dt.now.return_value = t0
+        res = await coord._async_update_data()
+
+    assert res.ev_decision.charging_state == "holding_through_dip"
+    assert state.ev_grid_overload_since is None
+    assert state.ev_energy_surplus_w is None
+
+
+@pytest.mark.asyncio
 async def test_fast_loop_non_energy_mode_clears_grid_overload_timer():
     """Non-Energy modes never engage the grid-overload guard; the timer stays cleared
     even with grid import that would trip it under Energy-optimised."""

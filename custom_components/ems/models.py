@@ -33,7 +33,9 @@ class Inputs:
     ev_plugged: bool
     ev_power_w: float
     ev_soc: float | None
-    ev_strategy: Literal["Grid-optimised", "Price-optimised", "Energy-optimised", "Off"]
+    ev_strategy: Literal[
+        "Grid-optimised", "Price-optimised", "Energy-optimised", "Solar-only", "Off"
+    ]
     is_cheap_hour: bool
     inverter_strategy: Literal["Control Inverter", "Off"]
     thresholds: Thresholds

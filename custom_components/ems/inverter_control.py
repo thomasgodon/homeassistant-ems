@@ -156,10 +156,12 @@ def _compute(
             status="holding_battery",
         )
 
-    # Priority 3 — Energy-optimised mode: peak shaving and deficit hold are handled
-    # above. For EV-session management the strategy caps charge to live PV surplus,
-    # so the battery is inherently protected — release to Self-Use here.
-    if ev_strategy == "Energy-optimised":
+    # Priority 3 — Energy-optimised / Solar-only: peak shaving and deficit hold are
+    # handled above. Energy-optimised caps charge to live PV surplus, so the battery is
+    # inherently protected. Solar-only charges the EV with the whole PV production and
+    # deliberately lets the battery (then grid) feed the house via native Self-Use.
+    # Either way, release to Self-Use here (never battery_priority / controlling).
+    if ev_strategy in ("Energy-optimised", "Solar-only"):
         return InverterDecision(
             inverter_verb=mapping.disabled_option,
             active_power_w=None,

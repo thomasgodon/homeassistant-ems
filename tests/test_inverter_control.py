@@ -547,6 +547,51 @@ def test_energy_optimised_peak_shaves_when_grid_over_cap() -> None:
     assert d.active_power_w == pytest.approx(-2000.0)
 
 
+# ── Solar-only: hands-off branch (battery then grid feed the house) ──────────
+
+def test_solar_only_releases_to_self_use_when_ev_charging() -> None:
+    d = _decide(
+        ev_strategy="Solar-only",
+        pv_w=4000.0, house_load_w=5500.0,
+        ev_power_w=4000.0, commanded_ev_charge_w=4000.0,
+    )
+    assert d.status == "idle"
+    assert d.inverter_verb == "disabled"
+    assert d.active_power_w is None
+
+
+def test_solar_only_overrides_shortfall_branch() -> None:
+    """Solar-only fires before battery-priority — shortfall must not reserve PV."""
+    d = _decide(
+        ev_strategy="Solar-only",
+        pv_w=4000.0, house_load_w=5500.0,
+        ev_power_w=4000.0, commanded_ev_charge_w=4000.0,
+        solar_shortfall_kwh_result=2.0,
+    )
+    assert d.status == "idle"
+    assert d.inverter_verb == "disabled"
+
+
+def test_solar_only_eod_suppress_bypassed_during_session() -> None:
+    d = _decide(
+        ev_strategy="Solar-only",
+        pv_w=1700.0, house_load_w=3500.0,
+        ev_power_w=1700.0, commanded_ev_charge_w=1700.0,
+        eod_suppress=True,
+    )
+    assert d.status == "idle"
+
+
+def test_solar_only_peak_shaves_when_ev_idle() -> None:
+    d = _decide(
+        ev_strategy="Solar-only",
+        pv_w=1000.0,
+        grid_import_w=5500.0,
+        max_grid_import_w=4500.0,
+    )
+    assert d.status == "peak_shaving"
+
+
 # ── Battery priority: new shortfall branch ────────────────────────────────────
 
 def test_battery_priority_fires_when_shortfall_and_ev_drawing() -> None:
